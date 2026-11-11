@@ -23,6 +23,7 @@ const { requireUserId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
 const { STATEMENT_TIMEOUT_MS } = require('./queries');
+const facets = require('./facets');
 
 const ENUMERATE_BATCH = 50;
 const OBJECT_MAX_ATTEMPTS = 8;
@@ -164,7 +165,10 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
         const b = (await client.query('SELECT state, version::text AS version FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 FOR UPDATE', [uid, gen, r.beat_id])).rows[0];
         if (!b || b.state !== 'TRASH') { await client.query("UPDATE catalog_purge_items SET status = 'BLOCKED', block_reason = 'BEAT_STATE' WHERE user_id = $1 AND purge_id = $2 AND beat_id = $3", [uid, purgeId, r.beat_id]); continue; }
         // TRASH → PURGING (ocupa cuota; restore/REPLACE lo rechazan); el wrapper de papelera sigue al estado por la FK ON UPDATE CASCADE
+        const facetsBefore = await facets.snapshotGroups(client, uid, gen, [r.beat_id]);
         await client.query("UPDATE catalog_beats SET state = 'PURGING', version = version + 1, updated_at = now() WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3", [uid, gen, r.beat_id]);
+        // Facetas por delta (la faceta TRASH deja de contar el beat; los grupos siguen al estado por FK ON UPDATE CASCADE), bajo el lock de biblioteca.
+        await facets.applyFacetDelta(client, uid, gen, facetsBefore, await facets.snapshotGroups(client, uid, gen, [r.beat_id]), ctx.revision);
         await client.query('UPDATE catalog_libraries SET trash_count = trash_count - 1, purging_count = purging_count + 1, updated_at = now() WHERE user_id = $1', [uid]);
         // manifiesto de objetos: versiones (todas: actuales, retenidas, STAGED, REVIEW) → partes → ubicaciones PRIMARY; recibos no confirmados → objetos sin vincular
         const locs = (await client.query(`SELECT l.object_id, l.reference_class, l.file_id, l.part_index, o.chat_id, o.message_id::text AS message_id, o.status AS object_status
@@ -332,7 +336,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   // cancel: detiene lo no empezado; lo DELETED permanece; un objeto DELETING sigue bloqueado hasta su confirmación (nunca "des-borrar").
   async function cancelPurge({ userId, era, epoch, purgeId } = {}) {
     if (typeof purgeId !== 'string' || !ID_RE.test(purgeId)) throw inputInvalid('PURGE_ID');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
       const p = (await client.query(`${PURGE_SQL} FOR UPDATE`, [uid, purgeId])).rows[0]; if (!p) throw notFound('purge');
       if (['PURGED', 'PARTIAL', 'BLOCKED', 'CANCELLED'].includes(p.status)) return purgeDto(client, uid, purgeId, { changed: false });
       const inflight = (await client.query("SELECT count(*)::int AS n FROM catalog_purge_objects WHERE user_id = $1 AND purge_id = $2 AND status IN ('JOURNALED', 'DELETING', 'UNCERTAIN')", [uid, purgeId])).rows[0].n;
@@ -346,7 +350,9 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
         const deleted = (await client.query("SELECT count(*)::int AS n FROM catalog_purge_objects WHERE user_id = $1 AND purge_id = $2 AND beat_id = $3 AND status = 'DELETED'", [uid, purgeId, it.beat_id])).rows[0].n;
         const b = (await client.query('SELECT state FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 FOR UPDATE', [uid, p.generation_id, it.beat_id])).rows[0];
         if (deleted === 0 && b && b.state === 'PURGING') {
+          const facetsBefore = await facets.snapshotGroups(client, uid, p.generation_id, [it.beat_id]);
           await client.query("UPDATE catalog_beats SET state = 'TRASH', version = version + 1, updated_at = now() WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3", [uid, p.generation_id, it.beat_id]);
+          await facets.applyFacetDelta(client, uid, p.generation_id, facetsBefore, await facets.snapshotGroups(client, uid, p.generation_id, [it.beat_id]), ctx.revision);
           await client.query('UPDATE catalog_libraries SET trash_count = trash_count + 1, purging_count = purging_count - 1, updated_at = now() WHERE user_id = $1', [uid]);
           await client.query("UPDATE catalog_purge_items SET status = 'BLOCKED', block_reason = 'BEAT_STATE' WHERE user_id = $1 AND purge_id = $2 AND beat_id = $3", [uid, purgeId, it.beat_id]);
           reverted++;

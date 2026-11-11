@@ -20,7 +20,7 @@ const { CatalogQueryError } = require('./cursor');
 const codec = require('./legacy-codec');
 const rules = require('./metadata-rules');
 const { STATEMENT_TIMEOUT_MS } = require('./queries');
-const { refreshGroupsAndFacets, normKeysOf } = require('./commands');
+const facets = require('./facets');
 
 const RESERVATION_TTL_MS = 15 * 60_000;
 const RESERVATION_MAX_MS = 24 * 60 * 60_000;
@@ -378,16 +378,16 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
           throw new CatalogQueryError('QUOTA_EXCEEDED', 409, 'library quota no longer admits this import', { used: c.a + c.t + c.p + c.n - 1, max: access.maxBeats });
         }
       }
-      let beatVersion; const touchedKeys = []; let tagsChanged = false;
+      let beatVersion; let facetsBefore = []; let tagsChanged = false;
       if (o.kind === 'IMPORT') {
         const doc = nativeBeatDocument(o.beat_id, intent.metadata);
         const p = codec.projectBeat(doc); const json = JSON.stringify(doc);
         const rank = (await client.query("SELECT coalesce(min(manual_rank), 1000)::text AS r FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE'", [uid, gen])).rows[0].r;
         const newRank = (BigInt(rank) - 1000n).toString(); // alta prepend (C6): rango menor que el mínimo, sin renumerar
         await client.query(`INSERT INTO catalog_beats(user_id, generation_id, beat_id, state, name, bpm_text, key_text, rating, color, color2, bpm_sort_class, bpm_sort, sort_order, manual_rank, has_artwork,
-            legacy_json, legacy_sha256, legacy_export_bytes, name_display, name_search, key_display, key_search, bpm_display, rating_display)
-          VALUES ($1,$2,$3,'ACTIVE',$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12::numeric,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
-        [uid, gen, o.beat_id, p.name, p.bpmText, p.keyText, p.rating, p.color, p.color2, p.bpmSortClass, p.bpmSort, newRank, parts.some((x) => x.slot_key === 'ARTWORK'), json, sha256Hex(json), Buffer.byteLength(json, 'utf8'), p.nameDisplay, p.nameSearch, p.keyDisplay, p.keySearch, p.bpmDisplay, p.ratingDisplay]);
+            legacy_json, legacy_sha256, legacy_export_bytes, name_display, name_search, key_display, key_search, bpm_display, rating_display, search_text)
+          VALUES ($1,$2,$3,'ACTIVE',$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12::numeric,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+        [uid, gen, o.beat_id, p.name, p.bpmText, p.keyText, p.rating, p.color, p.color2, p.bpmSortClass, p.bpmSort, newRank, parts.some((x) => x.slot_key === 'ARTWORK'), json, sha256Hex(json), Buffer.byteLength(json, 'utf8'), p.nameDisplay, p.nameSearch, p.keyDisplay, p.keySearch, p.bpmDisplay, p.ratingDisplay, p.searchText]);
         for (const t of p.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, o.beat_id, t.position, t.label, t.normKey, t.searchKey]);
         beatVersion = '1';
       } else {
@@ -404,13 +404,12 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
           for (const [k, val] of Object.entries(intent.metadata)) after[k === 'crop' ? 'image_crop' : k] = val;
           const pj = codec.projectBeat(after); const json = JSON.stringify(after);
           await client.query(`UPDATE catalog_beats SET name = $4, bpm_text = $5, key_text = $6, rating = $7, color = $8, color2 = $9, bpm_sort_class = $10, bpm_sort = $11, legacy_json = $12, legacy_sha256 = $13, legacy_export_bytes = $14,
-              name_display = $15, name_search = $16, key_display = $17, key_search = $18, bpm_display = $19, rating_display = $20 WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3`,
-          [uid, gen, o.beat_id, pj.name, pj.bpmText, pj.keyText, pj.rating, pj.color, pj.color2, pj.bpmSortClass, pj.bpmSort, json, sha256Hex(json), Buffer.byteLength(json, 'utf8'), pj.nameDisplay, pj.nameSearch, pj.keyDisplay, pj.keySearch, pj.bpmDisplay, pj.ratingDisplay]);
-          touchedKeys.push(...(await normKeysOf(client, uid, gen, [o.beat_id])));
+              name_display = $15, name_search = $16, key_display = $17, key_search = $18, bpm_display = $19, rating_display = $20, search_text = $21 WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3`,
+          [uid, gen, o.beat_id, pj.name, pj.bpmText, pj.keyText, pj.rating, pj.color, pj.color2, pj.bpmSortClass, pj.bpmSort, json, sha256Hex(json), Buffer.byteLength(json, 'utf8'), pj.nameDisplay, pj.nameSearch, pj.keyDisplay, pj.keySearch, pj.bpmDisplay, pj.ratingDisplay, pj.searchText]);
+          facetsBefore = await facets.snapshotGroups(client, uid, gen, [o.beat_id]);
           await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, o.beat_id]);
           await client.query('DELETE FROM catalog_beat_tags WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, o.beat_id]);
           for (const t of pj.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, o.beat_id, t.position, t.label, t.normKey, t.searchKey]);
-          touchedKeys.push(...pj.tags.map((t) => t.normKey));
           tagsChanged = true;
         }
         beatVersion = (await client.query('UPDATE catalog_beats SET version = version + 1, updated_at = now(), has_artwork = has_artwork OR $4 WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 RETURNING version::text AS v', [uid, gen, o.beat_id, parts.some((x) => x.slot_key === 'ARTWORK')])).rows[0].v;
@@ -453,21 +452,11 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       const seq = (await client.query('SELECT coalesce(max(event_seq), 0) + 1 AS seq FROM catalog_events WHERE user_id = $1', [uid])).rows[0].seq;
       await client.query('INSERT INTO catalog_events(user_id, event_seq, generation_id, revision, kind, beat_id, version, operation_id, payload_json) VALUES ($1,$2,$3,$4::bigint,$5,$6,$7::bigint,$8,$9)',
         [uid, seq, gen, revision, 'BEAT_PATCHED', o.beat_id, beatVersion, operationId, canonicalJson({ kind: o.kind, slots: installed.map((i) => i.slotKey) })]);
-      if (o.kind === 'REPLACE' && tagsChanged) await refreshGroupsAndFacets(client, uid, gen, [o.beat_id], touchedKeys, revision);
-      if (o.kind === 'IMPORT') {
-        // grupos/facetas del beat nuevo (misma transacción)
-        await client.query(`INSERT INTO catalog_beat_tag_groups(user_id, generation_id, beat_id, norm_key, projection_version, state, manual_rank, first_position, label_at_first_position)
-          SELECT DISTINCT ON (t.norm_key) t.user_id, t.generation_id, t.beat_id, t.norm_key, t.projection_version, b.state, b.manual_rank, t.position, t.label FROM catalog_beat_tags t JOIN catalog_beats b USING (user_id, generation_id, beat_id)
-          WHERE t.user_id = $1 AND t.generation_id = $2 AND t.beat_id = $3 ORDER BY t.norm_key, t.position`, [uid, gen, o.beat_id]);
-        const keys = (await client.query('SELECT DISTINCT norm_key FROM catalog_beat_tags WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, o.beat_id])).rows.map((r) => r.norm_key);
-        if (keys.length) {
-          await client.query('DELETE FROM catalog_facets WHERE user_id = $1 AND generation_id = $2 AND norm_key = ANY($3::text[])', [uid, gen, keys]);
-          await client.query(`WITH grp AS (SELECT * FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND norm_key = ANY($3::text[]) AND state IN ('ACTIVE','TRASH')),
-            cnt AS (SELECT state, norm_key, projection_version, count(*) AS n FROM grp GROUP BY 1, 2, 3),
-            rep AS (SELECT DISTINCT ON (state, norm_key, projection_version) state, norm_key, projection_version, beat_id, first_position, label_at_first_position FROM grp ORDER BY state, norm_key, projection_version, manual_rank, beat_id COLLATE "C")
-            INSERT INTO catalog_facets(user_id, generation_id, scope, norm_key, projection_version, beat_count, rep_beat_id, rep_position, rep_label, updated_revision)
-            SELECT $1, $2, c.state, c.norm_key, c.projection_version, c.n, r.beat_id, r.first_position, r.label_at_first_position, $4::bigint FROM cnt c JOIN rep r USING (state, norm_key, projection_version)`, [uid, gen, keys, revision]);
-        }
+      if (o.kind === 'IMPORT' || (o.kind === 'REPLACE' && tagsChanged)) {
+        // Grupos del beat (IMPORT: nuevo; REPLACE: reescritos) y facetas por delta en la misma transacción, bajo el lock de
+        // biblioteca tomado por requireLibraryForMutation (ver facets.js). Sin recuento completo del grupo.
+        await facets.insertGroups(client, uid, gen, [o.beat_id]);
+        await facets.applyFacetDelta(client, uid, gen, facetsBefore, await facets.snapshotGroups(client, uid, gen, [o.beat_id]), revision);
       }
       const result = { beatId: o.beat_id, version: beatVersion, revision, installed, eventSeq: String(seq) };
       await client.query("UPDATE catalog_transfer_operations SET status = 'COMMITTED', result_json = $3, completed_at = now() WHERE user_id = $1 AND operation_id = $2", [uid, operationId, canonicalJson(result)]);

@@ -239,6 +239,7 @@ function validateSource({ index, descriptor }) {
 }
 
 // ---------- proyecciones (search-js-v1 / A2) ----------
+const SEARCH_TEXT_SEP = '\u001f'; // Unit Separator; un q que lo contenga usa el predicado por campos (queries.js)
 function projectBeat(beat) {
   const str = (v) => (typeof v === 'string' ? v : null);
   const bpmDisplay = typeof beat.bpm === 'string' ? beat.bpm : '';
@@ -252,9 +253,13 @@ function projectBeat(beat) {
   const nameDisplay = (typeof beat.name === 'string' ? beat.name : 'Untitled').trim() || 'Untitled';
   const keyDisplay = typeof beat.key === 'string' ? beat.key : '';
   const ratingDisplay = Math.max(0, Math.min(255, Math.trunc(Number(beat.rating) || 0)));
+  const nameSearch = nameDisplay.toLowerCase(); const keySearch = keyDisplay.toLowerCase();
   return {
     name: str(beat.name), bpmText: str(beat.bpm), keyText: str(beat.key), color: str(beat.color), color2: str(beat.color2), rating,
-    nameDisplay, nameSearch: nameDisplay.toLowerCase(), keyDisplay, keySearch: keyDisplay.toLowerCase(), bpmDisplay, ratingDisplay,
+    nameDisplay, nameSearch, keyDisplay, keySearch, bpmDisplay, ratingDisplay,
+    // 0037: texto único de búsqueda = name_search ␟ key_search ␟ bpm_display ␟ search_key de cada tag (por posición). Con un q sin ␟,
+    // `search_text LIKE %q%` es equivalente a la disyunción de los cuatro predicados (un q sin separador no puede cruzar campos).
+    searchText: [nameSearch, keySearch, bpmDisplay, ...tags.map((x) => x.searchKey)].join(SEARCH_TEXT_SEP),
     bpmSortClass, bpmSort: bpmSortClass === 1 ? (Object.is(n, -0) ? 0 : n) : null,
     sortOrder: Number.isInteger(beat.sort_order) && Math.abs(beat.sort_order) <= 2147483647 ? beat.sort_order : null,
     telegramTopicId: Number.isSafeInteger(beat.telegram_topic_id) && beat.telegram_topic_id > 0 ? beat.telegram_topic_id : null,
@@ -301,6 +306,6 @@ function checkBudget(estimate, limit = ROLLBACK_MAX_BYTES) {
 }
 
 module.exports = {
-  SCHEMA, PROJECTION_VERSION, ROLLBACK_MAX_BYTES, SLOT_KEYS, parseStrict, validateSource, validateIndex, projectBeat, collectRefs, sectionPresent,
+  SEARCH_TEXT_SEP, SCHEMA, PROJECTION_VERSION, ROLLBACK_MAX_BYTES, SLOT_KEYS, parseStrict, validateSource, validateIndex, projectBeat, collectRefs, sectionPresent,
   trashBeat, deepDiff, exportBudget, checkBudget, beatIdIssues, directId, isObj,
 };

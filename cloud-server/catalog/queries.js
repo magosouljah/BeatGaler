@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const { requireUserId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError, createCursorSigner, keysFromEnv } = require('./cursor');
+const { SEARCH_TEXT_SEP } = require('./legacy-codec');
 
 const LIMIT_DEFAULT = 100;
 const LIMIT_MAX = 240;
@@ -129,8 +130,13 @@ function filterSql(f, params) {
   const parts = [];
   if (f.q) {
     params.push(likePattern(f.q)); const p = `$${params.length}`;
-    parts.push(`(b.name_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.key_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.bpm_display COLLATE "C" LIKE ${p} ESCAPE '\\'
-      OR EXISTS (SELECT 1 FROM catalog_beat_tags t WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id AND t.search_key COLLATE "C" LIKE ${p} ESCAPE '\\'))`);
+    const byFields = `(b.name_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.key_search COLLATE "C" LIKE ${p} ESCAPE '\\' OR b.bpm_display COLLATE "C" LIKE ${p} ESCAPE '\\'
+      OR EXISTS (SELECT 1 FROM catalog_beat_tags t WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id AND t.search_key COLLATE "C" LIKE ${p} ESCAPE '\\'))`;
+    // 0037: un único LIKE sobre search_text (name_search ␟ key_search ␟ bpm_display ␟ search_key de los tags) cuando existe; es equivalente
+    // porque un q sin ␟ no puede cruzar el separador. Si q contiene ␟, o la fila aún no tiene search_text (NULL), se usa el predicado por
+    // campos (el subplan hashed sobre catalog_beat_tags solo se construye si alguna fila lo evalúa). SEARCH_PROFILE no cambia.
+    parts.push(f.q.includes(SEARCH_TEXT_SEP) ? byFields
+      : `((b.search_text IS NOT NULL AND b.search_text COLLATE "C" LIKE ${p} ESCAPE '\\') OR (b.search_text IS NULL AND ${byFields}))`);
   }
   if (f.includeTags.length) {
     params.push(f.includeTags); const p = `$${params.length}`;

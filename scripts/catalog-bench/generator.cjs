@@ -51,7 +51,7 @@ function zipfTagIndex(entropy, slot, vocabSize) {
   return Math.min(vocabSize - 1, Math.floor(skewed * vocabSize));
 }
 
-function synthBeatDoc(seed, index, { tagVocabSize = TAG_VOCAB_SIZE } = {}) {
+function synthBeatDoc(seed, index, { tagVocabSize = TAG_VOCAB_SIZE, tagPrefix = 'tag' } = {}) {
   const ent = rowEntropy(seed, index);
   const name = `${choice(ent, 0, NAME_WORDS)} ${choice(ent, 1, NAME_WORDS)} ${index}`;
   const bpm = String(60 + (u32(ent, 2) % 241)); // 60..300 (metadata-rules.validateBpm)
@@ -61,7 +61,7 @@ function synthBeatDoc(seed, index, { tagVocabSize = TAG_VOCAB_SIZE } = {}) {
   const color2 = choice(ent, 7, COLORS);
   const tagCount = 2 + (u32(ent, 8) % 4); // 2..5, media ~3.5
   const tags = new Set();
-  for (let t = 0; t < tagCount; t++) tags.add(`tag${zipfTagIndex(ent, 9 + t, tagVocabSize)}`);
+  for (let t = 0; t < tagCount; t++) tags.add(`${tagPrefix}${zipfTagIndex(ent, 9 + t, tagVocabSize)}`);
   // q corto (1-2 caracteres) debe tener coincidencias: aseguramos que el nombre contenga siempre "ab" en minúsculas
   // en una fracción determinista de beats, y que todo nombre tenga alguna subcadena de 1-2 chars trivialmente frecuente.
   return { id: `beat-${String(index).padStart(7, '0')}`, name, bpm, key, rating, color, color2, tags: [...tags] };
@@ -99,8 +99,8 @@ async function insertTrashBatch(client, rows) {
 
 // Fila lista para INSERT a partir del índice determinista. `rankBase` desplaza manual_rank para que cada shard
 // mantenga un rango disjunto (no es necesario para corrección, solo evita manual_rank idénticos entre shards).
-function buildRow({ userId, generationId, index, seed, tagVocabSize, trashFraction }) {
-  const doc = synthBeatDoc(seed, index, { tagVocabSize });
+function buildRow({ userId, generationId, index, seed, tagVocabSize, trashFraction, tagPrefix = 'tag' }) {
+  const doc = synthBeatDoc(seed, index, { tagVocabSize, tagPrefix });
   const p = codec.projectBeat(doc);
   const legacyJson = JSON.stringify(doc);
   const isTrash = selected(seed, index, 'trash', trashFraction);
@@ -161,13 +161,14 @@ async function ensureNativeLibrary(pool, { userId, seed }) {
 // INSERT multi-fila de `batchRows` filas, nunca fila a fila). Al final reconstruye proyecciones derivadas (grupos/
 // facetas) con el código real de staging.js y actualiza los contadores de catalog_libraries.
 async function generateLibrary({
-  pool, userId, n, seed = 777, tagVocabSize = TAG_VOCAB_SIZE, trashFraction = 0.10,
-  batchRows = 500, commitEvery = 2000, concurrency = 1, onProgress = null,
+  pool, userId, n, seed = 777, tagVocabSize = TAG_VOCAB_SIZE, trashFraction = 0.10, tagPrefix = 'tag',
+  batchRows = 500, commitEvery = 2000, concurrency = 1, onProgress = null, analyzeEachCommit = null,
 } = {}) {
   if (!Number.isInteger(n) || n < 0) throw new Error('n debe ser un entero >= 0');
   const context = await ensureNativeLibrary(pool, { userId, seed });
   const generationId = context.generation_id;
 
+  const analyze = analyzeEachCommit ?? n > commitEvery;
   const shards = Math.max(1, Math.min(concurrency, n || 1));
   const perShard = Math.ceil(n / shards);
   let trashCount = 0; let written = 0;
@@ -190,7 +191,7 @@ async function generateLibrary({
             beatBuf = []; tagBuf = []; trashBuf = [];
           };
           for (let i = cursor; i < chunkEnd; i++) {
-            const { beatRow, tagRows, trashRow, isTrash } = buildRow({ userId, generationId, index: i, seed, tagVocabSize, trashFraction });
+            const { beatRow, tagRows, trashRow, isTrash } = buildRow({ userId, generationId, index: i, seed, tagVocabSize, trashFraction, tagPrefix });
             beatBuf.push(beatRow); tagBuf.push(...tagRows); if (trashRow) { trashBuf.push(trashRow); shardTrash++; }
             if (beatBuf.length >= batchRows) await flush();
           }
@@ -201,7 +202,9 @@ async function generateLibrary({
           // (catalog_beats_native_guard, FK de catalog_beat_tags) y degrada a un escaneo que crece con la tabla:
           // el lote pasa de ~0.3 s a varios segundos conforme crece n (medido: 10k filas sin ANALYZE = ~95 s;
           // con ANALYZE cada commitEvery = ~2 s). Sin esto la generación es cuadrática en n, no lineal.
-          await client.query('ANALYZE catalog_beats, catalog_beat_tags');
+          // Solo cuando el lote puede degradar la estadística del plan (bibliotecas grandes); las bibliotecas pequeñas de la variante
+          // multi-tenant (<= commitEvery filas) no lo necesitan y ANALYZE de tablas de 1M filas por cada una cuesta segundos.
+          if (analyze) await client.query('ANALYZE catalog_beats, catalog_beat_tags');
         } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; }
         written += (chunkEnd - cursor);
         if (onProgress) onProgress({ written, total: n });
@@ -235,7 +238,20 @@ async function generateLibrary({
   };
 }
 
+// Variante multi-tenant: `count` bibliotecas pequenas ademas de la grande, cada una con un vocabulario de tags propio (prefijo distinto:
+// `t<k>x<i>`), de modo que catalog_beat_tags.label tenga muchas etiquetas distintas en total (count x vocabSize) y las estadisticas
+// globales de label dejen de describir el vocabulario de la biblioteca grande. Determinista por (seed, k). Cada biblioteca usa el
+// mismo camino real de provision (authority.provisionLibrary) y proyecciones (staging.rebuildDerivedProjections) que generateLibrary.
+async function generateTenants({ pool, count, beatsPerLibrary = 500, vocabSize = 10, seed = 777, concurrency = 1, trashFraction = 0.10 } = {}) {
+  let beats = 0;
+  for (let k = 0; k < count; k++) {
+    const r = await generateLibrary({ pool, userId: `bench-t${String(k).padStart(4, '0')}`, n: beatsPerLibrary, seed: seed * 1000 + k + 1, tagVocabSize: vocabSize, trashFraction, tagPrefix: `t${k}x`, concurrency });
+    beats += r.n;
+  }
+  return { tenants: count, beatsPerLibrary, vocabSize, beats, expectedDistinctLabelsMax: count * vocabSize };
+}
+
 module.exports = {
-  TAG_VOCAB_SIZE, synthBeatDoc, rowEntropy, selected, buildRow, ensureNativeLibrary, generateLibrary,
+  generateTenants, TAG_VOCAB_SIZE, synthBeatDoc, rowEntropy, selected, buildRow, ensureNativeLibrary, generateLibrary,
   insertBeatsBatch, insertTagsBatch, insertTrashBatch, BEAT_COLUMNS, TAG_COLUMNS, TRASH_COLUMNS,
 };

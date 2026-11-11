@@ -56,14 +56,18 @@ const authorityMod = require(path.join(CLOUD, 'catalog', 'authority.js'));
 const queriesMod = require(path.join(CLOUD, 'catalog', 'queries.js'));
 const commandsMod = require(path.join(CLOUD, 'catalog', 'commands.js'));
 const operationsMod = require(path.join(CLOUD, 'catalog', 'operations.js'));
-const { generateLibrary, TAG_VOCAB_SIZE } = require(path.join(__dirname, 'catalog-bench', 'generator.cjs'));
+const { generateLibrary, generateTenants, synthBeatDoc, TAG_VOCAB_SIZE } = require(path.join(__dirname, 'catalog-bench', 'generator.cjs'));
 const { Pool } = require(path.join(CLOUD, 'node_modules', 'pg'));
+const { runOracle } = require(path.join(__dirname, 'catalog-bench', 'facets-oracle.cjs'));
 
 // ---------- CLI ----------
 function parseArgs(argv) {
   const out = {
     n: null, seed: 777, outDir: null, warmupMs: 120000, sampleMs: 600000, smoke: false,
     clients: 20, genConcurrency: Math.max(1, Math.min(4, os.cpus().length)), keepDb: false, descriptor: null,
+    // Variante multi-tenant (CONTRATO C11 "distribuciones 1.000×100…"): además de la biblioteca grande, `tenants` bibliotecas pequeñas
+    // con vocabularios de tags distintos entre sí (>1000 etiquetas distintas en total con los valores por defecto).
+    tenants: 0, tenantBeats: 500, tenantVocab: 10, pools: 20000,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -74,6 +78,11 @@ function parseArgs(argv) {
     else if (a === '--sample-ms') out.sampleMs = Number(argv[++i]);
     else if (a === '--clients') out.clients = Number(argv[++i]);
     else if (a === '--gen-concurrency') out.genConcurrency = Number(argv[++i]);
+    else if (a === '--tenants') out.tenants = Number(argv[++i]);
+    else if (a === '--tenant-beats') out.tenantBeats = Number(argv[++i]);
+    else if (a === '--tenant-vocab') out.tenantVocab = Number(argv[++i]);
+    else if (a === '--pools') out.pools = Number(argv[++i]);
+    else if (a === '--only') out.only = argv[++i].split(',');
     else if (a === '--keep-db') out.keepDb = true;
     else if (a === '--descriptor') out.descriptor = argv[++i];
     else if (a === '--smoke') { out.smoke = true; out.warmupMs = 2000; out.sampleMs = 5000; }
@@ -108,7 +117,8 @@ async function timeIt(fn) {
   const t0 = process.hrtime.bigint();
   try {
     const value = await fn();
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    // Un perfil con preparación no medida (p.ej. bulk: construir selección/operación) devuelve `__timed_ms` con el tramo medido.
+    const ms = typeof value?.__timed_ms === 'number' ? value.__timed_ms : Number(process.hrtime.bigint() - t0) / 1e6;
     const bytes = value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
     const rows = Array.isArray(value?.items) ? value.items.length : undefined;
     return { ms, bytes, rows, error: null };
@@ -124,9 +134,50 @@ async function runFor(ms, fn) {
   return samples;
 }
 
+// ---------- clasificación de perfiles (cita normativa) ----------
+// OBLIGATORIO = SLO exigido (afecta a summary.slo.pass). INFORMATIVO = se mide y se compara con la referencia de 250 ms, sin afectar al PASS.
+//  - CONTRATO C11: "Requisitos duros: metadata GET/PATCH/trash/restore ... cambios de metadatos independientes de N beats"; "SLO ...
+//    API metadata p95 <=250 ms/p99 <=1 s ... PATCH p95 <=250 ms"; "1-2 caracteres, terminos frecuentes, paginas profundas, cache frio y
+//    biblioteca muy activa son perfiles obligatorios".
+//  - C12-DECISION-RECORD §7 "Escenarios obligatorios": primera pagina, keyset profundo, resolver legacy hasta 10.000, filtros
+//    raros/frecuentes, q1/2 caracteres, busquedas sin matches, exact COUNT filtrado, 20 escritores/lectores; "SLO se exige en perfiles
+//    requeridos". Datasets C11 "distribuciones 1.000x100, 1.000x1.000, 1x100.000" -> la variante multi-tenant de filter_rare_tag.
+const PROFILE_CLASS = {
+  page1: 'obligatorio', filter_frequent_tag: 'obligatorio', filter_rare_tag: 'obligatorio', filter_short_q: 'obligatorio', count_exact: 'obligatorio',
+  legacy_nav_offset0: 'obligatorio', legacy_nav_offset_deep: 'obligatorio', read_one: 'obligatorio', edit_patch: 'obligatorio',
+  // nuevos (T20-N): PATCH de tags = PATCH (p95<=250); trash/restore = "metadata GET/PATCH/trash/restore" de C11; sin matches = §7.
+  edit_patch_tags: 'obligatorio', trash_one: 'obligatorio', restore_one: 'obligatorio', filter_nomatch_q_short: 'obligatorio', filter_nomatch_q_long: 'obligatorio',
+  // informativos: el roundtrip suma dos mutaciones (se evalua cada una por separado); bulk por lote y q>=3 raro no figuran en la lista de §7/C11.
+  trash_restore_roundtrip: 'informativo', bulk_tags_batch: 'informativo', filter_rare_q: 'informativo', transfer_queue_fake_gateway: 'informativo',
+};
+
+// Estado compartido entre el arranque frio y la muestra caliente: pools de beats con version rastreada (cada mutacion devuelve la nueva
+// version; nadie mas escribe durante el benchmark). Se prepara una vez, fuera de toda medicion.
+async function prepareShared({ pool, q, cmd, lib, poolSize }) {
+  const sel = (mod) => pool.query(`SELECT beat_id, version::text AS version, legacy_json FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE'
+    AND abs(hashtext(beat_id)) % 200 = $3 ORDER BY beat_id LIMIT $4`, [lib.userId, lib.generationId, mod, poolSize]);
+  const activePool = (await sel(7)).rows.map((r) => ({ id: r.beat_id, version: r.version }));
+  const patchPool = (await sel(11)).rows.slice(0, 5000).map((r) => ({ id: r.beat_id, version: r.version, tags: JSON.parse(r.legacy_json).tags || [] }));
+  // restore_one necesita beats ya en papelera: se mueven 5000 a TRASH (lotes de 50, fuera de medicion).
+  const trashedPool = [];
+  const seed = activePool.splice(0, Math.min(5000, Math.floor(activePool.length / 2)));
+  for (let i = 0; i < seed.length; i += 50) {
+    const chunk = seed.slice(i, i + 50);
+    const t = await cmd.trashBeats({ userId: lib.userId, era: lib.era, epoch: lib.epoch, idempotencyKey: `bench-seedtrash-${crypto.randomUUID()}`, items: chunk.map((e) => ({ beatId: e.id, expectedVersion: e.version })) });
+    t.items.forEach((it) => trashedPool.push({ id: it.beatId, version: it.version }));
+  }
+  // bulk: una etiqueta mediana (100-2000 beats ACTIVE) para construir conjuntos de consulta pequenos en cada iteracion.
+  const f = await pool.query(`SELECT norm_key FROM catalog_facets WHERE user_id = $1 AND generation_id = $2 AND scope = 'ACTIVE' AND beat_count BETWEEN 100 AND 2000 ORDER BY beat_count DESC, norm_key LIMIT 1`, [lib.userId, lib.generationId]);
+  return { activePool, trashedPool, patchPool, bulkTag: f.rows[0]?.norm_key || null, bulkToggle: 0 };
+}
+
 // ---------- perfiles de carga (C12-DECISION-RECORD §7 / TAREAS §T20) ----------
-function buildProfiles({ q, cmd, ops, lib, clients }) {
+function buildProfiles({ q, cmd, ops, lib, clients, shared }) {
   const mid = Math.floor(TAG_VOCAB_SIZE / 2);
+  const POPULAR_TAG = 'tag0';
+  const takeRandom = (arr) => { if (!arr.length) throw Object.assign(new Error('POOL_EMPTY'), { code: 'POOL_EMPTY' }); return arr.splice(Math.floor(Math.random() * arr.length), 1)[0]; };
+  const hdr = () => ({ userId: lib.userId, era: lib.era, epoch: lib.epoch });
+  const rareQ = synthBeatDoc(777, 77777).name.toLowerCase(); // "<w1> <w2> 77777": pocas coincidencias (sufijos de indice), >= 3 caracteres
   let patchToggle = 0;
   const activeIdsCache = { ids: null };
   async function sampleActiveId() {
@@ -141,6 +192,9 @@ function buildProfiles({ q, cmd, ops, lib, clients }) {
     filter_frequent_tag: () => q.listBeats({ userId: lib.userId, query: { includeTag: 'tag0' } }),
     filter_rare_tag: () => q.listBeats({ userId: lib.userId, query: { includeTag: `tag${TAG_VOCAB_SIZE - 1}` } }),
     filter_short_q: () => q.listBeats({ userId: lib.userId, query: { q: 'mi' } }),
+    filter_rare_q: () => q.listBeats({ userId: lib.userId, query: { q: rareQ } }),
+    filter_nomatch_q_short: () => q.listBeats({ userId: lib.userId, query: { q: 'zq' } }),
+    filter_nomatch_q_long: () => q.listBeats({ userId: lib.userId, query: { q: 'zqxjk' } }),
     count_exact: () => q.listBeats({ userId: lib.userId, query: { includeTag: `tag${mid}`, includeTotal: 'true' } }),
     legacy_nav_offset0: () => q.resolveLegacyNavigation({ userId: lib.userId, query: { offset: '0' } }),
     legacy_nav_offset_deep: () => q.resolveLegacyNavigation({ userId: lib.userId, query: { offset: String(Math.min(9999, Math.max(0, lib.activeCount - 1))) } }),
@@ -150,6 +204,45 @@ function buildProfiles({ q, cmd, ops, lib, clients }) {
       const current = await q.getBeat({ userId: lib.userId, beatId: id });
       patchToggle = (patchToggle + 1) % 6;
       return cmd.patchBeat({ userId: lib.userId, beatId: id, era: lib.era, epoch: lib.epoch, idempotencyKey: `bench-patch-${crypto.randomUUID()}`, expectedVersion: current.version, patch: { rating: patchToggle } });
+    },
+    // PATCH de tags: anade o quita un tag popular (tag0, en ~20 % de los beats) alternando por beat; la faceta afectada es la mas grande.
+    edit_patch_tags: async () => {
+      const e = shared.patchPool[Math.floor(Math.random() * shared.patchPool.length)];
+      const has = e.tags.includes(POPULAR_TAG);
+      const tags = has ? e.tags.filter((t) => t !== POPULAR_TAG) : [...e.tags, POPULAR_TAG];
+      const r = await cmd.patchBeat({ ...hdr(), beatId: e.id, idempotencyKey: `bench-ptags-${crypto.randomUUID()}`, expectedVersion: e.version, patch: { tags } });
+      e.tags = tags; e.version = r.beat.version;
+      return r;
+    },
+    // trash y restore evaluados cada uno por separado (los pools rastrean version; restore_one parte de beats ya en papelera).
+    trash_one: async () => {
+      const e = takeRandom(shared.activePool);
+      const t = await cmd.trashBeats({ ...hdr(), idempotencyKey: `bench-trash1-${crypto.randomUUID()}`, items: [{ beatId: e.id, expectedVersion: e.version }] });
+      shared.trashedPool.push({ id: e.id, version: t.items[0].version });
+      return t;
+    },
+    restore_one: async () => {
+      const e = takeRandom(shared.trashedPool);
+      const r = await cmd.restoreBeats({ ...hdr(), idempotencyKey: `bench-restore1-${crypto.randomUUID()}`, items: [{ beatId: e.id, expectedVersion: e.version }] });
+      shared.activePool.push({ id: e.id, version: r.items[0].version });
+      return r;
+    },
+    // Lote de 50 de bulk add/remove de un tag popular. La preparacion (conjunto de consulta, seleccion, operacion) NO se mide;
+    // se mide un unico stepOperation (= un lote <=50 en una transaccion, lo que ejecuta el worker).
+    bulk_tags_batch: async () => {
+      if (!shared.bulkTag) throw Object.assign(new Error('NO_BULK_TAG'), { code: 'NO_BULK_TAG' });
+      const set = await q.createQuerySet({ userId: lib.userId, query: { includeTag: shared.bulkTag }, consumer: { id: 'bench-bulk', kind: 'SELECTION' } });
+      while ((await q.stepQuerySet({ userId: lib.userId, setId: set.setId, batch: 240 })).status === 'BUILDING');
+      const page = await q.listBeats({ userId: lib.userId, query: { includeTag: shared.bulkTag, limit: '50' } });
+      const ids = page.items.slice(0, 50).map((i) => i.id);
+      const sel = await cmd.createSelection({ ...hdr(), setId: set.setId, sort: 'manual', defaultSelected: false, consumerId: 'bench-bulk' });
+      await cmd.applySelectionOp({ ...hdr(), selectionId: sel.selectionId, selectionVersion: '0', idempotencyKey: `bench-bsel-${crypto.randomUUID()}`, op: { kind: 'INCLUDE_IDS', beatIds: ids } });
+      shared.bulkToggle = (shared.bulkToggle + 1) % 2;
+      const op = await cmd.createOperation({ ...hdr(), idempotencyKey: `bench-bop-${crypto.randomUUID()}`, kind: 'BULK_PATCH', selectionId: sel.selectionId, selectionVersion: '1', patch: {}, tagsOp: { op: shared.bulkToggle ? 'add' : 'remove', tags: [POPULAR_TAG] } });
+      const t0 = process.hrtime.bigint();
+      const step = await cmd.stepOperation({ ...hdr(), operationId: op.operationId });
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      return { __timed_ms: ms, advanced: step.advanced, status: step.status };
     },
     trash_restore_roundtrip: async () => {
       const id = await sampleActiveId();
@@ -224,6 +317,15 @@ async function main(argv) {
     const lib = await generateLibrary({ pool, userId: 'bench-u1', n: args.n, seed: args.seed, concurrency: args.genConcurrency, trashFraction: 0.10 });
     const genMs = Number(process.hrtime.bigint() - genT0) / 1e6;
     summary.generation = { ...lib, duration_ms: genMs, rows_per_sec: args.n ? Math.round((args.n / genMs) * 1000) : null };
+    if (args.tenants > 0) {
+      // Variante multi-tenant: bibliotecas pequenas con vocabularios disjuntos; cambia la estadistica global de catalog_beat_tags.label.
+      const tT0 = process.hrtime.bigint();
+      summary.tenants = await generateTenants({ pool, count: args.tenants, beatsPerLibrary: args.tenantBeats, vocabSize: args.tenantVocab, seed: args.seed, concurrency: 1 });
+      summary.tenants.duration_ms = Number(process.hrtime.bigint() - tT0) / 1e6;
+      const dist = await pool.query('SELECT count(DISTINCT label)::int AS distinct_labels, count(DISTINCT user_id)::int AS users FROM catalog_beat_tags');
+      summary.tenants.distinct_labels_total = dist.rows[0].distinct_labels; summary.tenants.users_with_tags = dist.rows[0].users;
+      await pool.query('ANALYZE catalog_beat_tags');
+    }
 
     let pgStatStatements = false;
     try { await pool.query('CREATE EXTENSION IF NOT EXISTS pg_stat_statements'); const r = await pool.query("SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'"); pgStatStatements = r.rows.length > 0; } catch { pgStatStatements = false; }
@@ -234,8 +336,10 @@ async function main(argv) {
     const q = queriesMod.createCatalogQueries({ pool, authority: auth, cursorKeys: [{ kid: 'bench', secret: crypto.randomBytes(32) }] });
     const cmd = commandsMod.createCatalogCommands({ pool, authority: auth });
     const ops = { ...operationsMod.createCatalogOperations({ pool, authority: auth, resolveAccess: async () => ({ maxBeats: null }) }), __pool: pool };
-    const profiles = buildProfiles({ q, cmd, ops, lib, clients: args.clients });
-    const names = Object.keys(profiles);
+    const shared = await prepareShared({ pool, q, cmd, lib, poolSize: args.pools });
+    const profiles = buildProfiles({ q, cmd, ops, lib, clients: args.clients, shared });
+    const names = Object.keys(profiles).filter((n) => !args.only || args.only.includes(n));
+    summary.profile_class = Object.fromEntries(names.map((n) => [n, PROFILE_CLASS[n] || 'informativo']));
 
     // ---------- arranque frío: pool nuevo de 1 conexión, primeras N llamadas de cada perfil sin caché/calentamiento ----------
     for (const name of names) {
@@ -245,7 +349,7 @@ async function main(argv) {
         q: queriesMod.createCatalogQueries({ pool: coldPool, authority: coldAuth(), cursorKeys: [{ kid: 'bench-cold', secret: crypto.randomBytes(32) }] }),
         cmd: commandsMod.createCatalogCommands({ pool: coldPool, authority: coldAuth() }),
         ops: { ...operationsMod.createCatalogOperations({ pool: coldPool, authority: coldAuth(), resolveAccess: async () => ({ maxBeats: null }) }), __pool: coldPool },
-        lib, clients: Math.min(5, args.clients),
+        lib, clients: Math.min(5, args.clients), shared,
       });
       const samples = [];
       const coldN = args.smoke ? 2 : 5;
@@ -270,6 +374,9 @@ async function main(argv) {
     const memAfterSample = process.memoryUsage().rss;
     summary.process_memory = { rss_before_warmup_mb: Math.round(memBefore / 1048576), rss_after_warmup_mb: Math.round(memAfterWarmup / 1048576), rss_after_sample_mb: Math.round(memAfterSample / 1048576) };
 
+    // ---------- integridad tras la campaña: facetas == recómputo completo y grupos == tags+beats (T20-N, 0 diferencias exigidas) ----------
+    summary.facets_oracle = await runOracle(pool, { userId: lib.userId, generationId: lib.generationId });
+
     // ---------- SQL retenido: pg_stat_activity real + contadores del pool (nunca solo uno de los dos) ----------
     const activity = await pool.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND state = 'idle in transaction'");
     const poolOpen = pool.totalCount - pool.idleCount;
@@ -277,15 +384,27 @@ async function main(argv) {
 
     // ---------- SLO de referencia (C12-DECISION-RECORD §7 / NATIVO r2.1 §8.6) ----------
     const slo = { metadata_p95_ms: 250, metadata_p99_ms: 1000, patch_p95_ms: 250, response_max_bytes: 2 * 1024 * 1024, sql_retained: 0 };
-    const metadataProfiles = ['page1', 'filter_frequent_tag', 'filter_rare_tag', 'filter_short_q', 'count_exact', 'legacy_nav_offset0', 'legacy_nav_offset_deep', 'read_one'];
+    // Perfiles de lectura/escritura obligatorios: p95/p99/bytes; los errores cuentan (un perfil con errores no pasa).
+    const metadataProfiles = ['page1', 'filter_frequent_tag', 'filter_rare_tag', 'filter_short_q', 'count_exact', 'legacy_nav_offset0', 'legacy_nav_offset_deep', 'read_one',
+      'filter_nomatch_q_short', 'filter_nomatch_q_long', 'trash_one', 'restore_one'];
     const slo_eval = {};
     for (const name of metadataProfiles) {
       const w = summary.warm[name];
       if (!w) continue;
-      slo_eval[name] = { p95_ok: w.p95_ms !== null && w.p95_ms <= slo.metadata_p95_ms, p99_ok: w.p99_ms !== null && w.p99_ms <= slo.metadata_p99_ms, bytes_ok: (w.max_bytes ?? 0) <= slo.response_max_bytes, p95_ms: w.p95_ms, p99_ms: w.p99_ms, max_bytes: w.max_bytes };
+      slo_eval[name] = { p95_ok: w.p95_ms !== null && w.p95_ms <= slo.metadata_p95_ms, p99_ok: w.p99_ms !== null && w.p99_ms <= slo.metadata_p99_ms, bytes_ok: (w.max_bytes ?? 0) <= slo.response_max_bytes, errors_ok: w.errors === 0, p95_ms: w.p95_ms, p99_ms: w.p99_ms, max_bytes: w.max_bytes };
     }
-    if (summary.warm.edit_patch) slo_eval.edit_patch = { p95_ok: summary.warm.edit_patch.p95_ms !== null && summary.warm.edit_patch.p95_ms <= slo.patch_p95_ms, p95_ms: summary.warm.edit_patch.p95_ms };
+    for (const name of ['edit_patch', 'edit_patch_tags']) {
+      if (summary.warm[name]) slo_eval[name] = { p95_ok: summary.warm[name].p95_ms !== null && summary.warm[name].p95_ms <= slo.patch_p95_ms, errors_ok: summary.warm[name].errors === 0, p95_ms: summary.warm[name].p95_ms };
+    }
+    // Informativos (ver PROFILE_CLASS): se reportan contra la referencia de 250 ms, sin afectar a summary.slo.pass.
+    summary.informational = {};
+    for (const name of Object.keys(summary.warm)) {
+      if ((PROFILE_CLASS[name] || 'informativo') !== 'informativo') continue;
+      const w = summary.warm[name];
+      summary.informational[name] = { p95_ms: w.p95_ms, p99_ms: w.p99_ms, errors: w.errors, within_250ms_p95: w.p95_ms !== null && w.p95_ms <= 250 };
+    }
     slo_eval.sql_retained_ok = summary.sql_retained.acceptable;
+    slo_eval.facets_oracle_ok = summary.facets_oracle.facetDifferences === 0 && summary.facets_oracle.groupDifferences === 0;
     summary.slo = { reference: slo, evaluation: slo_eval, pass: Object.values(slo_eval).every((v) => v === true || (typeof v === 'object' && Object.entries(v).filter(([k]) => k.endsWith('_ok')).every(([, ok]) => ok))) };
   } catch (error) {
     exitCode = 1;
@@ -307,7 +426,7 @@ async function main(argv) {
   if (summary.sql_retained) lines.push(`SQL retenido: pool_checked_out=${summary.sql_retained.pool_checked_out} idle_in_tx=${summary.sql_retained.pg_stat_activity_idle_in_transaction} aceptable=${summary.sql_retained.acceptable}`);
   for (const name of Object.keys(summary.warm)) {
     const w = summary.warm[name]; const c = summary.cold[name];
-    lines.push(`  ${name}: warm p50=${w.p50_ms?.toFixed(1)} p95=${w.p95_ms?.toFixed(1)} p99=${w.p99_ms?.toFixed(1)} ms, n=${w.count}, err=${w.errors} | cold p50=${c?.p50_ms?.toFixed(1)}ms`);
+    lines.push(`  ${name} [${PROFILE_CLASS[name] || 'informativo'}]: warm p50=${w.p50_ms?.toFixed(1)} p95=${w.p95_ms?.toFixed(1)} p99=${w.p99_ms?.toFixed(1)} ms, n=${w.count}, err=${w.errors} | cold p50=${c?.p50_ms?.toFixed(1)}ms`);
   }
   if (summary.error) lines.push(`ERROR: ${summary.error}`);
   fs.writeFileSync(path.join(args.outDir, 'summary.txt'), lines.join('\n') + '\n');

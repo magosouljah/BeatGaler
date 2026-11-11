@@ -112,6 +112,11 @@ async function importToStaging({ pool, scope, rawBytes, ctx = {}, batchSize = BA
 // Grupos de tags y facetas de una generación, reconstruidos de forma idempotente dentro de la transacción dada (T04; T06 los pagina).
 async function rebuildDerivedProjections(c, s) {
   {
+    // 0037: texto de búsqueda derivado (name_search ␟ key_search ␟ bpm_display ␟ search_key de cada tag por posición), set-based.
+    await c.query(`UPDATE catalog_beats b SET search_text = b.name_search || chr(31) || b.key_search || chr(31) || b.bpm_display
+        || coalesce((SELECT chr(31) || string_agg(t.search_key, chr(31) ORDER BY t.position) FROM catalog_beat_tags t
+                     WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id), '')
+      WHERE b.user_id = $1 AND b.generation_id = $2`, [s.userId, s.generationId]);
     await c.query('DELETE FROM catalog_facets WHERE user_id = $1 AND generation_id = $2', [s.userId, s.generationId]);
     await c.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2', [s.userId, s.generationId]);
     await c.query(`INSERT INTO catalog_beat_tag_groups(user_id, generation_id, beat_id, norm_key, projection_version, state, manual_rank, first_position, label_at_first_position)

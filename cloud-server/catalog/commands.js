@@ -17,6 +17,7 @@ const { CatalogQueryError } = require('./cursor');
 const codec = require('./legacy-codec');
 const rules = require('./metadata-rules');
 const { TUPLES, SORTS, STATEMENT_TIMEOUT_MS } = require('./queries');
+const facets = require('./facets');
 
 const BATCH_MAX = 50;
 const BODY_METADATA_BYTES = 64 * 1024;
@@ -69,7 +70,7 @@ function beatRowsFromDoc(doc) {
 }
 const BEAT_UPDATE_SQL = `UPDATE catalog_beats SET name = $4, bpm_text = $5, key_text = $6, rating = $7, color = $8, color2 = $9, bpm_sort_class = $10, bpm_sort = $11,
     has_artwork = $12, legacy_json = $13, legacy_sha256 = $14, legacy_export_bytes = $15, name_display = $16, name_search = $17, key_display = $18, key_search = $19,
-    bpm_display = $20, rating_display = $21, version = version + 1, updated_at = now()
+    bpm_display = $20, rating_display = $21, search_text = $22, version = version + 1, updated_at = now()
   WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 RETURNING version::text AS version`;
 // T20-N perf (SLO_FAIL n=1M, EXPLAIN real sobre LAB): escribir SIEMPRE catalog_beat_tags/catalog_beat_tag_groups y
 // disparar refreshGroupsAndFacets aunque `tags` no cambie fuerza, para cualquier PATCH de metadata ajena a tags
@@ -84,7 +85,7 @@ function tagsEqual(a, b) {
 async function writeBeatDoc(client, uid, gen, beatId, doc, { tagsChanged = true } = {}) {
   const { p, legacyJson, legacySha256, legacyExportBytes } = beatRowsFromDoc(doc);
   const r = await client.query(BEAT_UPDATE_SQL, [uid, gen, beatId, p.name, p.bpmText, p.keyText, p.rating, p.color, p.color2, p.bpmSortClass, p.bpmSort, p.hasArtwork,
-    legacyJson, legacySha256, legacyExportBytes, p.nameDisplay, p.nameSearch, p.keyDisplay, p.keySearch, p.bpmDisplay, p.ratingDisplay]);
+    legacyJson, legacySha256, legacyExportBytes, p.nameDisplay, p.nameSearch, p.keyDisplay, p.keySearch, p.bpmDisplay, p.ratingDisplay, p.searchText]);
   if (tagsChanged) {
     await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
     await client.query('DELETE FROM catalog_beat_tags WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
@@ -92,7 +93,10 @@ async function writeBeatDoc(client, uid, gen, beatId, doc, { tagsChanged = true 
   }
   return { version: r.rows[0].version, normKeys: [...new Set(p.tags.map((t) => t.normKey))], tagsChanged };
 }
-// Grupos (una fila por beat y norm_key) y facetas de las claves afectadas, en ambos scopes, dentro de la transacción.
+// RECÓMPUTO COMPLETO (oráculo/reconstrucción, ver facets.js): reescribe los grupos de los beats y recuenta las facetas completas de
+// las claves dadas. Coste O(tamaño del grupo): ya NO lo usa ningún camino de mutación en línea (patch, trash/restore, bulk, rename,
+// import/replace usan facets.snapshotGroups/insertGroups/applyFacetDelta bajo el lock de biblioteca). Se conserva exportado para
+// pruebas y para reconstrucciones explícitas.
 async function refreshGroupsAndFacets(client, uid, gen, beatIds, normKeys, revision) {
   if (beatIds.length) {
     await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = ANY($3::text[])', [uid, gen, beatIds]);
@@ -206,10 +210,13 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
         result = { noop: true, beat: await beatDto(client, uid, gen, beatId), revision: ctx.revision };
       } else {
         const tagsChanged = !tagsEqual(before.tags, after.tags);
-        const oldKeys = tagsChanged ? await normKeysOf(client, uid, gen, [beatId]) : [];
-        const { version, normKeys } = await writeBeatDoc(client, uid, gen, beatId, after, { tagsChanged });
+        const facetsBefore = tagsChanged ? await facets.snapshotGroups(client, uid, gen, [beatId]) : [];
+        const { version } = await writeBeatDoc(client, uid, gen, beatId, after, { tagsChanged });
         const revision = await bumpRevision(client, uid);
-        if (tagsChanged) await refreshGroupsAndFacets(client, uid, gen, [beatId], [...oldKeys, ...normKeys], revision);
+        if (tagsChanged) {
+          await facets.insertGroups(client, uid, gen, [beatId]);
+          await facets.applyFacetDelta(client, uid, gen, facetsBefore, await facets.snapshotGroups(client, uid, gen, [beatId]), revision);
+        }
         const eventSeq = await emitEvent(client, uid, gen, revision, 'BEAT_PATCHED', { beatId, version, payload: { fields: Object.keys(v.set) } });
         result = { noop: false, beat: await beatDto(client, uid, gen, beatId), revision, eventSeq };
       }
@@ -279,14 +286,16 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
       }
       if (conflicts.length) throw new CatalogQueryError('VERSION_CONFLICT', 409, `${mode.toLowerCase()} batch rejected: no item was applied`, { conflicts });
       const results = [];
+      const ids = batch.map((b) => b.beatId);
+      // Facetas por delta: los grupos NO se reescriben; state/manual_rank siguen al beat por la FK ON UPDATE CASCADE (0026).
+      const facetsBefore = await facets.snapshotGroups(client, uid, gen, ids);
       for (const it of batch) {
         const version = mode === 'TRASH' ? await trashOne(client, uid, gen, byId.get(it.beatId)) : await restoreOne(client, uid, gen, byId.get(it.beatId));
         results.push({ beatId: it.beatId, version });
       }
       const n = batch.length;
       const revision = await bumpRevision(client, uid, mode === 'TRASH' ? { active: -n, trash: n } : { active: n, trash: -n });
-      const keys = await normKeysOf(client, uid, gen, batch.map((b) => b.beatId));
-      await refreshGroupsAndFacets(client, uid, gen, batch.map((b) => b.beatId), keys, revision);
+      await facets.applyFacetDelta(client, uid, gen, facetsBefore, await facets.snapshotGroups(client, uid, gen, ids), revision);
       for (const r of results) await emitEvent(client, uid, gen, revision, mode === 'TRASH' ? 'BEAT_TRASHED' : 'BEAT_RESTORED', { beatId: r.beatId, version: r.version });
       const result = { items: results, revision };
       const operationId = await recordOperation(client, uid, ctx, { kind: mode, key: idempotencyKey, hash, payload, result });
@@ -577,7 +586,9 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
         return opDto((await client.query(OP_SQL, [uid, operationId])).rows[0], { advanced: 0, conflict });
       }
       // Aplicar
-      let applied = 0; let notExecuted = 0; const touched = []; const keys = new Set(); let delta = { active: 0, trash: 0 }; const events = [];
+      let applied = 0; let notExecuted = 0; const touched = []; const rewriteIds = []; let delta = { active: 0, trash: 0 }; const events = [];
+      const facetsBefore = await facets.snapshotGroups(client, uid, gen, ids);
+      const stateOnly = new Set(); // trash/restore: los grupos NO se reescriben (FK ON UPDATE CASCADE propaga state/manual_rank)
       for (const it of items) {
         if (!it.row) { notExecuted++; continue; }
         const row = it.row; const doc = JSON.parse(row.legacy_json);
@@ -587,8 +598,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
           if (payload.tagsOp) after = (payload.tagsOp.op === 'add' ? addTagsToDoc(after, payload.tagsOp.tags) : removeTagsFromDoc(after, payload.tagsOp.tags)) ?? after;
           if (!docChanged(doc, after)) { it.result = 'NOOP'; it.toVersion = row.version; applied++; continue; }
           const tagsChanged = !tagsEqual(doc.tags, after.tags);
-          if (tagsChanged) for (const k of await normKeysOf(client, uid, gen, [row.beat_id])) keys.add(k);
-          const w = await writeBeatDoc(client, uid, gen, row.beat_id, after, { tagsChanged }); if (tagsChanged) w.normKeys.forEach((k) => keys.add(k));
+          const w = await writeBeatDoc(client, uid, gen, row.beat_id, after, { tagsChanged }); if (tagsChanged) rewriteIds.push(row.beat_id);
           it.result = 'APPLIED'; it.toVersion = w.version; applied++; touched.push(row.beat_id); events.push(['BEAT_PATCHED', row.beat_id, w.version]);
         } else if (o.kind === 'BULK_TRASH' || o.kind === 'BULK_RESTORE') {
           const want = o.kind === 'BULK_TRASH' ? 'ACTIVE' : 'TRASH';
@@ -596,18 +606,23 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
           if (o.kind === 'BULK_RESTORE') { const tomb = await client.query('SELECT 1 FROM catalog_tombstones WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, row.beat_id]); if (tomb.rows.length) { it.result = 'NOT_EXECUTED'; it.detail = 'PURGE_PENDING'; notExecuted++; continue; } }
           const version = o.kind === 'BULK_TRASH' ? await trashOne(client, uid, gen, row) : await restoreOne(client, uid, gen, row);
           delta = o.kind === 'BULK_TRASH' ? { active: delta.active - 1, trash: delta.trash + 1 } : { active: delta.active + 1, trash: delta.trash - 1 };
-          for (const k of await normKeysOf(client, uid, gen, [row.beat_id])) keys.add(k);
+          stateOnly.add(row.beat_id);
           it.result = 'APPLIED'; it.toVersion = version; applied++; touched.push(row.beat_id); events.push([o.kind === 'BULK_TRASH' ? 'BEAT_TRASHED' : 'BEAT_RESTORED', row.beat_id, version]);
         } else { // TAG_RENAME: metadata de tags, sin tocar estado, fechas ni referencias
           const after = renameTagsInDoc(doc, payload.rename.from, payload.rename.to);
           if (!after) { it.result = 'NOOP'; it.toVersion = row.version; applied++; continue; }
-          keys.add(payload.rename.from); keys.add(payload.rename.to);
-          const w = await writeBeatDoc(client, uid, gen, row.beat_id, after); w.normKeys.forEach((k) => keys.add(k));
+          const w = await writeBeatDoc(client, uid, gen, row.beat_id, after); rewriteIds.push(row.beat_id);
           it.result = 'APPLIED'; it.toVersion = w.version; applied++; touched.push(row.beat_id); events.push(['TAGS_RENAMED', row.beat_id, w.version]);
         }
       }
       const revision = touched.length ? await bumpRevision(client, uid, delta) : ctx.revision;
-      if (touched.length) await refreshGroupsAndFacets(client, uid, gen, touched, [...keys], revision);
+      // Facetas por delta bajo el lock de biblioteca; solo se reescriben los grupos de los beats cuyos tags cambiaron.
+      const facetIds = [...new Set([...rewriteIds, ...stateOnly])];
+      if (facetIds.length) {
+        await facets.insertGroups(client, uid, gen, rewriteIds);
+        const facetSet = new Set(facetIds);
+        await facets.applyFacetDelta(client, uid, gen, facetsBefore.filter((r) => facetSet.has(r.beat_id)), await facets.snapshotGroups(client, uid, gen, facetIds), revision);
+      }
       for (const [kind, beatId, version] of events) await emitEvent(client, uid, gen, revision, kind, { beatId, version, operationId });
       await client.query('INSERT INTO catalog_operation_batches(user_id, operation_id, batch_seq, from_slot, to_slot, item_count, status, committed_revision) VALUES ($1,$2,$3,$4::bigint,$5::bigint,$6,\'COMMITTED\',$7::bigint)',
         [uid, operationId, batchSeq, take[0].slot ?? 0, take[take.length - 1].slot ?? 0, take.length, revision]);

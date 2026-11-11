@@ -1336,6 +1336,30 @@
           ],
           "kind": "node-test",
           "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-facets-delta-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-facets-delta.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-search-text-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-search-text.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
         }
       ]
     },
