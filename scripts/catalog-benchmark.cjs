@@ -83,6 +83,7 @@ function parseArgs(argv) {
     else if (a === '--tenant-vocab') out.tenantVocab = Number(argv[++i]);
     else if (a === '--pools') out.pools = Number(argv[++i]);
     else if (a === '--only') out.only = argv[++i].split(',');
+    else if (a === '--reuse-db') out.reuseDb = argv[++i];
     else if (a === '--keep-db') out.keepDb = true;
     else if (a === '--descriptor') out.descriptor = argv[++i];
     else if (a === '--smoke') { out.smoke = true; out.warmupMs = 2000; out.sampleMs = 5000; }
@@ -124,7 +125,8 @@ async function timeIt(fn) {
     return { ms, bytes, rows, error: null };
   } catch (error) {
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    return { ms, bytes: 0, rows: undefined, error: error.code || error.message };
+    const detail = error.code === 'VERSION_CONFLICT' ? JSON.stringify(error.details ?? error.detail ?? null).slice(0, 160) : undefined;
+    return { ms, bytes: 0, rows: undefined, error: error.code || error.message, detail };
   }
 }
 async function runFor(ms, fn) {
@@ -153,24 +155,65 @@ const PROFILE_CLASS = {
 
 // Estado compartido entre el arranque frio y la muestra caliente: pools de beats con version rastreada (cada mutacion devuelve la nueva
 // version; nadie mas escribe durante el benchmark). Se prepara una vez, fuera de toda medicion.
+const shared_seed_retries = { n: 0 };
 async function prepareShared({ pool, q, cmd, lib, poolSize }) {
+  // Higiene del propio benchmark: un conjunto BUILDING que quedo huerfano de una corrida interrumpida bloquea (QUERY_SET_BUILDING_BUSY) a todos
+  // los siguientes. Se cancela por la API del producto (cancelQuerySet), nunca por SQL directo.
+  const stale = await pool.query("SELECT set_id FROM catalog_query_sets WHERE user_id = $1 AND status = 'BUILDING'", [lib.userId]);
+  for (const r of stale.rows) await q.cancelQuerySet({ userId: lib.userId, setId: r.set_id }).catch(() => {});
   const sel = (mod) => pool.query(`SELECT beat_id, version::text AS version, legacy_json FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE'
-    AND abs(hashtext(beat_id)) % 200 = $3 ORDER BY beat_id LIMIT $4`, [lib.userId, lib.generationId, mod, poolSize]);
+    AND abs(hashtext(beat_id)) % 20 = $3 ORDER BY beat_id LIMIT $4`, [lib.userId, lib.generationId, mod, poolSize]);
   const activePool = (await sel(7)).rows.map((r) => ({ id: r.beat_id, version: r.version }));
   const patchPool = (await sel(11)).rows.slice(0, 5000).map((r) => ({ id: r.beat_id, version: r.version, tags: JSON.parse(r.legacy_json).tags || [] }));
   // restore_one necesita beats ya en papelera: se mueven 5000 a TRASH (lotes de 50, fuera de medicion).
   const trashedPool = [];
   const seed = activePool.splice(0, Math.min(5000, Math.floor(activePool.length / 2)));
+  // Calentamiento DIRIGIDO (fuera de medicion; el timeout NO se toca): justo tras generar o reabrir, el primer trash toca en frio paginas de
+  // beats, grupos de tags, papelera y contadores de gramas. Se leen solo las filas y los indices que la siembra va a usar. Las muestras de
+  // arranque en frio de los perfiles usan otras filas del pool y un pool de conexiones nuevo: no heredan estas lecturas.
+  {
+    const ids = seed.slice(0, 200).map((e) => e.id);
+    const wp = { u: lib.userId, g: lib.generationId };
+    await pool.query('SELECT count(*) FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.beat_id = ANY($3)', [wp.u, wp.g, ids]);
+    await pool.query('SELECT count(*) FROM catalog_beat_tags t WHERE t.user_id = $1 AND t.generation_id = $2 AND t.beat_id = ANY($3)', [wp.u, wp.g, ids]);
+    await pool.query('SELECT count(*) FROM catalog_beat_tag_groups t WHERE t.user_id = $1 AND t.generation_id = $2 AND t.beat_id = ANY($3)', [wp.u, wp.g, ids]);
+    await pool.query('SELECT coalesce(max(export_position), -1) FROM catalog_trash_entries WHERE user_id = $1 AND generation_id = $2', [wp.u, wp.g]);
+    { // ensayo con ROLLBACK de la misma sentencia de trash: recorre la cascada FK a grupos/papelera y los triggers de contadores de gramas
+      const c = await pool.connect();
+      try { await c.query('BEGIN'); await c.query("UPDATE catalog_beats SET state = 'TRASH' WHERE user_id = $1 AND generation_id = $2 AND beat_id = ANY($3) AND state = 'ACTIVE'", [wp.u, wp.g, ids.slice(0, 100)]); } finally { await c.query('ROLLBACK').catch(() => {}); c.release(); }
+    }
+    await pool.query("SELECT count(*) FROM catalog_search_gram_counts c WHERE c.user_id = $1 AND c.generation_id = $2 AND c.state IN ('ACTIVE','TRASH') AND c.gram = ANY(SELECT unnest(catalog_search_grams(b.search_text)) FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.beat_id = ANY($3))", [wp.u, wp.g, ids]);
+  }
   // Preparación (fuera de medición): lotes de 10, no de 50. Un trash de 50 beats a 1M tarda ~0,5-0,65 s con la caché caliente (cascada FK de
   // state hacia grupos + triggers) y supera el timeout de 1 s del catálogo en frío justo tras generar; el timeout NO se toca (T20: informativo).
   for (let i = 0; i < seed.length; i += 10) {
     const chunk = seed.slice(i, i + 10);
-    const t = await cmd.trashBeats({ userId: lib.userId, era: lib.era, epoch: lib.epoch, idempotencyKey: `bench-seedtrash-${crypto.randomUUID()}`, items: chunk.map((e) => ({ beatId: e.id, expectedVersion: e.version })) });
+    // PREPARACION (no medida): un timeout de 1 s del catalogo en una lectura de disco en frio no invalida la siembra; la transaccion fallida
+    // se revierte entera (idempotencia nueva por intento) y deja las paginas cargadas. El timeout del producto NO se toca. Se registra el conteo.
+    let t = null;
+    for (let attempt = 0; attempt < 6 && !t; attempt++) {
+      try {
+        t = await cmd.trashBeats({ userId: lib.userId, era: lib.era, epoch: lib.epoch, idempotencyKey: `bench-seedtrash-${crypto.randomUUID()}`, items: chunk.map((e) => ({ beatId: e.id, expectedVersion: e.version })) });
+      } catch (e) { if (e.code !== 'CATALOG_QUERY_TIMEOUT' || attempt === 5) throw e; shared_seed_retries.n++; }
+    }
     t.items.forEach((it) => trashedPool.push({ id: it.beatId, version: it.version }));
   }
   // bulk: una etiqueta mediana (100-2000 beats ACTIVE) para construir conjuntos de consulta pequenos en cada iteracion.
   const f = await pool.query(`SELECT norm_key FROM catalog_facets WHERE user_id = $1 AND generation_id = $2 AND scope = 'ACTIVE' AND beat_count BETWEEN 100 AND 2000 ORDER BY beat_count DESC, norm_key LIMIT 1`, [lib.userId, lib.generationId]);
-  return { activePool, trashedPool, patchPool, bulkTag: f.rows[0]?.norm_key || null, bulkToggle: 0 };
+  return { activePool, trashedPool, patchPool, bulkTag: f.rows[0]?.norm_key || null, bulkToggle: 0, seedRetries: shared_seed_retries.n };
+}
+
+// Otros perfiles (edit_patch, bulk_tags_batch) pueden cambiar la version de beats que un pool rastrea; se relee desde la DB (fuera de medicion)
+// para que un VERSION_CONFLICT sea siempre un conflicto real y no un artefacto del seguimiento en memoria.
+async function refreshPools(pool, lib, shared) {
+  for (const arr of [shared.activePool, shared.trashedPool, shared.patchPool]) {
+    for (let i = 0; i < arr.length; i += 5000) {
+      const chunk = arr.slice(i, i + 5000);
+      const r = await pool.query('SELECT beat_id, version::text AS version FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = ANY($3)', [lib.userId, lib.generationId, chunk.map((e) => e.id)]);
+      const m = new Map(r.rows.map((x) => [x.beat_id, x.version]));
+      for (const e of chunk) if (m.has(e.id)) e.version = m.get(e.id);
+    }
+  }
 }
 
 // ---------- perfiles de carga (C12-DECISION-RECORD §7 / TAREAS §T20) ----------
@@ -209,12 +252,14 @@ function buildProfiles({ q, cmd, ops, lib, clients, shared }) {
     },
     // PATCH de tags: anade o quita un tag popular (tag0, en ~20 % de los beats) alternando por beat; la faceta afectada es la mas grande.
     edit_patch_tags: async () => {
-      const e = shared.patchPool[Math.floor(Math.random() * shared.patchPool.length)];
-      const has = e.tags.includes(POPULAR_TAG);
-      const tags = has ? e.tags.filter((t) => t !== POPULAR_TAG) : [...e.tags, POPULAR_TAG];
-      const r = await cmd.patchBeat({ ...hdr(), beatId: e.id, idempotencyKey: `bench-ptags-${crypto.randomUUID()}`, expectedVersion: e.version, patch: { tags } });
-      e.tags = tags; e.version = r.beat.version;
-      return r;
+      const e = takeRandom(shared.patchPool); // reclamo exclusivo: ningun otro cliente puede usar el mismo beat a la vez
+      try {
+        const has = e.tags.includes(POPULAR_TAG);
+        const tags = has ? e.tags.filter((t) => t !== POPULAR_TAG) : [...e.tags, POPULAR_TAG];
+        const r = await cmd.patchBeat({ ...hdr(), beatId: e.id, idempotencyKey: `bench-ptags-${crypto.randomUUID()}`, expectedVersion: e.version, patch: { tags } });
+        e.tags = tags; e.version = r.beat.version;
+        return r;
+      } finally { shared.patchPool.push(e); }
     },
     // trash y restore evaluados cada uno por separado (los pools rastrean version; restore_one parte de beats ya en papelera).
     trash_one: async () => {
@@ -234,7 +279,7 @@ function buildProfiles({ q, cmd, ops, lib, clients, shared }) {
     bulk_tags_batch: async () => {
       if (!shared.bulkTag) throw Object.assign(new Error('NO_BULK_TAG'), { code: 'NO_BULK_TAG' });
       const set = await q.createQuerySet({ userId: lib.userId, query: { includeTag: shared.bulkTag }, consumer: { id: 'bench-bulk', kind: 'SELECTION' } });
-      while ((await q.stepQuerySet({ userId: lib.userId, setId: set.setId, batch: 240 })).status === 'BUILDING');
+      try { while ((await q.stepQuerySet({ userId: lib.userId, setId: set.setId, batch: 240 })).status === 'BUILDING'); } catch (e) { await q.cancelQuerySet({ userId: lib.userId, setId: set.setId }).catch(() => {}); throw e; } // un paso fallido no deja un BUILDING huerfano
       const page = await q.listBeats({ userId: lib.userId, query: { includeTag: shared.bulkTag, limit: '50' } });
       const ids = page.items.slice(0, 50).map((i) => i.id);
       const sel = await cmd.createSelection({ ...hdr(), setId: set.setId, sort: 'manual', defaultSelected: false, consumerId: 'bench-bulk' });
@@ -289,7 +334,15 @@ async function main(argv) {
   };
 
   const descriptor = args.descriptor ? JSON.parse(fs.readFileSync(args.descriptor, 'utf8')) : undefined;
-  const h = await db.createCatalogTestDb({ descriptor });
+  // --reuse-db <nombre>: reutiliza una DB de LAB ya generada (p. ej. bench1m) en lugar de crear y generar una nueva. Solo 127.0.0.1 y nombres
+  // bench*: nunca una DB externa. No se toca esquema ni datos de generacion; la biblioteca se lee tal como esta (el oraculo final valida).
+  let h;
+  if (args.reuseDb) {
+    if (!/^bench[a-z0-9_]*$/.test(args.reuseDb)) throw Object.assign(new Error('--reuse-db: solo bases bench* del LAB'), { exit: 2 });
+    const u = new URL(process.env.CATALOG_TEST_ADMIN_URL || '');
+    if (u.hostname !== '127.0.0.1') throw Object.assign(new Error('--reuse-db: solo 127.0.0.1'), { exit: 2 });
+    h = { config: { host: u.hostname, port: Number(u.port), user: decodeURIComponent(u.username), database: args.reuseDb }, cleanup: async () => {} };
+  } else h = await db.createCatalogTestDb({ descriptor });
   // Nota: NO se usa db.instrumentPool aquí. Ese helper envuelve pool.connect() para los contadores de T02, pero
   // pg-pool#query() llama a connect() con un callback interno (ver pg-pool/index.js:447) incompatible con el wrapper
   // async/await de instrumentPool, y este script sí usa pool.query() directo (migraciones, generador, EXPLAIN).
@@ -315,8 +368,16 @@ async function main(argv) {
 
   try {
     const genT0 = process.hrtime.bigint();
-    await mig.applyMigrations(pool);
-    const lib = await generateLibrary({ pool, userId: 'bench-u1', n: args.n, seed: args.seed, concurrency: args.genConcurrency, trashFraction: 0.10 });
+    let lib;
+    if (args.reuseDb) {
+      const r = await pool.query("SELECT l.user_id, l.active_generation_id, l.authority_era, l.authority_epoch, (SELECT count(*)::int FROM catalog_beats b WHERE b.user_id = l.user_id AND b.generation_id = l.active_generation_id) AS n, (SELECT count(*)::int FROM catalog_beats b WHERE b.user_id = l.user_id AND b.generation_id = l.active_generation_id AND b.state = 'TRASH') AS t FROM catalog_libraries l WHERE l.user_id = 'bench-u1'");
+      if (!r.rows.length || r.rows[0].n !== args.n) throw new Error('--reuse-db: la biblioteca no tiene exactamente n=' + args.n + ' beats');
+      const m = await pool.query('SELECT max(version) AS last FROM schema_migrations').catch(() => null);
+      lib = { userId: 'bench-u1', generationId: r.rows[0].active_generation_id, era: r.rows[0].authority_era, epoch: r.rows[0].authority_epoch, n: r.rows[0].n, activeCount: r.rows[0].n - r.rows[0].t, trashCount: r.rows[0].t, seed: args.seed, reused: args.reuseDb, lastMigration: m && m.rows[0] ? m.rows[0].last : null };
+    } else {
+      await mig.applyMigrations(pool);
+      lib = await generateLibrary({ pool, userId: 'bench-u1', n: args.n, seed: args.seed, concurrency: args.genConcurrency, trashFraction: 0.10 });
+    }
     const genMs = Number(process.hrtime.bigint() - genT0) / 1e6;
     summary.generation = { ...lib, duration_ms: genMs, rows_per_sec: args.n ? Math.round((args.n / genMs) * 1000) : null };
     if (args.tenants > 0) {
@@ -339,6 +400,7 @@ async function main(argv) {
     const cmd = commandsMod.createCatalogCommands({ pool, authority: auth });
     const ops = { ...operationsMod.createCatalogOperations({ pool, authority: auth, resolveAccess: async () => ({ maxBeats: null }) }), __pool: pool };
     const shared = await prepareShared({ pool, q, cmd, lib, poolSize: args.pools });
+    summary.seed_timeout_retries = shared.seedRetries;
     const profiles = buildProfiles({ q, cmd, ops, lib, clients: args.clients, shared });
     const names = Object.keys(profiles).filter((n) => !args.only || args.only.includes(n));
     summary.profile_class = Object.fromEntries(names.map((n) => [n, PROFILE_CLASS[n] || 'informativo']));
@@ -354,6 +416,7 @@ async function main(argv) {
         lib, clients: Math.min(5, args.clients), shared,
       });
       const samples = [];
+      await refreshPools(pool, lib, shared);
       const coldN = args.smoke ? 2 : 5;
       for (let i = 0; i < coldN; i++) samples.push(await timeIt(coldProfiles[name]));
       summary.cold[name] = stats(samples);
@@ -369,9 +432,10 @@ async function main(argv) {
     // ---------- muestra caliente por perfil ----------
     const perProfileMs = Math.max(1000, Math.floor(args.sampleMs / names.length));
     for (const name of names) {
+      await refreshPools(pool, lib, shared);
       const samples = await runFor(perProfileMs, profiles[name]);
       summary.warm[name] = stats(samples);
-      summary.profiles[name] = { raw: samples.map((s) => ({ ms: Math.round(s.ms * 1000) / 1000, rows: s.rows ?? null, bytes: s.bytes, error: s.error })) };
+      summary.profiles[name] = { raw: samples.map((s) => ({ ms: Math.round(s.ms * 1000) / 1000, rows: s.rows ?? null, bytes: s.bytes, error: s.error, ...(s.detail ? { detail: s.detail } : {}) })) };
     }
     const memAfterSample = process.memoryUsage().rss;
     summary.process_memory = { rss_before_warmup_mb: Math.round(memBefore / 1048576), rss_after_warmup_mb: Math.round(memAfterWarmup / 1048576), rss_after_sample_mb: Math.round(memAfterSample / 1048576) };
