@@ -590,3 +590,9 @@ Límites:
 - Campaña 1M (`final2-1m`): ver T20-CAPACIDAD §5. Incidente de proceso: doble lanzamiento por error; el segundo abortó sin aplicar escrituras.
 - Campaña 500 beats (`n500`): **PASS técnico** (0 errores, oráculo 0 diferencias, 6 054 mutaciones 0 timeouts).
 - Calificación: **T20 PASS técnico para el alcance inicial de 500 beats** (pendiente de dictamen de Sol); 1M = limitación conocida documentada. Ningún gate superado por esta evidencia; no se tocó AWS, producción, Telegram, `main` ni `DESIGN/`.
+
+## E42. Ola 2 — V09 y V10 de navegador sobre `34011df` (2026-11-12, LOCAL/LAB aislado)
+
+- LAB de navegador levantado con `scripts/catalog-lab/lab.cjs up --seed 300` (PG propio 54339, gateway Telegram FAKE, sin `.env` real). PG de rendimiento 54330 detenido durante la ejecución (datos conservados).
+- V09: 17 PASS / 1 FAIL / 2 NO EJECUTADOS; el FAIL (`LEGACY-FLAGOFF`, página en negro) se explica por arranque en frío del Vite LEGACY y pasa en la reejecución del caso. V10: SCROLLBACK PASS; SOAK 20 min con todos los checks de recursos PASS y 2 checks de arnés FAIL (un 401 de sesión inicial y un clic no interactuable) → **sin PASS reclamado**. Detalle: [V09-INFORME §6](V09-INFORME-20261109.md).
+- Ningún gate superado (G3/G5 y G4 pendientes de dictamen de Sol). No se tocó AWS, producción, Telegram real, `main` ni `DESIGN/`.
