@@ -105,9 +105,10 @@ function stats(samples) {
   const rows = samples.map((s) => s.rows).filter((v) => typeof v === 'number');
   const bytes = samples.map((s) => s.bytes).filter((v) => typeof v === 'number');
   const errors = samples.filter((s) => s.error).length;
+  const timeouts = samples.filter((s) => s.error === 'CATALOG_QUERY_TIMEOUT').length;
   const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
   return {
-    count: samples.length, errors,
+    count: samples.length, errors, timeouts,
     p50_ms: percentile(ms, 50), p95_ms: percentile(ms, 95), p99_ms: percentile(ms, 99),
     min_ms: ms.length ? ms[0] : null, max_ms: ms.length ? ms[ms.length - 1] : null,
     mean_rows: mean(rows), max_rows: rows.length ? Math.max(...rows) : null,
@@ -449,7 +450,8 @@ async function main(argv) {
     summary.sql_retained = { pool_total_count: pool.totalCount, pool_idle_count: pool.idleCount, pool_checked_out: poolOpen, pg_stat_activity_idle_in_transaction: activity.rows[0].n, acceptable: poolOpen === 0 && activity.rows[0].n === 0 };
 
     // ---------- SLO de referencia (C12-DECISION-RECORD §7 / NATIVO r2.1 §8.6) ----------
-    const slo = { metadata_p95_ms: 250, metadata_p99_ms: 1000, patch_p95_ms: 250, response_max_bytes: 2 * 1024 * 1024, sql_retained: 0 };
+    const slo = { metadata_p95_ms: 250, metadata_p99_ms: 1000, patch_p95_ms: 250, response_max_bytes: 2 * 1024 * 1024, sql_retained: 0, mutation_timeout_rate_max: 0.0005 };
+    const MUTATION_PROFILES = ['trash_one', 'restore_one'];
     // Perfiles de lectura/escritura obligatorios: p95/p99/bytes; los errores cuentan (un perfil con errores no pasa).
     const metadataProfiles = ['page1', 'filter_frequent_tag', 'filter_rare_tag', 'filter_short_q', 'count_exact', 'legacy_nav_offset0', 'legacy_nav_offset_deep', 'read_one',
       'filter_nomatch_q_short', 'filter_nomatch_q_long', 'trash_one', 'restore_one'];
@@ -457,10 +459,18 @@ async function main(argv) {
     for (const name of metadataProfiles) {
       const w = summary.warm[name];
       if (!w) continue;
-      slo_eval[name] = { p95_ok: w.p95_ms !== null && w.p95_ms <= slo.metadata_p95_ms, p99_ok: w.p99_ms !== null && w.p99_ms <= slo.metadata_p99_ms, bytes_ok: (w.max_bytes ?? 0) <= slo.response_max_bytes, errors_ok: w.errors === 0, p95_ms: w.p95_ms, p99_ms: w.p99_ms, max_bytes: w.max_bytes };
+      // Mutaciones (decisión del propietario 2026-11-12): los CATALOG_QUERY_TIMEOUT no cuentan por perfil sino en la tasa agregada de abajo; cualquier otro error sigue siendo fallo.
+      const errorsOk = MUTATION_PROFILES.includes(name) ? w.errors === w.timeouts : w.errors === 0;
+      slo_eval[name] = { p95_ok: w.p95_ms !== null && w.p95_ms <= slo.metadata_p95_ms, p99_ok: w.p99_ms !== null && w.p99_ms <= slo.metadata_p99_ms, bytes_ok: (w.max_bytes ?? 0) <= slo.response_max_bytes, errors_ok: errorsOk, p95_ms: w.p95_ms, p99_ms: w.p99_ms, max_bytes: w.max_bytes };
     }
     for (const name of ['edit_patch', 'edit_patch_tags']) {
-      if (summary.warm[name]) slo_eval[name] = { p95_ok: summary.warm[name].p95_ms !== null && summary.warm[name].p95_ms <= slo.patch_p95_ms, errors_ok: summary.warm[name].errors === 0, p95_ms: summary.warm[name].p95_ms };
+      if (summary.warm[name]) slo_eval[name] = { p95_ok: summary.warm[name].p95_ms !== null && summary.warm[name].p95_ms <= slo.patch_p95_ms, errors_ok: summary.warm[name].errors === summary.warm[name].timeouts, p95_ms: summary.warm[name].p95_ms };
+    }
+    // Tasa agregada de timeouts de mutación (trash/restore/patch/tags, perfiles warm): máx. 0,05 %. Se informan los recuentos reales.
+    {
+      const mp = [...MUTATION_PROFILES, 'edit_patch', 'edit_patch_tags'].map((n) => summary.warm[n]).filter(Boolean);
+      const ops = mp.reduce((a, w) => a + w.count, 0); const to = mp.reduce((a, w) => a + w.timeouts, 0);
+      slo_eval.mutation_timeouts = { ops, timeouts: to, rate: ops ? to / ops : null, max_rate: slo.mutation_timeout_rate_max, rate_ok: ops > 0 && to / ops <= slo.mutation_timeout_rate_max };
     }
     // Informativos (ver PROFILE_CLASS): se reportan contra la referencia de 250 ms, sin afectar a summary.slo.pass.
     summary.informational = {};
