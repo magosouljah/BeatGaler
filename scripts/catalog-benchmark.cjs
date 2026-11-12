@@ -111,8 +111,8 @@ function stats(samples) {
     count: samples.length, errors, timeouts,
     p50_ms: percentile(ms, 50), p95_ms: percentile(ms, 95), p99_ms: percentile(ms, 99),
     min_ms: ms.length ? ms[0] : null, max_ms: ms.length ? ms[ms.length - 1] : null,
-    mean_rows: mean(rows), max_rows: rows.length ? Math.max(...rows) : null,
-    mean_bytes: mean(bytes), max_bytes: bytes.length ? Math.max(...bytes) : null,
+    mean_rows: mean(rows), max_rows: rows.length ? rows.reduce((a, b) => (b > a ? b : a), -Infinity) : null,
+    mean_bytes: mean(bytes), max_bytes: bytes.length ? bytes.reduce((a, b) => (b > a ? b : a), -Infinity) : null,
   };
 }
 async function timeIt(fn) {
@@ -229,7 +229,10 @@ function buildProfiles({ q, cmd, ops, lib, clients, shared }) {
   async function sampleActiveId() {
     if (!activeIdsCache.ids) {
       const p = await q.listBeats({ userId: lib.userId, query: { limit: '240' } });
-      activeIdsCache.ids = p.items.map((i) => i.id);
+      // Excluye los beats que los perfiles trash/restore mueven a la papelera (sus pools): con bibliotecas pequeñas (n=500) la primera página
+      // los incluye y un PATCH sobre uno en TRASH responde BEAT_NOT_ACTIVE (correcto en el producto, pero es colisión entre perfiles del arnés).
+      const busy = new Set([...shared.activePool, ...shared.trashedPool].map((e) => e.id));
+      activeIdsCache.ids = p.items.map((i) => i.id).filter((id) => !busy.has(id));
     }
     return activeIdsCache.ids[Math.floor(Math.random() * activeIdsCache.ids.length)];
   }
@@ -263,17 +266,33 @@ function buildProfiles({ q, cmd, ops, lib, clients, shared }) {
       } finally { shared.patchPool.push(e); }
     },
     // trash y restore evaluados cada uno por separado (los pools rastrean version; restore_one parte de beats ya en papelera).
+    // Bibliotecas pequeñas (p.ej. n=500): los pools se agotan en milisegundos. En vez de contar POOL_EMPTY como error, la operación opuesta
+    // NO MEDIDA repone un beat (solo se mide la operación del perfil, vía __timed_ms). Con pools grandes (1M) esta rama nunca se ejecuta.
     trash_one: async () => {
+      if (!shared.activePool.length && shared.trashedPool.length) {
+        const b = takeRandom(shared.trashedPool);
+        const r0 = await cmd.restoreBeats({ ...hdr(), idempotencyKey: `bench-refill-${crypto.randomUUID()}`, items: [{ beatId: b.id, expectedVersion: b.version }] });
+        shared.activePool.push({ id: b.id, version: r0.items[0].version });
+      }
       const e = takeRandom(shared.activePool);
+      const t0 = process.hrtime.bigint();
       const t = await cmd.trashBeats({ ...hdr(), idempotencyKey: `bench-trash1-${crypto.randomUUID()}`, items: [{ beatId: e.id, expectedVersion: e.version }] });
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
       shared.trashedPool.push({ id: e.id, version: t.items[0].version });
-      return t;
+      return { ...t, __timed_ms: ms };
     },
     restore_one: async () => {
+      if (!shared.trashedPool.length && shared.activePool.length) {
+        const b = takeRandom(shared.activePool);
+        const t0 = await cmd.trashBeats({ ...hdr(), idempotencyKey: `bench-refill-${crypto.randomUUID()}`, items: [{ beatId: b.id, expectedVersion: b.version }] });
+        shared.trashedPool.push({ id: b.id, version: t0.items[0].version });
+      }
       const e = takeRandom(shared.trashedPool);
+      const s = process.hrtime.bigint();
       const r = await cmd.restoreBeats({ ...hdr(), idempotencyKey: `bench-restore1-${crypto.randomUUID()}`, items: [{ beatId: e.id, expectedVersion: e.version }] });
+      const ms = Number(process.hrtime.bigint() - s) / 1e6;
       shared.activePool.push({ id: e.id, version: r.items[0].version });
-      return r;
+      return { ...r, __timed_ms: ms };
     },
     // Lote de 50 de bulk add/remove de un tag popular. La preparacion (conjunto de consulta, seleccion, operacion) NO se mide;
     // se mide un unico stepOperation (= un lote <=50 en una transaccion, lo que ejecuta el worker).
@@ -403,7 +422,11 @@ async function main(argv) {
     const shared = await prepareShared({ pool, q, cmd, lib, poolSize: args.pools });
     summary.seed_timeout_retries = shared.seedRetries;
     const profiles = buildProfiles({ q, cmd, ops, lib, clients: args.clients, shared });
-    const names = Object.keys(profiles).filter((n) => !args.only || args.only.includes(n));
+    const skipped = {};
+    // bulk_tags_batch necesita una etiqueta con 100-2000 beats ACTIVE; en bibliotecas pequeñas (n=500) no existe: no aplica (informativo), se registra y no se mide.
+    if (!shared.bulkTag) skipped.bulk_tags_batch = 'sin etiqueta con 100-2000 beats ACTIVE (biblioteca pequeña)';
+    summary.skipped_profiles = skipped;
+    const names = Object.keys(profiles).filter((n) => (!args.only || args.only.includes(n)) && !(n in skipped));
     summary.profile_class = Object.fromEntries(names.map((n) => [n, PROFILE_CLASS[n] || 'informativo']));
 
     // ---------- arranque frío: pool nuevo de 1 conexión, primeras N llamadas de cada perfil sin caché/calentamiento ----------
@@ -492,6 +515,7 @@ async function main(argv) {
   }
 
   summary.finished_at = new Date().toISOString();
+  for (const [k, v] of Object.entries(summary)) { try { const n = JSON.stringify(v)?.length ?? 0; if (n > 20e6) console.error(`summary.${k}: ${n} caracteres`); } catch (e) { console.error(`summary.${k}: no serializable (${e.message})`); } }
   fs.writeFileSync(path.join(args.outDir, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
   const lines = [
     `catalog-benchmark n=${args.n} seed=${args.seed} result=${exitCode === 0 ? (summary.slo?.pass ? 'PASS' : 'SLO_FAIL') : 'ERROR'}`,
