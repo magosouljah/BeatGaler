@@ -178,7 +178,7 @@ test('backfill de 0037 sobre datos preexistentes == proyección calculada por el
   const col = await pool.query("SELECT 1 FROM information_schema.columns WHERE table_name = 'catalog_beats' AND column_name = 'search_text'");
   assert.equal(col.rows.length, 0);
   const up = await mig.applyMigrations(pool);
-  assert.deepEqual(up.applied, ['0037', '0038', '0039']);
+  assert.deepEqual(up.applied, ['0037', '0038', '0039', '0040']);
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM catalog_beats WHERE user_id = $1 AND search_text IS NULL', [lib.userId])).rows[0].n, 0, 'todas las filas proyectadas');
   assert.equal(await mismatches(pool, lib), 0, 'backfill == recomputo');
   const withTags = (await pool.query("SELECT count(*)::int AS n FROM catalog_beats WHERE user_id = $1 AND length(search_text) - length(replace(search_text, chr(31), '')) >= 3", [lib.userId])).rows[0].n;

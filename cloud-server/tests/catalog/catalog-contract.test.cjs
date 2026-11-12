@@ -14,20 +14,21 @@ const withCore = (sql) => [...all.filter((m) => m !== core), { ...core, sql }];
 
 test('0026 (T03), 0027 (T05-N) y 0028 (T06) son las migraciones del catálogo y el guard reconoce el contrato', () => {
   // T05-N añade 0027_catalog_native.sql; T06 añade 0028_catalog_queries.sql (colación ICU, proyecciones, índices). 0026/0027 intactas: checksum del runner.
-  assert.equal(all.length, 39);
-  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 39 }, (_, i) => String(i + 1).padStart(4, '0')));
-  assert.equal(all.at(-1).name, '0039_catalog_search_gram_counts.sql');
-  assert.equal(all.at(-2).name, '0038_catalog_search_indexes.sql');
-  assert.equal(all.at(-3).name, '0037_catalog_search_text.sql');
-  assert.equal(all.at(-4).name, '0036_catalog_beat_tags_label_stats.sql');
-  assert.equal(all.at(-5).name, '0035_catalog_restore.sql');
-  assert.equal(all.at(-6).name, '0034_catalog_native_cli.sql');
-  assert.equal(all.at(-7).name, '0033_catalog_purge.sql');
-  assert.equal(all.at(-8).name, '0032_catalog_playback.sql');
-  assert.equal(all.at(-9).name, '0031_catalog_transfer_capabilities.sql');
-  assert.equal(all.at(-10).name, '0030_catalog_transfer_operations.sql');
-  assert.equal(all.at(-11).name, '0029_catalog_commands.sql');
-  assert.equal(all.at(-12).name, '0028_catalog_queries.sql');
+  assert.equal(all.length, 40);
+  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 40 }, (_, i) => String(i + 1).padStart(4, '0')));
+  assert.equal(all.at(-1).name, '0040_catalog_autovacuum.sql');
+  assert.equal(all.at(-2).name, '0039_catalog_search_gram_counts.sql');
+  assert.equal(all.at(-3).name, '0038_catalog_search_indexes.sql');
+  assert.equal(all.at(-4).name, '0037_catalog_search_text.sql');
+  assert.equal(all.at(-5).name, '0036_catalog_beat_tags_label_stats.sql');
+  assert.equal(all.at(-6).name, '0035_catalog_restore.sql');
+  assert.equal(all.at(-7).name, '0034_catalog_native_cli.sql');
+  assert.equal(all.at(-8).name, '0033_catalog_purge.sql');
+  assert.equal(all.at(-9).name, '0032_catalog_playback.sql');
+  assert.equal(all.at(-10).name, '0031_catalog_transfer_capabilities.sql');
+  assert.equal(all.at(-11).name, '0030_catalog_transfer_operations.sql');
+  assert.equal(all.at(-12).name, '0029_catalog_commands.sql');
+  assert.equal(all.at(-13).name, '0028_catalog_queries.sql');
   mig.assertInitialSchemaContract(all);
 });
 

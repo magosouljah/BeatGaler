@@ -10,6 +10,7 @@ const { decompose, compose } = require('./migration');
 const { requireScope } = require('./contract');
 
 const BATCH = 250;
+const ANALYZE_AFTER_LOAD_MIN = 5000; // T20-N: umbral de carga a partir del cual se ejecuta ANALYZE al terminar
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const err = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
 
@@ -106,6 +107,9 @@ async function importToStaging({ pool, scope, rawBytes, ctx = {}, batchSize = BA
   }
   // 3) proyecciones derivadas (tag groups / facets), reconstruidas de forma idempotente
   await tx(pool, (c) => rebuildDerivedProjections(c, s));
+  // T20-N: estadísticas del planner tras una carga masiva. Medido (100k fresco): sin ANALYZE de catalog_beat_tag_groups la primera mutación pasaba de
+  // ~100 ms a >1,4 s hasta que el autovacuum analizaba. Fuera de la transacción de carga; solo si la carga es grande (el ANALYZE es de tabla completa).
+  if (rows.beats.length >= ANALYZE_AFTER_LOAD_MIN) await pool.query('ANALYZE catalog_beats, catalog_beat_tags, catalog_beat_tag_groups, catalog_facets, catalog_trash_entries');
   return { snapshotHash, beats: rows.beats.length, batches, resumedFrom: done.rows.length, flags: rows.flags };
 }
 

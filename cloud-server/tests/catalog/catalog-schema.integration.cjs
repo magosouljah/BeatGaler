@@ -50,10 +50,10 @@ async function seedUsers(pool) {
 // T05-N: 0027_catalog_native.sql se aplica junto con 0026; las guardas de 0027 no actúan sin activación ni origin nativo,
 // así que estas pruebas (bibliotecas LEGACY, LEGACY→POSTGRES y DELETE de LEGACY) conservan su resultado.
 const MIGRATIONS = mig.listMigrations().length;
-test('fresh: todas las migraciones (0001–0039), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
+test('fresh: todas las migraciones (0001–0040), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
   const first = await mig.applyMigrations(pool);
-  assert.equal(MIGRATIONS, 39);
-  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0039');
+  assert.equal(MIGRATIONS, 40);
+  assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0040');
   const again = await mig.applyMigrations(pool);
   assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, MIGRATIONS);
   const tables = await pool.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'catalog\\_%'");
@@ -83,7 +83,7 @@ test('upgrade 0001-0025 → 0026 conserva datos legacy y no importa nada', () =>
   await pool.query("INSERT INTO library_beats(user_id, beat_id, state) VALUES ('u1','b1','ACTIVE'), ('u1','b2','TRASH'), ('u2','b1','ACTIVE')");
   const before = await legacyDigest(pool);
   const up = await mig.applyMigrations(pool, all);
-  assert.deepEqual(up.applied, ['0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039']); // T20-N 0039 (contadores de gramas), 0038 (trgm/grams), 0037 (search_text), 0036 (estadísticas label); T19-N 0035 (restore); T17 0034 (auditoría rebind); T06 añade 0028 (colación ICU, proyecciones, índices); T07 añade 0029 (operaciones/eventos/selección); T09 0030; T12 0031 (capacidades)
+  assert.deepEqual(up.applied, ['0026', '0027', '0028', '0029', '0030', '0031', '0032', '0033', '0034', '0035', '0036', '0037', '0038', '0039', '0040']); // T20-N 0039 (contadores de gramas), 0038 (trgm/grams), 0037 (search_text), 0036 (estadísticas label); T19-N 0035 (restore); T17 0034 (auditoría rebind); T06 añade 0028 (colación ICU, proyecciones, índices); T07 añade 0029 (operaciones/eventos/selección); T09 0030; T12 0031 (capacidades)
   assert.deepEqual(await legacyDigest(pool), before);
   const cat = await pool.query('SELECT (SELECT count(*) FROM catalog_libraries)::int + (SELECT count(*) FROM catalog_generations)::int + (SELECT count(*) FROM catalog_beats)::int AS n');
   assert.equal(cat.rows[0].n, 0, 'la migración no crea bibliotecas ni importa');
@@ -239,4 +239,17 @@ test('repositorio sobre PostgreSQL: rollback y release medidos', () => withDb(as
   const s = ip.stats();
   assert.equal(s.open, 0); assert.equal(s.acquired, 5);
   assert.deepEqual([s.begin, s.commit, s.rollback], [5, 4, 1]);
+}));
+
+// T20-N 0040: parámetros de autovacuum por tabla (aditivo; sin cambios de columnas/índices).
+test('0040: autovacuum/analyze al 2 % en las tablas grandes y 5 % en facetas/papelera', (t) => withDb(async (pool) => {
+  await mig.applyMigrations(pool);
+  const r = await pool.query("SELECT relname, reloptions FROM pg_class WHERE relname = ANY($1) ORDER BY relname", [['catalog_beats', 'catalog_beat_tags', 'catalog_beat_tag_groups', 'catalog_facets', 'catalog_trash_entries']]);
+  const by = Object.fromEntries(r.rows.map((x) => [x.relname, x.reloptions || []]));
+  for (const big of ['catalog_beats', 'catalog_beat_tags', 'catalog_beat_tag_groups']) {
+    assert.ok(by[big].includes('autovacuum_vacuum_scale_factor=0.02'), big);
+    assert.ok(by[big].includes('autovacuum_analyze_scale_factor=0.02'), big);
+    assert.ok(by[big].includes('autovacuum_vacuum_insert_scale_factor=0.02'), big);
+  }
+  for (const small of ['catalog_facets', 'catalog_trash_entries']) assert.ok(by[small].includes('autovacuum_vacuum_scale_factor=0.05'), small);
 }));
