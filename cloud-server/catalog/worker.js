@@ -93,8 +93,14 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
       const matches = Array.isArray(found) ? found : [];
       if (matches.length > 1) throw new WorkerJobError('RECONCILE_AMBIGUOUS', 'multiple provider matches for the same random_id', { transient: false });
       if (matches.length === 0) { metrics.reconcileUncertain++; throw new WorkerJobError('RECONCILE_UNCERTAIN', 'no provider evidence yet; dispatch stays uncertain (no resend)', { transient: true, retryAfterMs: 60_000 }); }
-      const h = await libraryHeaders(job.userId);
       const m = matches[0];
+      // T11/E5 (opción A, 2026-11-13): la búsqueda por marcador no es exhaustiva, así que una sola coincidencia no prueba unicidad.
+      // Sin prueba explícita (transport.proveUniqueMatch === true: archivo correcto Y único) se bloquea para revisión; nunca se adopta, reenvía ni borra.
+      const proven = typeof transport.proveUniqueMatch === 'function'
+        ? (await remote(job.userId, () => transport.proveUniqueMatch({ chatId: part.chat_id, senderId: part.sender_id, declaredSize: Number(part.declared_size), operationId: job.operationId, partKey, match: m }))) === true
+        : false;
+      if (!proven) { metrics.reconcileReview = (metrics.reconcileReview || 0) + 1; throw new WorkerJobError('RECONCILE_REVIEW_REQUIRED', 'a recovered file is not proven correct and unique; reconciliation blocked for review (no adopt, resend or delete)', { transient: false }); }
+      const h = await libraryHeaders(job.userId);
       if (part.dispatch_state !== 'RECEIPT') await operations.putReceipt({ ...h, operationId: job.operationId, partKey, receipt: { messageId: m.messageId, documentId: m.documentId ?? null, size: m.size, chatId: part.chat_id } });
       const r = await operations.recordVerification({ userId: job.userId, operationId: job.operationId, partKey, evidence: { size: m.size, sha256: m.sha256 ?? null, provider: 'telegram', messageId: m.messageId, reconciled: true }, lease: { jobId: job.jobId, owner, generation: job.lease.generation } });
       if (r.ready) await operations.enqueueJob({ userId: job.userId, kind: 'TRANSFER_COMMIT', operationId: job.operationId, payload: { reason: 'RECONCILED' }, jobId: `job-commit-${job.operationId}` }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });

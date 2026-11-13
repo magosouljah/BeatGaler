@@ -79,7 +79,7 @@ test('reconciliación: 0 coincidencias → incierto (retry 60 s, sin reenvío), 
   f.setPart('top-1', 'a', { part_key: 'a', random_id: '10', sender_id: 'B', chat_id: '-1', declared_size: '10', dispatch_state: 'DISPATCHED', receipt_json: null });
   f.setPart('top-2', 'b', { part_key: 'b', random_id: '11', sender_id: 'B', chat_id: '-1', declared_size: '10', dispatch_state: 'DISPATCHED', receipt_json: null });
   f.setPart('top-3', 'c', { part_key: 'c', random_id: '12', sender_id: 'B', chat_id: '-1', declared_size: '10', dispatch_state: 'DISPATCHED', receipt_json: null });
-  const transport = { async searchByRandomId({ randomId }) { return randomId === '10' ? [] : randomId === '11' ? [{ messageId: 77, size: 10, sha256: null }] : [{ messageId: 1, size: 10 }, { messageId: 2, size: 10 }]; }, async verifyMessage() { throw new Error('never'); } };
+  const transport = { async searchByRandomId({ randomId }) { return randomId === '10' ? [] : randomId === '11' ? [{ messageId: 77, size: 10, sha256: null }] : [{ messageId: 1, size: 10 }, { messageId: 2, size: 10 }]; }, async proveUniqueMatch() { return true; }, async verifyMessage() { throw new Error('never'); } };
   const w = createCatalogWorker({ pool: f.pool, operations: f.ops, transport, owner: 'w1', options: { globalConcurrency: 3 } });
   const r = await w.runOnce();
   const by = Object.fromEntries(r.map((x) => [x.jobId, x]));
@@ -89,6 +89,23 @@ test('reconciliación: 0 coincidencias → incierto (retry 60 s, sin reenvío), 
   assert.ok(f.jobs.some((j) => j.kind === 'TRANSFER_COMMIT' && j.operationId === 'top-2'));
   assert.equal(w.metrics.reconcileUncertain, 1);
   assert.equal(f.log.filter((l) => l[0] === 'receipt' && l[1] === 'c').length, 0, 'ambiguo: no se elige ni se borra');
+  // E5 opción A: sin prueba de unicidad (gateway real de búsqueda) una sola coincidencia NO se adopta: bloqueo para revisión, sin recibo/commit/borrado.
+  const h = fakeOps({ jobs: [job('n0', 'TRANSFER_RECONCILE', { partKey: 'a' }), job('n1', 'TRANSFER_RECONCILE', { partKey: 'b' }, { userId: 'u2', operationId: 'top-2' })] });
+  h.setPart('top-1', 'a', { part_key: 'a', random_id: '11', sender_id: 'B', chat_id: '-1', declared_size: '10', dispatch_state: 'DISPATCHED', receipt_json: null });
+  h.setPart('top-2', 'b', { part_key: 'b', random_id: '11', sender_id: 'B', chat_id: '-1', declared_size: '10', dispatch_state: 'DISPATCHED', receipt_json: null });
+  const noProof = { async searchByRandomId() { return [{ messageId: 77, size: 10 }]; }, async deleteMessage() { throw new Error('never delete'); } };
+  const noProofDenied = { async searchByRandomId() { return [{ messageId: 77, size: 10 }]; }, async proveUniqueMatch() { return false; } };
+  const wn = createCatalogWorker({ pool: h.pool, operations: h.ops, transport: noProof, owner: 'w1', options: { globalConcurrency: 2 } });
+  const rn = await wn.runOnce();
+  assert.deepEqual(rn.map((x) => x.outcome), ['blocked', 'blocked']);
+  assert.equal(h.log.filter((l) => l[0] === 'receipt').length, 0, 'dudoso: no se vincula');
+  assert.equal(h.jobs.filter((j) => j.kind === 'TRANSFER_COMMIT').length, 0);
+  assert.equal(wn.metrics.reconcileReview, 2);
+  const h2 = fakeOps({ jobs: [job('n2', 'TRANSFER_RECONCILE', { partKey: 'a' })] });
+  h2.setPart('top-1', 'a', { part_key: 'a', random_id: '11', sender_id: 'B', chat_id: '-1', declared_size: '10', dispatch_state: 'DISPATCHED', receipt_json: null });
+  const rd = await createCatalogWorker({ pool: h2.pool, operations: h2.ops, transport: noProofDenied, owner: 'w1' }).runOnce();
+  assert.equal(rd[0].outcome, 'blocked');
+  assert.equal(h2.log.filter((l) => l[0] === 'receipt').length, 0);
   // concurrencia por biblioteca: dos efectos remotos del mismo usuario a la vez → el segundo se reprograma
   const g = fakeOps({ jobs: [job('x', 'TRANSFER_RECONCILE', { partKey: 'a' }), job('y', 'TRANSFER_RECONCILE', { partKey: 'b' })] });
   g.setPart('top-1', 'a', { part_key: 'a', random_id: '1', sender_id: 'B', chat_id: '-1', declared_size: '10', dispatch_state: 'DISPATCHED' });

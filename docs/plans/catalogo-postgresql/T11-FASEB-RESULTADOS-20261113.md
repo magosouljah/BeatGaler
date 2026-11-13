@@ -19,3 +19,9 @@
 
 ## Para el dictamen G2
 Falta: E7 (efecto de rotar sobre sesiones abiertas y auth keys, requiere confirmar que producción no usa Bot20), E3, decisión sobre la limitación de búsqueda de E5 y la política ante E8. Siguiente paso más rápido: el propietario confirma el aislamiento de Bot20 y autoriza E7; en paralelo Sol decide la regla de reconciliación no exhaustiva.
+
+## Decisión del propietario sobre E5 — OPCIÓN A (2026-11-13), implementada
+- `TRANSFER_RECONCILE` (`cloud-server/catalog/worker.js`) ya **no adopta** una coincidencia única por búsqueda: exige `transport.proveUniqueMatch(...) === true` (archivo correcto **y único**). Sin esa prueba → job `blocked` con `RECONCILE_REVIEW_REQUIRED` (no transitorio): no se crea recibo, no se encola commit, no se reenvía ni se borra. `>1` sigue siendo `RECONCILE_AMBIGUOUS`; `0` sigue siendo incierto (reintento acotado).
+- El gateway real **no** ofrece `proveUniqueMatch` (no hay buscador exhaustivo), por lo que hoy toda reconciliación por búsqueda queda bloqueada para revisión manual. El envío normal con recibo y verificación no cambia.
+- **Limitación conocida / mejora posterior al lanzamiento:** prueba de unicidad (p. ej. sondeo exhaustivo de ids) para reanudar automáticamente la reconciliación. E3, E7 y G2 siguen pendientes.
+- Pruebas: `catalog-worker.test.cjs` (bloqueo sin prueba y con prueba negativa: 0 recibos/commits/borrados; adopción solo con prueba positiva). Integración PostgreSQL: el fake de transporte modela la prueba positiva; la ejecuta el CI.

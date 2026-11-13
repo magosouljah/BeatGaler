@@ -80,6 +80,7 @@ function fakeGateway({ verifyDelayMs = 0, messages = new Map() } = {}) {
     calls, messages,
     hold() { gate = new Promise((r) => { open = r; }); }, release() { open?.(); gate = null; },
     async verifyMessage({ messageId, declaredSize }) { calls.verify++; calls.inflight++; calls.maxInflight = Math.max(calls.maxInflight, calls.inflight); try { if (gate) await gate; if (verifyDelayMs) await new Promise((r) => setTimeout(r, verifyDelayMs)); const m = messages.get(messageId); if (!m) throw Object.assign(new Error('not found'), { code: 'FAKE_NOT_FOUND', status: 404 }); return { size: m.size ?? declaredSize, sha256: m.sha256 ?? null }; } finally { calls.inflight--; } },
+    async proveUniqueMatch() { return true; }, // modela un transporte con prueba de archivo correcto y único (E5 opción A; el gateway de búsqueda real no la tiene)
     async searchByRandomId({ randomId }) { calls.search++; return [...messages.values()].filter((m) => m.randomId === randomId).map((m) => ({ messageId: m.messageId, size: m.size, sha256: m.sha256 ?? null })); },
   };
 }
