@@ -101,7 +101,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
         : false;
       if (!proven) { metrics.reconcileReview = (metrics.reconcileReview || 0) + 1; throw new WorkerJobError('RECONCILE_REVIEW_REQUIRED', 'a recovered file is not proven correct and unique; reconciliation blocked for review (no adopt, resend or delete)', { transient: false }); }
       const h = await libraryHeaders(job.userId);
-      if (part.dispatch_state !== 'RECEIPT') await operations.putReceipt({ ...h, operationId: job.operationId, partKey, receipt: { messageId: m.messageId, documentId: m.documentId ?? null, size: m.size, chatId: part.chat_id } });
+      if (part.dispatch_state !== 'RECEIPT') await operations.putReceipt({ ...h, operationId: job.operationId, partKey, receipt: { messageId: m.messageId, documentId: m.documentId ?? null, size: m.size, chatId: part.chat_id }, lease: { jobId: job.jobId, owner, generation: job.lease.generation } });
       const r = await operations.recordVerification({ userId: job.userId, operationId: job.operationId, partKey, evidence: { size: m.size, sha256: m.sha256 ?? null, provider: 'telegram', messageId: m.messageId, reconciled: true }, lease: { jobId: job.jobId, owner, generation: job.lease.generation } });
       if (r.ready) await operations.enqueueJob({ userId: job.userId, kind: 'TRANSFER_COMMIT', operationId: job.operationId, payload: { reason: 'RECONCILED' }, jobId: `job-commit-${job.operationId}` }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
       return { reconciled: true, ready: r.ready };

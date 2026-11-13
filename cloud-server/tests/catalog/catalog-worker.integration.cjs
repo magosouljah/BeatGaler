@@ -275,3 +275,71 @@ test('conjuntos y bulk reanudan tras "reinicio" del worker sin recalcular miembr
   assert.deepEqual([health.blocked, health.backlog, health.running], [0, 1, 0], 'PURGE sin módulo de purge montado (T15 lo inyecta): reintento transitorio visible en el backlog, nunca BLOCKED silencioso ni éxito ficticio');
   assert.equal((await jobsOf(pool, lib.userId)).find((j) => j.job_id === 'job-purge').state, 'QUEUED', 'sin purge inyectado el job espera (transitorio); con el módulo T15 lo procesa catalog-purge.integration');
 }));
+
+// Fencing atómico de leases (T10, hallazgos GPT-6): un worker con lease viejo/reasignado no puede fallar, completar ni persistir recibos.
+async function reconcileFixture(pool) {
+  const lib = await nativeLibrary(pool); const { ops, q, cmd } = modules(pool, null);
+  const hdr = { userId: lib.userId, era: lib.era, epoch: lib.epoch };
+  const op = await ops.createOperation({ ...hdr, idempotencyKey: key(), intent: { kind: 'IMPORT', parts: [master()], metadata: { name: 'fence' } } });
+  const d = await ops.markDispatched({ ...hdr, operationId: op.operationId, partKey: 'm0' });
+  await ops.cancelOperation({ ...hdr, operationId: op.operationId }); // → RECONCILE + job TRANSFER_RECONCILE
+  const job = (await jobsOf(pool, lib.userId)).find((j) => j.kind === 'TRANSFER_RECONCILE');
+  return { lib, ops, q, cmd, hdr, op, d, job };
+}
+const partState = async (pool, uid, opId) => (await pool.query("SELECT dispatch_state, receipt_hash FROM catalog_operation_parts WHERE user_id = $1 AND operation_id = $2 AND part_key = 'm0'", [uid, opId])).rows[0];
+const jobRow = async (pool, jobId) => (await pool.query('SELECT state, lease_owner, lease_generation::text AS g FROM catalog_jobs WHERE job_id = $1', [jobId])).rows[0];
+const reassign = async (ops, pool, jobId, owner) => { await pool.query("UPDATE catalog_jobs SET lease_until = now() - interval '1 second' WHERE job_id = $1", [jobId]); const c = await ops.claimJobs({ owner, limit: 10, kinds: ['TRANSFER_RECONCILE'] }); return c.find((x) => x.jobId === jobId); };
+const RECEIPT = { messageId: 33, documentId: '5', size: 1000 };
+
+test('fencing: failJob/completeJob/putReceipt con lease viejo tras reasignación → LEASE_FENCED sin efecto; el lease vigente funciona', () => withDb(async (pool) => {
+  const { lib, ops, hdr, op, job } = await reconcileFixture(pool);
+  const a = (await ops.claimJobs({ owner: 'wA', limit: 10, kinds: ['TRANSFER_RECONCILE'] })).find((x) => x.jobId === job.job_id);
+  const b = await reassign(ops, pool, job.job_id, 'wB');
+  assert.ok(a && b && BigInt(b.lease.generation) > BigInt(a.lease.generation), 'lease reasignado con generación mayor');
+  const fenced = (e) => e.code === 'LEASE_FENCED';
+  await assert.rejects(ops.failJob({ jobId: job.job_id, lease: a.lease, error: 'stale', transient: false }), fenced);
+  await assert.rejects(ops.completeJob({ jobId: job.job_id, lease: a.lease }), fenced);
+  await assert.rejects(ops.putReceipt({ ...hdr, operationId: op.operationId, partKey: 'm0', receipt: { ...RECEIPT, chatId: undefined }, lease: { jobId: job.job_id, owner: a.lease.owner, generation: a.lease.generation } }), fenced);
+  assert.deepEqual(await jobRow(pool, job.job_id), { state: 'LEASED', lease_owner: 'wB', g: b.lease.generation }, 'el job reasignado no se tocó');
+  assert.deepEqual(await partState(pool, lib.userId, op.operationId), { dispatch_state: 'DISPATCHED', receipt_hash: null }, 'sin recibo del worker viejo');
+  await ops.putReceipt({ ...hdr, operationId: op.operationId, partKey: 'm0', receipt: { ...RECEIPT }, lease: { jobId: job.job_id, owner: 'wB', generation: b.lease.generation } });
+  assert.equal((await partState(pool, lib.userId, op.operationId)).dispatch_state, 'RECEIPT', 'el lease vigente sí persiste el recibo');
+}));
+
+test('fencing concurrente: failJob(viejo) vs completeJob(vigente) y failJob(vigente) vs completeJob(vigente) → exactamente un ganador, estado coherente', () => withDb(async (pool) => {
+  const f1 = await reconcileFixture(pool);
+  const a = (await f1.ops.claimJobs({ owner: 'wA', limit: 10, kinds: ['TRANSFER_RECONCILE'] })).find((x) => x.jobId === f1.job.job_id);
+  const b = await reassign(f1.ops, pool, f1.job.job_id, 'wB');
+  const r1 = await Promise.allSettled([f1.ops.failJob({ jobId: f1.job.job_id, lease: a.lease, error: 'stale', transient: true }), f1.ops.completeJob({ jobId: f1.job.job_id, lease: b.lease })]);
+  assert.deepEqual(r1.map((x) => x.status), ['rejected', 'fulfilled']);
+  assert.equal(r1[0].reason.code, 'LEASE_FENCED');
+  assert.equal((await jobRow(pool, f1.job.job_id)).state, 'DONE', 'el worker viejo no pudo revivir ni bloquear el job reasignado');
+  const f2 = await reconcileFixture(pool);
+  const c = (await f2.ops.claimJobs({ owner: 'wC', limit: 10, kinds: ['TRANSFER_RECONCILE'] })).find((x) => x.jobId === f2.job.job_id);
+  const [x, y] = await Promise.allSettled([f2.ops.failJob({ jobId: f2.job.job_id, lease: c.lease, error: 'e', transient: true }), f2.ops.completeJob({ jobId: f2.job.job_id, lease: c.lease })]);
+  assert.equal([x, y].filter((r) => r.status === 'fulfilled').length, 1, 'un solo resultado terminal por lease');
+
+  const st = (await jobRow(pool, f2.job.job_id)).state;
+  assert.ok(['DONE', 'QUEUED'].includes(st) && (await jobRow(pool, f2.job.job_id)).lease_owner === null, `estado coherente sin lease residual: ${st}`);
+}));
+
+test('TRANSFER_RECONCILE: si el lease se pierde durante el efecto remoto, putReceipt no persiste (fenced) y no hay recibo ni commit; opción A intacta', () => withDb(async (pool) => {
+  const { lib, ops, q, cmd, op, d, job } = await reconcileFixture(pool);
+  let stolen = false;
+  const transport = {
+    async searchByRandomId() { if (!stolen) { stolen = true; await pool.query("UPDATE catalog_jobs SET lease_owner = 'thief', lease_generation = lease_generation + 1, lease_until = now() + interval '60 seconds' WHERE job_id = $1", [job.job_id]); } return [{ messageId: 44, size: 1000, documentId: '9' }]; },
+    async proveUniqueMatch() { return true; },
+  };
+  const w = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport, owner: 'w1' });
+  const r = await w.runOnce();
+  assert.equal(r.find((x) => x.jobId === job.job_id).outcome, 'fenced');
+  assert.deepEqual(await partState(pool, lib.userId, op.operationId), { dispatch_state: 'DISPATCHED', receipt_hash: null }, 'recibo no persistido por el worker desplazado');
+  assert.equal((await jobsOf(pool, lib.userId)).filter((j) => j.kind === 'TRANSFER_COMMIT').length, 0);
+  assert.equal((await jobRow(pool, job.job_id)).lease_owner, 'thief');
+  // opción A: con el lease propio pero sin prueba de unicidad → bloqueo sin recibo
+  const g = await reconcileFixture(pool);
+  const w2 = createCatalogWorker({ pool, operations: g.ops, queries: g.q, commands: g.cmd, transport: { async searchByRandomId() { return [{ messageId: 45, size: 1000 }]; } }, owner: 'w2' });
+  const r2 = await w2.runOnce();
+  assert.equal(r2.find((x) => x.jobId === g.job.job_id).outcome, 'blocked');
+  assert.equal((await partState(pool, g.lib.userId, g.op.operationId)).dispatch_state, 'DISPATCHED');
+}));

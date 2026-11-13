@@ -277,7 +277,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   }
 
   // ---------- PUT /operations/:id/parts/:partKey/receipt (recibo candidato, no prueba) ----------
-  async function putReceipt({ userId, era, epoch, operationId, partKey, receipt } = {}) {
+  async function putReceipt({ userId, era, epoch, operationId, partKey, receipt, lease } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId) || typeof partKey !== 'string') throw inputInvalid('OPERATION_OR_PART');
     if (!receipt || typeof receipt !== 'object') throw inputInvalid('RECEIPT');
     const messageId = receipt.messageId; const size = receipt.size;
@@ -291,6 +291,11 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     const canonical = canonicalJson({ messageId, documentId, size, senderId: receipt.senderId == null ? null : String(receipt.senderId), chatId: receipt.chatId == null ? null : String(receipt.chatId), bytesSha256 });
     const hash = sha256Hex(canonical);
     return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+      // Fencing atómico (T10): un worker con lease perdido/reasignado no persiste recibos; la fila del job queda bloqueada hasta el COMMIT.
+      if (lease) {
+        const j = (await client.query('SELECT state, lease_owner, lease_generation::text AS g FROM catalog_jobs WHERE job_id = $1 FOR UPDATE', [lease.jobId])).rows[0];
+        if (!j || j.state !== 'LEASED' || j.lease_owner !== lease.owner || j.g !== String(lease.generation)) throw new CatalogQueryError('LEASE_FENCED', 409, 'stale worker lease: receipt not persisted', { job_id: lease.jobId });
+      }
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       const p = (await client.query('SELECT dispatch_state, receipt_hash, declared_size::text AS declared_size, sender_id, chat_id FROM catalog_operation_parts WHERE user_id = $1 AND operation_id = $2 AND part_key = $3 FOR UPDATE', [uid, operationId, partKey])).rows[0];
@@ -596,15 +601,21 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     return Math.max(withJitter, retryAfterMs);
   }
   async function failJob({ jobId, lease, error, transient = true, retryAfterMs = 0 } = {}) {
+    // Fencing atómico: lectura y actualización en una transacción con el job bloqueado (FOR UPDATE) y el lease repetido en el WHERE del UPDATE.
+    let client = null;
     try {
-      const j = (await pool.query('SELECT attempts FROM catalog_jobs WHERE job_id = $1 AND state = \'LEASED\' AND lease_owner = $2 AND lease_generation = $3::bigint', [jobId, lease.owner, lease.generation])).rows[0];
+      client = await pool.connect();
+      await client.query('BEGIN');
+      const j = (await client.query('SELECT attempts FROM catalog_jobs WHERE job_id = $1 AND state = \'LEASED\' AND lease_owner = $2 AND lease_generation = $3::bigint FOR UPDATE', [jobId, lease.owner, lease.generation])).rows[0];
       if (!j) throw new CatalogQueryError('LEASE_FENCED', 409, 'stale worker: failure ignored', { job_id: jobId });
       const blocked = !transient || j.attempts >= JOB_TRANSIENT_FAILURES_TO_BLOCK;
       const delay = backoffMs(j.attempts, retryAfterMs);
-      const r = await pool.query(`UPDATE catalog_jobs SET state = $2, lease_owner = NULL, lease_until = NULL, last_error = $3, next_attempt_at = now() + make_interval(secs => $4) WHERE job_id = $1 RETURNING state, next_attempt_at`,
-        [jobId, blocked ? 'BLOCKED' : 'QUEUED', String(error ?? '').slice(0, 1000), delay / 1000]);
+      const r = await client.query(`UPDATE catalog_jobs SET state = $2, lease_owner = NULL, lease_until = NULL, last_error = $3, next_attempt_at = now() + make_interval(secs => $4) WHERE job_id = $1 AND state = 'LEASED' AND lease_owner = $5 AND lease_generation = $6::bigint RETURNING state, next_attempt_at`,
+        [jobId, blocked ? 'BLOCKED' : 'QUEUED', String(error ?? '').slice(0, 1000), delay / 1000, lease.owner, lease.generation]);
+      if (!r.rows.length) throw new CatalogQueryError('LEASE_FENCED', 409, 'stale worker: failure ignored', { job_id: jobId });
+      await client.query('COMMIT');
       return { jobId, state: r.rows[0].state, nextAttemptAt: r.rows[0].next_attempt_at, delayMs: delay };
-    } catch (error) { throw sqlError(error); }
+    } catch (error) { if (client) await client.query('ROLLBACK').catch(() => {}); throw sqlError(error); } finally { client?.release(); }
   }
 
   return Object.freeze({
