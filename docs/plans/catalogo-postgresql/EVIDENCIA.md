@@ -602,3 +602,12 @@ Límites:
 - `all-local`: 149 casos unit/faults PASS (0 fallados/skipped); suites con DB bloqueadas localmente por la allowlist (exit 3), cubiertas solo por CI. `tsc --noEmit` PASS, `build:web` PASS (requiere unidad `E:` en mayúscula), `git diff --check` PASS.
 - Hallazgos de V10 (401 de sesión inicial; clic no interactuable) registrados como **abiertos, sin causa investigada**; soak no repetido por decisión del propietario.
 - Paquete: [T21A-PAQUETE-20261112.md](T21A-PAQUETE-20261112.md). Sin aprobaciones declaradas; ningún gate superado.
+
+## E44. T11 fase B — ejecución real en sandbox, E3 y mitigación E5 (2026-11-13, sandbox Telegram aislado)
+
+- Bot20 + chat `testborrar` (preflight de identidad/miembros OK; limpieza solo-ledger; ids históricos 12–15 intactos). E2/E4/E6 PASS, E3 PASS (`FLOOD_WAIT_4`, sin efecto, reintento misma identidad = 1 copia), E5 limitación (búsqueda no exhaustiva) **mitigada** por opción A del propietario (`73c3055`, CI PASS), E8 riesgo confirmado, E7 NO ejecutado. Bot20↔producción NO CONFIRMADO (no investigado por decisión del propietario). Detalle: [T11-FASEB-RESULTADOS-20261113.md](T11-FASEB-RESULTADOS-20261113.md); resumen para el dictamen: [T11-DICTAMEN-E5-E8-20261113.md](T11-DICTAMEN-E5-E8-20261113.md).
+- **T11 NO PASS; G2 NOT_PROVEN.** Commits `d609926`, `6143230`, `73c3055`, `c075780`, `3ef448a`.
+
+## E45. T10 — fencing atómico de leases (2026-11-13, LOCAL + CI)
+
+- `failJob` (transacción con `FOR UPDATE` y lease en el WHERE) y `putReceipt` con lease validado en la transacción de mutación; `TRANSFER_RECONCILE` lo pasa. Pruebas PostgreSQL aislado 7/7 (reasignación, carreras fail/complete, lease robado en pleno efecto). Commit `1bc10a3`, CI `43496625720` PASS (intento 2; el 1 falló solo en T06 `CATALOG_QUERY_TIMEOUT`, ajeno).

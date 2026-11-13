@@ -85,7 +85,7 @@ try {
         if (r < 0.75) { actions.scroll++; await ex((dir) => { const el = document.querySelector('[data-library-scroll="true"]'); el.scrollTop = Math.max(0, Math.min(el.scrollHeight, el.scrollTop + dir * el.clientHeight * (0.3 + Math.random() * 0.8))); }, Math.random() < 0.55 ? 1 : -1); }
         else { actions.jump++; await ex(() => { const el = document.querySelector('[data-library-scroll="true"]'); el.scrollTop = Math.random() * (el.scrollHeight - el.clientHeight); }); }
         if (Date.now() - lastSearch > 60000) { actions.search++; lastSearch = Date.now(); await typeSearch('V09 Beat 0'); await sleep(1500); await typeSearch(''); }
-        if (Date.now() - lastTag > 90000) { actions.tag++; lastTag = Date.now(); await openTagBar(); await (await browser.$('[data-label="drill"]')).click(); await sleep(1500); await openTagBar(); await (await browser.$('[data-label="All"]')).click(); await sleep(1200); }
+        if (Date.now() - lastTag > 90000) { actions.tag++; lastTag = Date.now(); await openTagBar(); const dr = await browser.$('[data-label="drill"]'); await dr.waitForDisplayed({ timeout: 5000 }); await dr.click(); await sleep(1500); await openTagBar(); const al = await browser.$('[data-label="All"]'); await al.waitForDisplayed({ timeout: 5000 }); await al.click(); await sleep(1200); }
       } catch (e) { actionErrors++; if (actionErrors < 6) console.log('soak action error:', e.message.slice(0, 120)); }
       await sleep(180 + Math.random() * 220);
       if (Date.now() >= nextSample) {
