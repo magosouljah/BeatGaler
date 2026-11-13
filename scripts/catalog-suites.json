@@ -801,6 +801,17 @@
           "network": "deny"
         },
         {
+          "id": "t11-transport-sandbox-offline",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-sandbox.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
           "id": "t11-transport-contract",
           "cmd": [
             "node",
