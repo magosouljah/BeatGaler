@@ -122,7 +122,7 @@ async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], r
   // E2 — envío aceptado con respuesta perdida (descartada en la frontera del cliente DESPUÉS del efecto real) → reconciliación.
   for (const [who, gwFor, client] of [['bot', gwBot, botA.client], ['master', () => gwMaster, deps.master.client]]) {
     const lossy = deps.dropResponses(client);
-    const gw = who === 'bot' ? gwFor(lossy) : gateway.createTelegramGateway({ client: lossy, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(client, c), resolveSenderPeer: (s) => deps.master.senderPeer(s) });
+    const gw = who === 'bot' ? gateway.createTelegramGateway({ client: lossy, sdk, senderId: botId, botId: d.bot.id, resolvePeer: (c) => deps.resolvePeer(client, c) }) : gateway.createTelegramGateway({ client: lossy, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(client, c), resolveSenderPeer: (s) => deps.master.senderPeer(s) });
     const f = file(`e2-${who}.wav`, 3000, `e2-${who}`);
     const rid = gateway.newRandomId();
     const s = await attempt(() => gw.sendPart({ operationId: op(`e2${who}`), partKey: 'm0', randomId: rid, chatId, file: f, mimeType: 'audio/wav', fileName: f.name }));
@@ -145,9 +145,13 @@ async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], r
     const s1200 = await gwMaster.searchByRandomId({ chatId, senderId: botId, declaredSize: 1200, operationId: op('e5'), partKey: 'm0' });
     const s1000 = await gwMaster.searchByRandomId({ chatId, senderId: botId, declaredSize: 1000, operationId: op('e5'), partKey: 'm0' });
     await send(gw, 'bot', 'e5', 'm0', file('beat.wav', 1200, 'e5c'));
-    const amb = await gwMaster.searchByRandomId({ chatId, senderId: botId, declaredSize: 1200, operationId: op('e5'), partKey: 'm0' });
+    const truthE5 = (await groundTruth('e5', 'm0')).length; // esperado 3 (1000, 1200, 1200)
+    const searchAnySize = (await gwMaster.searchByRandomId({ chatId, senderId: botId, operationId: op('e5'), partKey: 'm0' })).length;
+    let amb = await gwMaster.searchByRandomId({ chatId, senderId: botId, declaredSize: 1200, operationId: op('e5'), partKey: 'm0' });
+    let ambRetryMs = 0; // búsqueda eventual: se reintenta para medir el retraso de indexación
+    while (searchAnySize < truthE5 && ambRetryMs < 30000) { await new Promise((r) => setTimeout(r, 3000)); ambRetryMs += 3000; amb = await gwMaster.searchByRandomId({ chatId, senderId: botId, declaredSize: 1200, operationId: op('e5'), partKey: 'm0' }); }
     const other = await gwMaster.searchByRandomId({ chatId, senderId: botId, declaredSize: 1200, operationId: op('e5'), partKey: 'm1' });
-    report.experiments.E5 = { bySize1200: s1200.map((x) => x.messageId === b.messageId), bySize1000: s1000.map((x) => x.messageId === a.messageId), sameSize: gateway.reconcileDecision(amb), otherPart: gateway.reconcileDecision(other), distinctDocuments: a.documentId !== b.documentId,
+    report.experiments.E5 = { bySize1200: s1200.map((x) => x.messageId === b.messageId), bySize1000: s1000.map((x) => x.messageId === a.messageId), sameSize: gateway.reconcileDecision(amb), groundTruthCopies: truthE5, searchAnySize, searchRetryMs: ambRetryMs, otherPart: gateway.reconcileDecision(other), distinctDocuments: a.documentId !== b.documentId,
       pass: s1200.length === 1 && s1200[0].messageId === b.messageId && s1000.length === 1 && s1000[0].messageId === a.messageId && gateway.reconcileDecision(amb) === 'AMBIGUOUS' && gateway.reconcileDecision(other) === 'UNCERTAIN' && a.documentId !== b.documentId };
   }
 

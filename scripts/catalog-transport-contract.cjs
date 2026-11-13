@@ -181,7 +181,7 @@ const EXPERIMENTS = [
       const sCh = gateway.buildSearch(sdk, { peer: channelPeer(sdk), caption, limit: 500 });
       const gCh = gateway.buildGetMessages(sdk, { peer: channelPeer(sdk), messageId: 7, channel: true });
       const gUs = gateway.buildGetMessages(sdk, { peer: userPeer(sdk), messageId: 7, channel: false });
-      const ok = ch.className === 'messages.SendMedia' && us.className === 'messages.SendMedia' && ch.media.forceFile === true && ch.media.attributes[0].fileName === 'p.zip' && sCh.className === 'messages.Search' && sCh.limit === 100 && sCh.filter.className === 'InputMessagesFilterDocument' && gCh.className === 'channels.GetMessages' && gUs.className === 'messages.GetMessages' && ch.getBytes().length > 0 && sCh.getBytes().length > 0 && gCh.getBytes().length > 0 && gUs.getBytes().length > 0;
+      const ok = ch.className === 'messages.SendMedia' && us.className === 'messages.SendMedia' && ch.media.forceFile === true && ch.media.attributes[0].fileName === 'p.zip' && sCh.className === 'messages.Search' && sCh.limit === 100 && sCh.filter.className === 'InputMessagesFilterEmpty' && gCh.className === 'channels.GetMessages' && gUs.className === 'messages.GetMessages' && ch.getBytes().length > 0 && sCh.getBytes().length > 0 && gCh.getBytes().length > 0 && gUs.getBytes().length > 0;
       return { outcome: ok ? 'PASS_FAKE' : 'FAIL', details: { send: ch.className, search: sCh.className, getChannel: gCh.className, getUser: gUs.className } };
     },
   },

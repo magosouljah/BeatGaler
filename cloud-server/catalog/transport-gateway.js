@@ -83,7 +83,7 @@ function buildSearch(sdk, { peer, fromId, caption, limit = 20, minDate = 0, maxD
   if (!peer) throw new GatewayError('SEARCH_INPUT_INVALID', 'peer is required', { transient: false });
   if (!parseCaption(caption)) throw new GatewayError('CAPTION_INVALID', 'caption must be the catalog:v1 marker', { transient: false });
   const lim = Math.min(Math.max(1, Number(limit) | 0), 100);
-  return new Api.messages.Search({ peer, q: caption, fromId: fromId || undefined, filter: new Api.InputMessagesFilterDocument(), minDate: Number(minDate) | 0, maxDate: Number(maxDate) | 0, offsetId: 0, addOffset: 0, limit: lim, maxId: 0, minId: 0, hash: bigInt(0) });
+  return new Api.messages.Search({ peer, q: caption, fromId: fromId || undefined, filter: new Api.InputMessagesFilterEmpty(), minDate: Number(minDate) | 0, maxDate: Number(maxDate) | 0, offsetId: 0, addOffset: 0, limit: lim, maxId: 0, minId: 0, hash: bigInt(0) });
 }
 function buildGetMessages(sdk, { peer, messageId, channel = false } = {}) {
   const { Api } = sdk;

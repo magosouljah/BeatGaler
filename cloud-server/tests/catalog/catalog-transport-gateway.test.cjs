@@ -44,7 +44,7 @@ test('peticiones TL del SDK instalado: SendMedia con randomId explícito y force
   assert.deepEqual([send.media.forceFile, send.media.mimeType, send.media.attributes[0].fileName, send.message, send.silent], [true, 'audio/wav', 'a.wav', caption, true]);
   assert.ok(send.getBytes().length > 40);
   const search = g.buildSearch(sdk, { peer: channel(), caption, limit: 1000 });
-  assert.deepEqual([search.className, search.q, search.filter.className, search.limit, search.hash.toString()], ['messages.Search', caption, 'InputMessagesFilterDocument', 100, '0']);
+  assert.deepEqual([search.className, search.q, search.filter.className, search.limit, search.hash.toString()], ['messages.Search', caption, 'InputMessagesFilterEmpty', 100, '0']);
   assert.ok(search.getBytes().length > 0);
   assert.equal(g.buildGetMessages(sdk, { peer: channel(), messageId: 7, channel: true }).className, 'channels.GetMessages');
   assert.equal(g.buildGetMessages(sdk, { messageId: 7 }).className, 'messages.GetMessages');
