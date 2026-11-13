@@ -611,3 +611,9 @@ Límites:
 ## E45. T10 — fencing atómico de leases (2026-11-13, LOCAL + CI)
 
 - `failJob` (transacción con `FOR UPDATE` y lease en el WHERE) y `putReceipt` con lease validado en la transacción de mutación; `TRANSFER_RECONCILE` lo pasa. Pruebas PostgreSQL aislado 7/7 (reasignación, carreras fail/complete, lease robado en pleno efecto). Commit `1bc10a3`, CI `43496625720` PASS (intento 2; el 1 falló solo en T06 `CATALOG_QUERY_TIMEOUT`, ajeno).
+
+## E46. Decisiones del propietario (2026-11-13)
+
+1. **Navegadores:** no se usa el navegador del propietario para automatización; Edge, lector de pantalla, zoom 200 %, táctil y `prefers-reduced-motion` reales los prueba **el propietario a mano** con [V09-PRUEBA-MANUAL-20261113.md](V09-PRUEBA-MANUAL-20261113.md); sus resultados se registrarán como evidencia manual para el dictamen de T16/G3.
+2. **T20:** alcance **solo 500 beats**; 1M queda como limitación conocida (sin implementar la desnormalización de tags). STOP-PERF para 500 beats cerrado a efectos de lanzamiento; dictamen formal de Sol pendiente.
+3. **E7:** **no se rota ni revoca** el token de Bot20. E7 queda NO EJECUTADO; el dictamen de G2 debe decidir si la política (rotación al revocar + gateway sin `bot_token` en cliente) basta como mitigación de E8. G2 sigue NOT_PROVEN.
