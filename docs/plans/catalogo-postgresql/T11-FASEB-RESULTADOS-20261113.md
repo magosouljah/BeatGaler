@@ -25,3 +25,9 @@ Falta: E7 (efecto de rotar sobre sesiones abiertas y auth keys, requiere confirm
 - El gateway real **no** ofrece `proveUniqueMatch` (no hay buscador exhaustivo), por lo que hoy toda reconciliación por búsqueda queda bloqueada para revisión manual. El envío normal con recibo y verificación no cambia.
 - **Limitación conocida / mejora posterior al lanzamiento:** prueba de unicidad (p. ej. sondeo exhaustivo de ids) para reanudar automáticamente la reconciliación. E3, E7 y G2 siguen pendientes.
 - Pruebas: `catalog-worker.test.cjs` (bloqueo sin prueba y con prueba negativa: 0 recibos/commits/borrados; adopción solo con prueba positiva). Integración PostgreSQL: el fake de transporte modela la prueba positiva; la ejecuta el CI.
+
+## Fencing de leases (hallazgos GPT-6) — `1bc10a3`, CI `43496625720` (intento 2 PASS)
+- `operations.failJob`: lectura y actualización en una sola transacción (`SELECT … FOR UPDATE` con el lease en el WHERE y UPDATE protegido por el mismo lease); un worker viejo recibe `LEASE_FENCED` sin tocar el job reasignado.
+- `operations.putReceipt` acepta `lease` y lo valida dentro de la transacción de mutación (job bloqueado `FOR UPDATE`, antes del operation/part), conservando era/epoch; `TRANSFER_RECONCILE` lo pasa. La opción A de E5 no cambia.
+- Pruebas PostgreSQL aislado (`catalog-worker.integration.cjs`, 7/7): reasignación (fail/complete/putReceipt con lease viejo → fenced sin efecto), carreras fail-vs-complete, y lease robado durante el efecto remoto → `fenced`, sin recibo ni commit.
+- CI: intento 1 falló solo en T06 `catalog-queries-integration` (`CATALOG_QUERY_TIMEOUT` en paridad SQL/oráculo; una prueba tardó ~520 s en el runner), sin cambios en consultas; intento 2 PASS completo (T06 y T10 incluidos).
