@@ -77,7 +77,7 @@ function modules(pool, { maxBeats = null, server, master = null, access = { maxB
   const cmd = commands.createCatalogCommands({ pool, authority: a });
   const gateway = gwOverride ? gwOverride(gatewayOn(server)) : gatewayOn(server);
   const transport = createCatalogTransport({ pool, authority: a, operations: opsOverride ? opsOverride(ops) : ops, gateway, master, resolveProjectAccess: async () => access, tempDir: TMP, capabilityTtlMs: ttlMs });
-  const worker = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport: gateway, owner: 'w', options: { globalConcurrency: 2, renewEveryMs: 100_000 } });
+  const worker = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport: { ...gateway, async proveUniqueMatch() { return true; } /* el servidor falso es exhaustivo; la búsqueda real no (E5 opción A) */ }, owner: 'w', options: { globalConcurrency: 2, renewEveryMs: 100_000 } });
   return { a, ops, q, cmd, gateway, transport, worker };
 }
 async function nativeLibrary(pool) {
