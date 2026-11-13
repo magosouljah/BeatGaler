@@ -82,7 +82,7 @@ const errInfo = (e) => (e ? { code: e.code || null, kind: e.classification ? e.c
 async function attempt(fn) { try { return { ok: true, value: await fn() }; } catch (e) { return { ok: false, error: errInfo(e) || { rpc: gateway.classifyError(e).code, kind: gateway.classifyError(e).kind } }; } }
 
 // ---------- Experimentos ----------
-async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], rotation = 'botfather', cleanup = true } = {}) {
+async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], rotation = 'botfather', cleanup = true, only = null, e3 = {} } = {}) {
   const runId = deps.runId || `${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
   const op = (name) => `t11b-${runId}-${name}`;
   const ledger = createLedger(outDir ? path.join(outDir, 'ledger.jsonl') : null);
@@ -105,6 +105,54 @@ async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], r
   // Verdad de terreno: historial completo leído por MASTER (creador), filtrado por marcador.
   const groundTruth = async (opName, partKey) => (await deps.master.history(chatId, 100)).filter((m) => m.caption === gateway.captionFor({ operationId: op(opName), partKey }));
   const recordTruth = (rows) => { for (const m of rows) if (!ledger.ids(chatId).includes(m.messageId)) ledger.add({ chatId, messageId: m.messageId, sender: m.senderId === botId ? 'bot' : m.senderId === masterId ? 'master' : 'other', op: 'groundtruth', caption: m.caption }); };
+
+  // Limpieza: SOLO mensajes del ledger, borrados por MASTER (creador) y comprobados por ausencia.
+  const doCleanup = async () => {
+    if (!cleanup) return;
+    const ids = [...new Set(ledger.ids(chatId))];
+    const res = { requested: ids.length, deleted: 0, absentVerified: 0, refused: [] };
+    const current = await deps.master.getMessages(chatId, ids);
+    const mine = new RegExp(`^catalog:v1 op=t11b-${runId}-[A-Za-z0-9_-]+ part=`);
+    const deletable = current.filter((m) => m && m.caption && mine.test(m.caption)).map((m) => m.messageId);
+    res.refused = ids.filter((id) => !deletable.includes(id) && current.some((m) => m && m.messageId === id && m.present));
+    if (deletable.length) { await deps.master.deleteMessages(chatId, deletable); res.deleted = deletable.length; }
+    for (const id of ids) { const p = await attempt(() => gwMaster.probeAbsence({ chatId, messageId: id })); if (p.ok && p.value.absent) res.absentVerified++; }
+    report.cleanup = res;
+  };
+
+  // E3 — FLOOD_WAIT real (solo con only='E3'): ráfaga acotada hasta el primer rechazo; sin reintentos durante la espera; reintento con la MISMA identidad tras la espera.
+  if (only === 'E3') {
+    const maxSends = e3.maxSends || 60; const maxWaitMs = e3.maxWaitMs || 120000;
+    const client = botA.client; client.floodSleepThreshold = 0; // gramjs no duerme en silencio: el rechazo llega al gateway
+    const gw = gwBot(client); const t0 = Date.now(); let accepted = 0; let flood = null;
+    try {
+      while (accepted < maxSends) {
+        const partKey = `p${accepted}`; const rid = gateway.newRandomId(); const f = file(`e3-${accepted}.wav`, 600, `e3:${accepted}`);
+        try { await send(gw, 'bot', 'e3', partKey, f, rid); accepted++; }
+        catch (e) { const c = e && e.classification || {}; flood = { atSend: accepted, partKey, rid, code: e.code, rpc: c.code || null, kind: c.kind || null, action: c.action || null, retryAfterMs: e.retryAfterMs ?? c.retryAfterMs ?? null, effectPossible: c.effectPossible ?? null, f }; break; }
+      }
+    } finally { client.floodSleepThreshold = 60; }
+    const burstMs = Date.now() - t0;
+    const out = { maxSends, accepted, burstMs, triggered: Boolean(flood) };
+    if (flood) {
+      const truthBefore = (await groundTruth('e3', flood.partKey)).length; // 0 = el rechazo no dejó mensaje (sin efecto)
+      Object.assign(out, { rejection: { atSend: flood.atSend, code: flood.code, rpc: flood.rpc, kind: flood.kind, action: flood.action, retryAfterMs: flood.retryAfterMs, effectPossible: flood.effectPossible }, phantomCopiesAfterReject: truthBefore });
+      if (flood.retryAfterMs != null && flood.retryAfterMs <= maxWaitMs) {
+        await (deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms))))(flood.retryAfterMs + 1500);
+        const r2 = await attempt(() => gw.sendPart({ operationId: op('e3'), partKey: flood.partKey, randomId: flood.rid, chatId, file: flood.f, mimeType: 'audio/wav', fileName: flood.f.name }));
+        if (r2.ok) ledger.add({ chatId, messageId: r2.value.messageId, sender: 'bot', op: op('e3'), partKey: flood.partKey, randomId: flood.rid, size: r2.value.size });
+        const truthAfter = await groundTruth('e3', flood.partKey); recordTruth(truthAfter);
+        out.resendSameIdentity = r2.ok ? { ok: true, copies: truthAfter.length } : r2.error;
+        out.pass = flood.kind === 'REJECTED' && flood.action === 'RETRY_SAME_IDENTITY_AFTER_WAIT' && flood.retryAfterMs >= 1000 && truthBefore === 0 && r2.ok && truthAfter.length === 1;
+      } else { out.waitSkipped = `retryAfterMs ${flood.retryAfterMs} > límite ${maxWaitMs}`; out.pass = false; }
+    } else out.pass = false;
+    out.verdict = out.pass ? 'PASS' : (flood ? 'FAIL' : 'NOT_TRIGGERED');
+    report.experiments.E3 = out;
+    await botA.client.disconnect?.().catch(() => {});
+    await doCleanup();
+    report.ledgerCount = ledger.entries.length; report.finishedAt = new Date().toISOString();
+    return report;
+  }
 
   // E6 — recibo vs verificación del proveedor.
   {
@@ -219,18 +267,7 @@ async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], r
   await botA.client.disconnect?.().catch(() => {});
   await botL.client.disconnect?.().catch(() => {});
 
-  // Limpieza: SOLO mensajes del ledger, borrados por MASTER (creador) y comprobados por ausencia.
-  if (cleanup) {
-    const ids = [...new Set(ledger.ids(chatId))];
-    const res = { requested: ids.length, deleted: 0, absentVerified: 0, refused: [] };
-    const current = await deps.master.getMessages(chatId, ids);
-    const mine = new RegExp(`^catalog:v1 op=t11b-${runId}-[A-Za-z0-9_-]+ part=`);
-    const deletable = current.filter((m) => m && m.caption && mine.test(m.caption)).map((m) => m.messageId);
-    res.refused = ids.filter((id) => !deletable.includes(id) && current.some((m) => m && m.messageId === id && m.present));
-    if (deletable.length) { await deps.master.deleteMessages(chatId, deletable); res.deleted = deletable.length; }
-    for (const id of ids) { const p = await attempt(() => gwMaster.probeAbsence({ chatId, messageId: id })); if (p.ok && p.value.absent) res.absentVerified++; }
-    report.cleanup = res;
-  }
+  await doCleanup();
   report.ledgerCount = ledger.entries.length;
   report.finishedAt = new Date().toISOString();
   return report;
@@ -254,6 +291,7 @@ function parseArgs(argv) {
     else if (a === '--rotation') { out.rotation = argv[++i]; if (!['botfather', 'skip'].includes(out.rotation)) throw new SandboxStop('STOP-ENV', 'rotation ∈ botfather|skip', 2); }
     else if (a === '--dedup-delays') out.delays = String(argv[++i]).split(',').map((x) => Number(x) * 1000).filter((x) => Number.isFinite(x) && x >= 0);
     else if (a === '--no-cleanup') out.cleanup = false;
+    else if (a === '--only') { out.only = String(argv[++i] || '').toUpperCase(); if (out.only !== 'E3') throw new SandboxStop('STOP-ENV', '--only admite solo E3', 2); }
     else throw new SandboxStop('STOP-ENV', `argumento desconocido: ${a}`, 2);
   }
   return out;
@@ -268,7 +306,7 @@ async function main() {
   const { createRealDeps } = require('./catalog-transport-sandbox-real.cjs');
   const deps = await createRealDeps(d, { outDir, runId });
   let report;
-  try { report = await runSandbox(d, deps, { outDir, dedupDelaysMs: args.delays, rotation: args.rotation, cleanup: args.cleanup }); }
+  try { report = await runSandbox(d, deps, { outDir, dedupDelaysMs: args.delays, rotation: args.rotation, cleanup: args.cleanup, only: args.only || null }); }
   catch (e) { report = { scope: 'T11-SANDBOX', runId, aborted: e.code || 'ERROR', message: String(e.message || e).replace(TOKEN_RE, '<redacted>') }; }
   finally { await deps.close().catch(() => {}); }
   const p = writeReport(report, outDir, deps.secrets());

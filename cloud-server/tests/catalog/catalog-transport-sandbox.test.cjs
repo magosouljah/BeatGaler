@@ -128,3 +128,21 @@ test('CLI: argumentos', () => {
   assert.throws(() => runner.parseArgs(['--rotation', 'manager']), (e) => e.code === 'STOP-ENV');
   assert.throws(() => runner.parseArgs(['--boom']), (e) => e.code === 'STOP-ENV');
 });
+
+test('E3 (solo): ráfaga acotada hasta FLOOD_WAIT → rechazo sin efecto, espera, reintento con la misma identidad = 1 copia; limpieza solo del ledger', async () => {
+  const { deps, server } = fakeDeps({});
+  const open = deps.openBot;
+  let sends = 0;
+  deps.openBot = async (...a) => { const r = await open(...a); const inv = r.client.invoke.bind(r.client); r.client.invoke = async (req) => { if (req.className === 'messages.SendMedia' && ++sends === 4) throw rpcError('FLOOD_WAIT_2', 420, { seconds: 2 }); return inv(req); }; return r; };
+  const before = server.messages().length;
+  const r = await runner.runSandbox(descriptor(), deps, { only: 'E3', e3: { maxSends: 10 } });
+  const e3 = r.experiments.E3;
+  assert.equal(e3.verdict, 'PASS', JSON.stringify(e3));
+  assert.deepEqual([e3.accepted, e3.rejection.kind, e3.rejection.action, e3.rejection.retryAfterMs, e3.phantomCopiesAfterReject, e3.resendSameIdentity.copies], [3, 'REJECTED', 'RETRY_SAME_IDENTITY_AFTER_WAIT', 2000, 0, 1]);
+  assert.equal(Object.keys(r.experiments).join(), 'E3', 'solo E3');
+  assert.equal(r.cleanup.requested, 4); assert.equal(server.messages().length, before);
+  // sin FLOOD en el límite → NOT_TRIGGERED (no es PASS)
+  const f2 = fakeDeps({});
+  const r2 = await runner.runSandbox(descriptor(), f2.deps, { only: 'E3', e3: { maxSends: 3 } });
+  assert.equal(r2.experiments.E3.verdict, 'NOT_TRIGGERED');
+});
