@@ -37,6 +37,10 @@ try {
   await login(POSTGRES, cfg.account);
   await waitFor(async () => (await galleryState()).cards > 0, { timeout: 90000, msg: 'catalog cards' });
   await installMonitor();
+  // Logs previos al soak (arranque + login): un 401 de /auth/session aquí es esperado cuando el perfil Chrome persistente conserva el marcador
+  // de sesión de un LAB anterior (la BD efímera se recreó → sesión inválida → pantalla de login). No cuenta como error del soak.
+  const preSoakSevere = await severeLogs();
+  rec('V10-PRELOGIN-LOGS', 'RECORDED', { severe: preSoakSevere, expectedStale401: preSoakSevere.filter((m) => /auth\/session.*401/.test(m)).length });
   const g0 = await galleryState(); await shot('v10-00-start');
   rec('V10-ENV', 'RECORDED', { beats: N, durationMin, sampleSec, gcForced: !noGc, nodes: g0.domNodes, cards: g0.cards, columns: g0.columns, hw: await ex(() => ({ cores: navigator.hardwareConcurrency, mem: navigator.deviceMemory ?? null, perfMemory: Boolean(performance.memory) })) });
 
