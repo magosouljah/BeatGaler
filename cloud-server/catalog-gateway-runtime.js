@@ -23,7 +23,7 @@ function assertGatewayAllowed(env = process.env) {
   return true;
 }
 
-function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs = 30_000, now = () => Date.now() } = {}) {
+function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs = 5_000, now = () => Date.now() } = {}) {
   if (!pool || typeof pool.query !== 'function') throw new Error('gateway runtime requires a PostgreSQL pool');
   if (!clientProvider || typeof clientProvider.open !== 'function') throw new Error('gateway runtime requires clientProvider.open(botId)');
   if (!sdk || !sdk.Api || typeof sdk.bigInt !== 'function') throw new Error('gateway runtime requires sdk { Api, bigInt }');
@@ -33,11 +33,12 @@ function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs
   const warn = (event, fields) => { if (log && typeof log.warn === 'function') log.warn('catalog-gateway-runtime', { event, ...fields }); };
 
   // chat → bot de transporte asignado (SQL es la única autoridad). Nunca se elige un bot "por intuición" si la fila falta.
-  async function botForChat(chatId) {
+  async function botForChat(chatId, { fresh = false } = {}) {
     const key = String(chatId == null ? '' : chatId);
     if (!/^-?[0-9]{1,20}$/.test(key)) throw new GatewayError('CHAT_INVALID', 'chatId must be a numeric Telegram chat id', { transient: false });
     const hit = chatCache.get(key);
-    if (hit && hit.until > now()) return hit.botId;
+    if (!fresh && hit && hit.until > now()) return hit.botId;
+    chatCache.delete(key); // cualquier rechazo o cambio posterior deja la caché sin asignación vigente
     const r = (await pool.query('SELECT v.transport_bot_id AS bot_id, b.quarantined, b.rotation_pending FROM vaults v LEFT JOIN transport_bots b ON b.id = v.transport_bot_id WHERE v.telegram_chat_id = $1', [key])).rows[0];
     if (!r || !r.bot_id) { metrics.unresolvedChat++; throw new GatewayError('CHAT_BOT_UNRESOLVED', 'no transport bot is assigned to this chat', { transient: false, status: 404 }); }
     if (r.quarantined) { metrics.rejectedBot++; throw new GatewayError('BOT_QUARANTINED', 'the assigned transport bot is quarantined', { transient: false, status: 403 }); }
@@ -71,16 +72,18 @@ function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs
     p.then(({ client }) => { if (client && typeof client.disconnect === 'function') return client.disconnect(); return null; }).catch(() => {});
   }
 
-  async function routeFor(chatId) {
-    const botId = await botForChat(chatId);
+  async function routeFor(chatId, fresh) {
+    const botId = await botForChat(chatId, { fresh });
     let p = bots.get(botId);
     if (!p) { p = openBot(botId); bots.set(botId, p); p.catch(() => { if (bots.get(botId) === p) bots.delete(botId); }); }
     metrics.routed++;
     return { botId, ...(await p) };
   }
 
-  const call = (method) => async (args = {}) => {
-    const { botId, gateway } = await routeFor(args.chatId);
+  // Operaciones con efecto externo (envío, borrado): asignación y banderas SIEMPRE frescas de SQL (una consulta por la clave única del chat);
+  // las lecturas toleran la caché corta (TTL). Un envío ya en vuelo no se puede revocar: el cerco real es el control de credenciales (G2).
+  const call = (method, { fresh = false } = {}) => async (args = {}) => {
+    const { botId, gateway } = await routeFor(args.chatId, fresh);
     try { return await gateway[method](args); } catch (error) {
       if (error && error.code === 'CREDENTIAL_REVOKED') { chatCache.clear(); dropBot(botId, 'CREDENTIAL_REVOKED'); }
       throw error;
@@ -88,8 +91,8 @@ function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs
   };
 
   const gateway = Object.freeze({
-    sendPart: call('sendPart'), verifyMessage: call('verifyMessage'), searchByRandomId: call('searchByRandomId'),
-    downloadPart: call('downloadPart'), deleteMessage: call('deleteMessage'), probeAbsence: call('probeAbsence'),
+    sendPart: call('sendPart', { fresh: true }), verifyMessage: call('verifyMessage'), searchByRandomId: call('searchByRandomId'),
+    downloadPart: call('downloadPart'), deleteMessage: call('deleteMessage', { fresh: true }), probeAbsence: call('probeAbsence'),
     metrics, runtime: Object.freeze({ botsOpen: () => bots.size }),
   });
   async function close() {

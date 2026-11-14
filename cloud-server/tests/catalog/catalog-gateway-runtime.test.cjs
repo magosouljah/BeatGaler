@@ -58,7 +58,9 @@ test('cliente perezoso y enrutado por chat: cada biblioteca usa la sesión de SU
   assert.deepEqual(server.messages().map((m) => m.sender), ['20', '21', '20']);
   const v = await gateway.verifyMessage({ chatId: '-1002', messageId: r2.messageId, senderId: 'Bot21' });
   assert.equal(v.size, 100);
-  assert.equal(pool.calls.filter((c) => c === '-1001').length, 1, 'caché de chat→bot con TTL: una consulta SQL por chat');
+  assert.equal(pool.calls.filter((c) => c === '-1001').length, 2, 'cada envío revalida en SQL (2 envíos); lecturas usarían la caché');
+  await gateway.verifyMessage({ chatId: '-1002', messageId: r2.messageId, senderId: 'Bot21' });
+  assert.equal(pool.calls.filter((c) => c === '-1002').length, 1, 'las lecturas tras el envío del mismo chat sale de la caché corta');
 });
 
 test('fail-closed antes de abrir sesión: chat sin bot, bot en cuarentena, rotación pendiente y chat inválido', async () => {
@@ -126,4 +128,35 @@ test('Access de PROJECT: plan con upload_project y tope de bytes; si no, 403 PRO
   for (const access of [null, { capabilities: {}, quotas: { max_project_zip_bytes: 1000 } }, { capabilities: { upload_project: true }, quotas: { max_project_zip_bytes: 0 } }, { capabilities: { upload_project: true }, quotas: {} }]) {
     await assert.rejects(rt.createProjectAccessResolver({ resolveUserAccess: async () => access })('u'), (e) => e.code === 'PROJECT_UPLOAD_DENIED' && e.status === 403);
   }
+});
+
+test('transiciones tras calentar la caché: cuarentena, rotación y reasignación bloquean envío/borrado de inmediato; lecturas caducan por TTL', async () => {
+  const server = createFakeTelegramServer(); const prov = provider(server); let t = 1000;
+  const map = { '-1001': vault('Bot20') };
+  const { gateway } = rt.createGatewayRuntime({ pool: fakePool(map), clientProvider: prov, sdk, chatTtlMs: 5000, now: () => t });
+  const r = await send(gateway, '-1001'); assert.equal(r.senderId, '20');
+  await gateway.verifyMessage({ chatId: '-1001', messageId: r.messageId, senderId: 'Bot20' }); // caché caliente
+  const effects = async () => { await assert.rejects(send(gateway, '-1001', 'opX')); await assert.rejects(gateway.deleteMessage({ chatId: '-1001', messageId: r.messageId })); };
+  // cuarentena
+  map['-1001'] = vault('Bot20', { quarantined: true });
+  await assert.rejects(send(gateway, '-1001', 'opQ'), (e) => e.code === 'BOT_QUARANTINED');
+  await assert.rejects(gateway.deleteMessage({ chatId: '-1001', messageId: r.messageId }), (e) => e.code === 'BOT_QUARANTINED');
+  await assert.rejects(gateway.verifyMessage({ chatId: '-1001', messageId: r.messageId, senderId: 'Bot20' }), (e) => e.code === 'BOT_QUARANTINED', 'un rechazo de efecto vacía la caché: la lectura siguiente revalida y también se rechaza');
+  // lecturas: dentro del TTL toleran la caché (límite documentado); pasado el TTL revalidan
+  map['-1001'] = vault('Bot20'); await gateway.verifyMessage({ chatId: '-1001', messageId: r.messageId, senderId: 'Bot20' });
+  map['-1001'] = vault('Bot20', { quarantined: true });
+  await gateway.verifyMessage({ chatId: '-1001', messageId: r.messageId, senderId: 'Bot20' });
+  t += 5001;
+  await assert.rejects(gateway.verifyMessage({ chatId: '-1001', messageId: r.messageId, senderId: 'Bot20' }), (e) => e.code === 'BOT_QUARANTINED', 'pasado el TTL la lectura también se rechaza');
+  assert.equal(server.messages().length, 1, 'ningún efecto tras la cuarentena');
+  // rotación pendiente
+  map['-1001'] = vault('Bot20'); assert.equal((await send(gateway, '-1001', 'opOk')).senderId, '20');
+  map['-1001'] = vault('Bot20', { rotation_pending: true });
+  await assert.rejects(send(gateway, '-1001', 'opR'), (e) => e.code === 'BOT_ROTATION_PENDING');
+  await assert.rejects(gateway.deleteMessage({ chatId: '-1001', messageId: r.messageId }), (e) => e.code === 'BOT_ROTATION_PENDING');
+  // reasignación a otro bot: el siguiente envío sale por el NUEVO bot, nunca por la sesión cacheada del anterior
+  map['-1001'] = vault('Bot21');
+  const moved = await send(gateway, '-1001', 'opM'); assert.equal(moved.senderId, '21');
+  assert.deepEqual(server.messages().map((m) => m.sender), ['20', '20', '21']);
+  void effects;
 });
