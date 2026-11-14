@@ -2,6 +2,8 @@
 
 **Decisiones del propietario (2026-11-13, [E46](EVIDENCIA.md)):** pruebas de navegador reales (Edge, lector de pantalla, zoom/táctil/reduced-motion) **manuales por el propietario** ([V09-PRUEBA-MANUAL](V09-PRUEBA-MANUAL-20261113.md)); T20 **solo 500 beats** (1M = limitación conocida); **E7 no se ejecuta** (sin rotación de Bot20). Pendiente: resultados manuales, dictamen de Sol (G2/G3/T20/T21-A).
 
+**G3/G4/T21-A (2026-11-14, [E49](EVIDENCIA.md)):** 401 de V10 explicado (sesión caducada por perfil de Chrome persistente tras recrear el LAB; el arnés ahora lo registra aparte); G4 parcial: restore a 500 beats con medios falsos y verificación de bytes PASS en CI (`43634557289`, `68c40fe`); `pg_dump` real y destino de backups NO ejecutados. Paquete T21-A actualizado. **G2 NOT_PROVEN; G3 y G4 sin dictamen; sin GO.**
+
 **Gateway fail-closed reforzado (2026-11-14, [E48](EVIDENCIA.md)):** envío/borrado revalidan SQL en cada llamada (cuarentena, rotación, reasignación); lecturas caché 5 s. CI `43578622103` PASS sobre `c3dc732`. G2 sigue NOT_PROVEN.
 
 **Gateway real conectado (2026-11-14, LOCAL + CI, FAKE, [E47](EVIDENCIA.md)):** enrutador por chat→bot con sesiones perezosas montado en `server.js` y en `catalog-worker.js` detrás de `BEATGALER_CATALOG_GATEWAY_ENABLED` (apagado por defecto; en producción además `BEATGALER_CATALOG_G2_APPROVED=true`, `STOP-GATE`). CI `43574591160` PASS sobre `4ecbaa3`; LAB aislado intacto. **G2/T11 siguen NOT_PROVEN**; no hay activación ni uso de credenciales reales. Pendiente: dictamen de Sol (G2, G3, T20 a 500 beats, T21-A) y resultados manuales V09 del propietario.
