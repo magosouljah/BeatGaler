@@ -404,3 +404,32 @@ test('IMPORT con partKeys del cliente real (MASTER:0, FILES:0:0, ARTWORK:0): rec
   const fv = (await pool.query('SELECT role, status FROM catalog_file_versions WHERE user_id = $1 AND beat_id = $2 ORDER BY role', [lib.userId, op.beatId])).rows;
   assert.deepEqual(fv, [{ role: 'ARTWORK', status: 'VERIFIED' }, { role: 'MASTER', status: 'VERIFIED' }, { role: 'WAV', status: 'VERIFIED' }]);
 }));
+
+test('GATEWAY real montado (enrutador por chat→bot, sesión perezosa): IMPORT por capacidad → worker verifica → commit; descarga desde el mismo gateway; bot en cuarentena rechaza antes de cualquier efecto', () => withDb(async (pool) => {
+  const lib = await nativeLibrary(pool); const server = createFakeTelegramServer();
+  const rtMod = require('../../catalog-gateway-runtime.js');
+  const opened = [];
+  const runtime = rtMod.createGatewayRuntime({ pool, sdk, clientProvider: { async open(botId) { opened.push(botId); return { client: server.session({ selfId: '20' }), telegramUserId: '20' }; } } });
+  const { ops, transport, worker } = modules(pool, { maxBeats: 10, server, gateway: () => runtime.gateway });
+  assert.deepEqual(opened, [], 'montar el gateway no abre sesión alguna');
+  const hdr = hdrOf(lib); const b = bytesOf('g', 3000);
+  const op = await ops.createOperation({ ...hdr, idempotencyKey: key(), intent: { kind: 'IMPORT', parts: [partOf('m0', b)], metadata: { name: 'ViaRouter' } } });
+  const cap = await transport.issueUploadCapability({ ...hdr, operationId: op.operationId, partKey: 'm0' });
+  const r = await put(transport, hdr, cap.token, b, 2);
+  assert.equal(r.status, 200); assert.deepEqual(opened, ['Bot20'], 'primera operación real: una sesión del bot asignado al chat de la biblioteca');
+  const msgs = server.messages(); assert.equal(msgs.length, 1); assert.equal(msgs[0].sender, '20'); assert.equal(msgs[0].size, 3000);
+  await drain(worker, pool, lib.userId, { kinds: VERIFY_ONLY });
+  assert.equal(await opStatus(pool, lib.userId, op.operationId), 'READY');
+  assert.equal((await ops.commitOperation({ ...hdr, operationId: op.operationId })).operation.status, 'COMMITTED');
+  const obj = (await pool.query('SELECT chat_id, message_id::text AS message_id FROM catalog_media_objects WHERE user_id = $1', [lib.userId])).rows;
+  assert.equal(obj.length, 1);
+  const chunks = []; for await (const c of await runtime.gateway.downloadPart({ chatId: obj[0].chat_id, messageId: Number(obj[0].message_id), offset: 1000, limit: 500 })) chunks.push(Buffer.from(c));
+  assert.deepEqual(Buffer.concat(chunks), b.subarray(1000, 1500), 'descarga por rango desde el gateway montado');
+  assert.deepEqual(opened, ['Bot20'], 'la sesión se reutiliza');
+  // cuarentena del bot asignado: rechazo previo a todo efecto (la caché de chat→bot caduca; se limpia con un runtime nuevo)
+  await pool.query("UPDATE transport_bots SET quarantined = true WHERE id = 'Bot20'");
+  const q = rtMod.createGatewayRuntime({ pool, sdk, clientProvider: { async open() { throw new Error('no debe abrirse'); } } });
+  await assert.rejects(q.gateway.sendPart({ operationId: op.operationId, partKey: 'm9', randomId: g.newRandomId(), chatId: lib.chatId, file: { name: 'x', size: 1, buffer: Buffer.alloc(1) }, mimeType: 'audio/mpeg', fileName: 'x' }), (e) => e.code === 'BOT_QUARANTINED');
+  assert.equal(server.messages().length, 1, 'sin efecto externo');
+  await runtime.close();
+}));

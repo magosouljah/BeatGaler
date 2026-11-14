@@ -1203,6 +1203,17 @@
           "network": "deny"
         },
         {
+          "id": "t16-gateway-runtime",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-gateway-runtime.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
           "id": "t16-catalog-composition",
           "cmd": [
             "node",

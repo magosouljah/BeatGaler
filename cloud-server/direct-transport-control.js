@@ -383,6 +383,17 @@ function stateSnapshot(pool) {
   return withPoolLock(() => normalizeState(pool));
 }
 
+// Catálogo nativo (gateway de servidor, NATIVO r2.1 §8.6): credencial vigente de un bot del pool, solo lectura y bajo demanda. El token
+// nunca se registra ni se persiste; la versión de credencial acompaña para que una rotación invalide la sesión del gateway.
+async function catalogBotCredential(botId) {
+  const pool = loadPool();
+  const bot = pool.find(item => item.id === String(botId));
+  if (!bot) throw Object.assign(new Error(`Unknown transport bot ${botId}.`), { code: 'BOT_UNKNOWN', transient: false });
+  const botState = stateSnapshot(pool).bots[bot.id];
+  const token = await tokenForCredentialVersion(bot, botState.credential_version);
+  return { token, telegramUserId: bot.telegram_user_id || null, credentialVersion: botState.credential_version };
+}
+
 function cleanupStaleOperationsDurably(pool) {
   return withPoolLock(() => {
     const state = normalizeState(pool);
@@ -2069,6 +2080,7 @@ module.exports = {
   downloadMessageBuffer,
   publishProjectFile,
   masterSenderId,
+  catalogBotCredential,
   copyLegacyProjectPart,
   copyLegacyProjectPartFromClient,
   directBotAdminRights,

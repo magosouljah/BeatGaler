@@ -814,7 +814,7 @@
     "layer2": "con BEATGALER_CATALOG_NATIVE_ENABLED=true, POST /transport/session/start de un dueño con fila de catálogo exige body.protocol = \"catalog-v1\" (410 LEGACY_CLIENT_UNSUPPORTED antes de Direct/Telegram); la respuesta catalog-v1 lleva catalog{protocol, authority_era, authority_epoch} y nunca bot_token/api_id/api_hash",
     "flagOff": "interruptor no destructivo: la capa 2 no actúa, la capa 1 (410 en entradas C10) y la capa 0 (triggers 0027) siguen",
     "forwardGuard": "el arranque se niega con CATALOG_SCHEMA_AHEAD si schema_migrations tiene versiones desconocidas (NATIVO §11)",
-    "mounted": "routes /catalog/v1 con operations, transport, playback, media y purge; sin gateway real → 503 TRANSFER_UNAVAILABLE y jobs en reintento (fail-closed); BEATGALER_CATALOG_GATEWAY_ENABLED=true sin adaptador real → STOP-ENV en el arranque"
+    "mounted": "routes /catalog/v1 con operations, transport, playback, media y purge; sin BEATGALER_CATALOG_GATEWAY_ENABLED → 503 TRANSFER_UNAVAILABLE y jobs en reintento (fail-closed); con el flag, enrutador por chat→bot (catalog-gateway-runtime.js, sesiones perezosas) y, en producción, STOP-GATE salvo BEATGALER_CATALOG_G2_APPROVED=true (G2 NOT_PROVEN)"
   },
   "cli": {
     "task": "T17",
