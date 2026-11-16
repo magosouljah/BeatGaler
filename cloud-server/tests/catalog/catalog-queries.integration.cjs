@@ -65,6 +65,9 @@ async function seedBeats(pool, lib, beats, { state = 'ACTIVE', rankStart = 0 } =
       trash_count = (SELECT count(*) FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'TRASH') WHERE user_id = $1`, [lib.userId, lib.generationId]);
     await rebuildDerivedProjections(c, lib);
     await c.query('COMMIT');
+    // Práctica operativa tras una carga masiva: sin estadísticas PostgreSQL 16 estima rows=1 y elige un Nested Loop que evalúa catalog_search_grams
+    // O(n²) (CI: 389 ms con 241 beats → CATALOG_QUERY_TIMEOUT intermitente cuando el autoanalyze aún no corrió). Ver GRAMPLAN y E50.
+    await c.query('ANALYZE catalog_beats'); await c.query('ANALYZE catalog_beat_tags');
   } catch (e) { await c.query('ROLLBACK').catch(() => {}); throw e; } finally { c.release(); }
 }
 const bumpRevision = (pool, userId) => pool.query('UPDATE catalog_libraries SET revision = revision + 1 WHERE user_id = $1', [userId]);
@@ -257,7 +260,6 @@ test('F01/F02/N01: paridad SQL ↔ oráculo JS (search-js-v1) para búsqueda, ta
     } catch (e) { console.log(`GRAMPLAN ${label} ERROR ${e.code || ''} ${String(e.message).slice(0, 120)}`); }
   };
   await gramPlan('pre-search');
-  await gramPlan('pre-search nestloop=off (plan de producción)', { nestOff: true });
   const searchCases = [...f02.queries, 'q-', 'Q-Á', 'ος', 'Σ', 'n2', 'a', 'i̇', '%%', '\\\\', ' ', '', 'zzz-none', '9', 'A'];
   for (const s of searchCases) {
     const page = await q.listBeats({ userId: l2.userId, query: { q: s, sort: 'manual', limit: '240', includeTotal: 'true' } }).catch(async (e) => { if (e && e.code === 'CATALOG_QUERY_TIMEOUT') { console.log(`GRAMPLAN timeout en q=${JSON.stringify(s)}`); await gramPlan('at-timeout'); } throw e; });

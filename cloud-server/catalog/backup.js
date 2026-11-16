@@ -182,6 +182,9 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
       await q("UPDATE catalog_jobs SET state = 'QUEUED', lease_owner = NULL, lease_until = NULL, next_attempt_at = now() WHERE state = 'LEASED'");
       await q(`INSERT INTO catalog_restore_runs(restore_id, backup_id, manifest_sha256, source_taken_at, status, libraries_epoch_bumped) VALUES ($1, $2, $3, $4, 'HELD', $5)`, [restoreId, backupId, v.manifestSha256, m.taken_at, bumped]);
       await q('COMMIT');
+      // Tras una carga masiva en una instancia nueva faltan estadísticas: sin ellas PostgreSQL 16 elige planes cuadráticos para búsquedas de 1-2 caracteres
+      // (E50). ANALYZE es la práctica estándar tras pg_restore; no altera datos y es idempotente.
+      try { for (const t of order) await client.query(`ANALYZE ${qi(t)}`); } catch (error) { log('catalog-restore-analyze-failed', { code: error && error.code }); } // no revierte un restore ya confirmado
       metrics.restores++; metrics.rowsRestored += rows;
       return { restoreId, status: 'HELD', rows, tables: order.length, librariesEpochBumped: bumped, timings: { verifyMs: tVerify, totalMs: Date.now() - t0 }, backupTakenAt: m.taken_at };
     } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; } finally { client.release(); }

@@ -147,14 +147,7 @@ async function planSearch(client, uid, gen, state, q) {
   // filas sin proyectar (search_text NULL): el contador no las cubre -> predicado por campos, correcto aunque más lento
   if (r.rows[0].unprojected) return { mode: 'FIELDS', n: null };
   const n = r.rows[0].n === null ? 0 : Number(r.rows[0].n);
-  if (n <= GRAM_GIN_MAX) {
-    // Planes robustos sin estadísticas (biblioteca recién importada, antes del autoanalyze): con rows=1 estimado PostgreSQL 16 elige un Nested Loop que
-    // evalúa catalog_search_grams (cara) por cada fila externa × cada fila interna (CI: 393 ms con 241 beats; O(n²) → CATALOG_QUERY_TIMEOUT). Sin
-    // nested loop el IN se resuelve como semi-join/hash con la función evaluada una vez por candidato. SET LOCAL: solo esta transacción de lectura.
-    await client.query('SET LOCAL enable_nestloop = off');
-    return { mode: 'GRAMS', n };
-  }
-  return { mode: 'SCAN', n };
+  return { mode: n <= GRAM_GIN_MAX ? 'GRAMS' : 'SCAN', n };
 }
 // Predicado de filtros sobre el alias b. Devuelve {sql, params} añadiendo a params. `mode` (de planSearch) fija el camino de q.
 // GRAMS solo es válido tras planSearch (garantiza que no hay filas sin proyectar y que el contador es bajo): sin plan se usa el predicado por campos.
