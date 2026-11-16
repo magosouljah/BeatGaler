@@ -193,3 +193,17 @@ test('resolver legacy: offset canónico, parámetros de catálogo rechazados, N=
   await assert.rejects(deep.resolveLegacyNavigation({ userId: 'u1', query: { offset: '10001' } }), (e) => e.code === 'LEGACY_OFFSET_UNRESOLVABLE' && e.status === 409 && e.detail.action === 'go-to-start');
   await deep.resolveLegacyNavigation({ userId: 'u1', query: { offset: '10000' } }); // en el límite: permitido
 });
+
+test('planSearch: q de 1-2 caracteres con camino GRAMS desactiva nested loop en la transacción (plan robusto sin estadísticas); SCAN/FIELDS no lo tocan', async () => {
+  const mk = (row) => { const log = []; return { log, async query(sql) { log.push(sql.trim().split(/\s+/).slice(0, 3).join(' ')); return /catalog_search_gram_counts/.test(sql) ? { rows: [row] } : { rows: [] }; } }; };
+  const grams = mk({ n: '12', unprojected: false });
+  assert.deepEqual(await queries.planSearch(grams, 'u1', 'g1', 'ACTIVE', 'a'), { mode: 'GRAMS', n: 12 });
+  assert.ok(grams.log.includes('SET LOCAL enable_nestloop'), 'GRAMS fija enable_nestloop=off con SET LOCAL');
+  const big = mk({ n: String(queries.GRAM_GIN_MAX + 1), unprojected: false });
+  assert.deepEqual(await queries.planSearch(big, 'u1', 'g1', 'ACTIVE', 'a'), { mode: 'SCAN', n: queries.GRAM_GIN_MAX + 1 });
+  const unproj = mk({ n: '3', unprojected: true });
+  assert.deepEqual(await queries.planSearch(unproj, 'u1', 'g1', 'ACTIVE', 'a'), { mode: 'FIELDS', n: null });
+  const long = mk({ n: null, unprojected: false });
+  assert.equal((await queries.planSearch(long, 'u1', 'g1', 'ACTIVE', 'abcd')).mode, queries.searchMode('abcd'));
+  for (const c of [big, unproj, long]) assert.ok(!c.log.includes('SET LOCAL enable_nestloop'));
+});

@@ -242,11 +242,11 @@ test('F01/F02/N01: paridad SQL ↔ oráculo JS (search-js-v1) para búsqueda, ta
   const f02 = fixture('c12-f02-search'); const l2 = await nativeLibrary(pool); await seedBeats(pool, l2, f02.index.beats);
   // DIAGNÓSTICO (flake T06 CATALOG_QUERY_TIMEOUT): plan y estadísticas de la consulta de gramas ANTES de la primera búsqueda (sin ANALYZE explícito,
   // como en producción para una biblioteca recién creada) y, si una consulta agota statement_timeout, de nuevo en el momento del fallo.
-  const gramPlan = async (label) => {
+  const gramPlan = async (label, { nestOff = false } = {}) => {
     try {
       const c = await pool.connect();
       try {
-        await c.query('BEGIN'); await c.query('SET LOCAL statement_timeout = 15000');
+        await c.query('BEGIN'); await c.query('SET LOCAL statement_timeout = 15000'); if (nestOff) await c.query('SET LOCAL enable_nestloop = off');
         const sql = "EXPLAIN (ANALYZE, BUFFERS, SETTINGS) SELECT b.beat_id FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.state = 'ACTIVE' AND b.beat_id IN (SELECT s.beat_id FROM catalog_beats s WHERE s.user_id = $1 AND s.generation_id = $2 AND s.state = 'ACTIVE' AND catalog_search_grams(s.search_text) @> ARRAY['a']::text[]) ORDER BY b.manual_rank, b.beat_id COLLATE \"C\" LIMIT 240";
         const plan = (await c.query(sql, [l2.userId, l2.generationId])).rows.map((r) => r['QUERY PLAN'].trim().slice(0, 150));
         const st = (await c.query("SELECT relname, n_live_tup::text, last_analyze IS NOT NULL AS an, last_autoanalyze IS NOT NULL AS aan FROM pg_stat_user_tables WHERE relname = 'catalog_beats'")).rows;
@@ -257,6 +257,7 @@ test('F01/F02/N01: paridad SQL ↔ oráculo JS (search-js-v1) para búsqueda, ta
     } catch (e) { console.log(`GRAMPLAN ${label} ERROR ${e.code || ''} ${String(e.message).slice(0, 120)}`); }
   };
   await gramPlan('pre-search');
+  await gramPlan('pre-search nestloop=off (plan de producción)', { nestOff: true });
   const searchCases = [...f02.queries, 'q-', 'Q-Á', 'ος', 'Σ', 'n2', 'a', 'i̇', '%%', '\\\\', ' ', '', 'zzz-none', '9', 'A'];
   for (const s of searchCases) {
     const page = await q.listBeats({ userId: l2.userId, query: { q: s, sort: 'manual', limit: '240', includeTotal: 'true' } }).catch(async (e) => { if (e && e.code === 'CATALOG_QUERY_TIMEOUT') { console.log(`GRAMPLAN timeout en q=${JSON.stringify(s)}`); await gramPlan('at-timeout'); } throw e; });
