@@ -1,3 +1,4 @@
+import { isBeatCloudUpdateBusy } from "../features/cloud/beatCloudUpdateBusy";
 import { platform } from "../platform";
 import { compactTileTags } from "../features/design/shared/beatCardTags";
 import "../features/design/shared/beatCard.css";
@@ -192,7 +193,8 @@ export default function BeatCard({
   const [uploadErrorOpen, setUploadErrorOpen] = useState(false);
   const [projectCloud, setProjectCloud] = useState<ProjectCloudStatus | null>(null);
   const [hasEnteredViewport, setHasEnteredViewport] = useState(false);
-  const [slotUpdating, setSlotUpdating] = useState(false);
+  // Una tarjeta que se monta con el beat ya «ocupado» (p. ej. importación en segundo plano tras «Save and finish») nace con el overlay de carga.
+  const [slotUpdating, setSlotUpdating] = useState(() => isBeatCloudUpdateBusy(beat.id));
   const [slotUpdateComplete, setSlotUpdateComplete] = useState(false);
   const slotUpdateCompleteTimerRef = useRef<number | null>(null);
   const dotsRef = useRef<HTMLElement | null>(null);

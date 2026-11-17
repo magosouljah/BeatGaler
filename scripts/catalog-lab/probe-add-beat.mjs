@@ -57,9 +57,19 @@ try {
   await ex(() => (async () => { const inp = document.querySelector('input[type=file][accept^="image"]'); const dt = new DataTransfer(); dt.items.add(await window.__mk('portada.png', 'png')); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); })());
   await sleep(1200); await shot('a1b-crop'); await clickByText('Apply crop'); await sleep(1500); await shot('a2-edited');
   const earlyA = await apiBeat(NAME);
+  // «Save and finish» inmediato: la subida se retrasa 4 s en el navegador; la revisión debe cerrarse YA y el beat verse cargándose en la Gallery.
+  await ex(() => { if (!window.__origFetch) { window.__origFetch = window.fetch; window.fetch = async (...a) => { const m = String((a[1] && a[1].method) || 'GET').toUpperCase(); if (m === 'PUT' && /\/transfer\/upload\//.test(String((a[0] && a[0].url) || a[0]))) await new Promise((r) => setTimeout(r, window.__uploadDelay || 0)); return window.__origFetch(...a); }; } window.__uploadDelay = 4000; });
+  const tSave = Date.now();
   await clickStarts('Save');
+  const quick = await waitFor(async () => { const st = await ex(() => ({ reviewOpen: /Review beat 1 of 1/.test(document.body.innerText), pending: document.querySelectorAll('[data-pending-import]').length, busy: Boolean(document.querySelector('[data-pending-import] [aria-label="Updating beat in Galer Cloud"]')), name: (document.querySelector('[data-pending-import]') || {}).textContent || '' })); return !st.reviewOpen && st.pending === 1 ? st : null; }, { timeout: 6000, msg: 'review closed + pending card' }).catch(() => null);
+  const tClosed = Date.now() - tSave; const midA = await apiBeat(NAME);
+  rec('ADD-A0-SAVE-FINISH-IMMEDIATE', quick && tClosed < 3500 && quick.busy && !midA ? 'PASS' : 'FAIL', { closedAfterMs: tClosed, state: quick, committedYet: Boolean(midA) });
+  await shot('a2b-pending-card');
   const okA = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import A' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
+  const gone = await waitFor(async () => (await ex(() => document.querySelectorAll('[data-pending-import]').length)) === 0 ? true : null, { timeout: 10000, msg: 'pending card removed' }).catch(() => false);
+  await ex(() => { window.__uploadDelay = 0; });
   const bA = await apiBeat(NAME);
+  rec('ADD-A1-PENDING-CARD-REPLACED', gone && bA ? 'PASS' : 'FAIL', { pendingGone: gone, committed: Boolean(bA) });
   rec('ADD-A-REVIEW-SAVE', r0.open && r0.name === 'Beat revisado' && !earlyA && /importado\./.test(String(okA)) && bA && bA.bpm === '128' && /^a/i.test(bA.key) && bA.tags.map((t) => t.toLowerCase()).includes('trap') && bA.hasArtwork && bA.master && (await total()) === count0 + 1 ? 'PASS' : 'FAIL', { review: r0, earlyListed: Boolean(earlyA), notice: okA, saved: bA });
   await sleep(800); await typeSearch(NAME); await sleep(900);
   const card = await ex(() => document.querySelector('[data-beat-card-id]')?.getAttribute('data-beat-card-id'));
@@ -91,5 +101,15 @@ try {
   const okE = await waitFor(async () => /Con proyecto.*importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import project' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
   const bE = await apiBeat(PN);
   rec('ADD-E-PROJECT-IN-REVIEW', /importado\./.test(String(okE)) && bE && bE.hasProject ? 'PASS' : 'FAIL', { notice: okE, saved: bE });
+  // F) fallo definitivo en segundo plano: la revisión se reabre con lo editado, el beat no aparece y hay aviso claro (nunca un éxito falso)
+  const FN = 'Fallo bg ' + (Date.now() % 1000000);
+  await openPicker([['fallo.mp3', 'mp3']]); await sleep(800); await setField(0, FN); await sleep(300);
+  await ex(() => { window.__origFetch2 = window.fetch; window.fetch = async (...a) => { const m = String((a[1] && a[1].method) || 'GET').toUpperCase(); if (m === 'PUT' && /\/transfer\/upload\//.test(String((a[0] && a[0].url) || a[0]))) return new Response(JSON.stringify({ error: 'TRANSFER_UNAVAILABLE: simulado', code: 'TRANSFER_UNAVAILABLE' }), { status: 503, headers: { 'Content-Type': 'application/json' } }); return window.__origFetch2(...a); }; });
+  await clickStarts('Save');
+  const reopened = await waitFor(async () => { const st = await ex(() => ({ open: /Review beat 1 of 1/.test(document.body.innerText), name: [...document.querySelectorAll('input')].find((i) => i.offsetParent !== null && i.value === arguments[0])?.value || null, pending: document.querySelectorAll('[data-pending-import]').length })); return st.open && st.pending === 0 ? st : null; }, { timeout: 20000, msg: 'review reopened' }).catch(() => null);
+  const nameKept = await ex((n) => [...document.querySelectorAll('input')].some((i) => i.value === n), FN);
+  const noteF = await notice(); const listedF = await apiBeat(FN);
+  rec('ADD-F-BG-FAILURE-REOPENS-REVIEW', reopened && nameKept && /No se pudo importar/.test(noteF) && !listedF ? 'PASS' : 'FAIL', { reopened, nameKept, notice: noteF, listed: Boolean(listedF) });
+  await ex(() => { window.fetch = window.__origFetch2; }); await clickByText('Cancel').catch(() => {}); await sleep(500);
   rec('ADD-LOGS', 'INFO', { severe: (await browser.getLogs('browser').catch(() => [])).filter((l) => l.level === 'SEVERE').map((l) => String(l.message).slice(0, 200)) });
 } catch (e) { rec('ADD', 'ERROR', { message: String(e && e.message || e) }); await shot('error').catch(() => {}); } finally { await R.finish(); }

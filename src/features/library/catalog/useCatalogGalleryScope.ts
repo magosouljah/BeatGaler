@@ -331,15 +331,49 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     });
   }, []);
   const cancelReview = useCallback(() => { setReview((r) => { if (r) platform.importer.releaseBeat(r.beat.id); return null; }); }, []);
+  // «Save and finish» (comportamiento del BeatGaler anterior: «Save/next stays immediate; the extracted cloud queue owns upload work»):
+  // la revisión se cierra en cuanto el servidor aceptó la operación (nombre libre, cuota, tamaño) y el beat aparece YA en la Gallery como tarjeta
+  // «cargándose» (overlay de BeatCard por `setBeatCloudUpdateBusy`, el mismo del reemplazo de audio/portada) mientras la subida a Telegram
+  // continúa en segundo plano. Éxito → tarjeta real del servidor; fallo definitivo → la revisión se reabre con lo editado y el archivo intacto;
+  // incierto → aviso persistente y NUNCA reenvío (E5). Ningún beat se publica en la Gallery sin commit en PostgreSQL.
+  const [pendingImports, setPendingImports] = useState<Array<{ id: string; beat: Beat }>>([]);
   const saveReview = useCallback(async (updated: Beat, onProgress?: (p: { stage: "preparing" | "master" | "wav" | "artwork" | "project" | "library"; uploadedBytes: number; totalBytes: number }) => void) => {
     const r = review; if (!r) return;
     const original = platform.importer.fileForBeat(r.beat.id);
     // Espera la conversión WAV→MP3 y la hidratación; `updated` es la versión editada por el usuario (no se re-añaden tags quitados).
     const plan = await resolveImportPlan({ beat: updated, hydrated: r.hydrated ? r.hydrated.then(() => updated) : null, slotFiles: () => platform.importer.slotFilesForBeat(r.beat.id), originalFile: original });
-    const outcome = await mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress }).catch((e) => { throw new Error(importFailureMessage(e)); });
-    if (outcome.status !== "committed") throw new Error(outcome.status !== "uncertain" && (outcome as { error?: unknown }).error ? importFailureMessage((outcome as { error?: unknown }).error) : `La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
-    platform.importer.releaseBeat(r.beat.id); setReview(null);
-    setNotice(`«${updated.name}» importado.`); refreshAfterMutation();
+    let begun: () => void = () => {};
+    const begunP = new Promise<"started">((res) => { begun = () => res("started"); });
+    const job = mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress: (p) => { onProgress?.(p); if (p.stage !== "preparing") begun(); } })
+      .then((outcome) => ({ outcome, error: null as unknown }), (error: unknown) => ({ outcome: null, error }));
+    const first = await Promise.race([begunP, job.then(() => "settled" as const)]);
+    const uncertainNotice = (name: string) => `La subida de «${name}» no se pudo confirmar. No se reenvía ni se borra nada: el servidor lo revisará y el beat aparecerá si Telegram lo recibió.`;
+    if (first === "settled") { // rechazado ANTES de subir (nombre repetido, cuota, tamaño…) o terminado sin fase de subida: el error se muestra en la revisión abierta
+      const res = await job;
+      if (res.error) throw new Error(importFailureMessage(res.error));
+      const outcome = res.outcome!;
+      if (outcome.status !== "committed") throw new Error(outcome.status !== "uncertain" && (outcome as { error?: unknown }).error ? importFailureMessage((outcome as { error?: unknown }).error) : outcome.status === "uncertain" ? uncertainNotice(updated.name) : `La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
+      platform.importer.releaseBeat(r.beat.id); setReview(null);
+      setNotice(`«${updated.name}» importado.`); refreshAfterMutation();
+      return;
+    }
+    const pendingId = updated.id;
+    setPendingImports((list) => [{ id: pendingId, beat: updated }, ...list.filter((x) => x.id !== pendingId)]);
+    setBeatCloudUpdateBusy(pendingId, true);
+    setReview(null); // cierra la revisión ya: el archivo sigue retenido hasta que termine la subida
+    void job.then(({ outcome, error }) => {
+      const dropPending = (delayMs: number) => { window.setTimeout(() => setPendingImports((list) => list.filter((x) => x.id !== pendingId)), delayMs); };
+      if (outcome && outcome.status === "committed") {
+        platform.importer.releaseBeat(r.beat.id); refreshAfterMutation();
+        setBeatCloudUpdateBusy(pendingId, false, true); setNotice(`«${updated.name}» importado.`); dropPending(1300); // deja ver el «completado» y que llegue la tarjeta real
+        return;
+      }
+      setBeatCloudUpdateBusy(pendingId, false, false); dropPending(0);
+      if (outcome && outcome.status === "uncertain") { platform.importer.releaseBeat(r.beat.id); setNotice(uncertainNotice(updated.name)); refreshAfterMutation(); return; }
+      const reason = error ? importFailureMessage(error) : (outcome as { error?: unknown } | null)?.error ? importFailureMessage((outcome as { error?: unknown }).error) : `quedó en estado ${outcome ? outcome.status : "desconocido"}`;
+      setNotice(`No se pudo importar «${updated.name}»: ${reason.replace(/[.s]+$/, "")}. Tus cambios siguen en la revisión.`);
+      if (platform.importer.fileForBeat(r.beat.id)) setReview({ beat: updated, hydrated: null }); // reabre con lo editado (el archivo no se liberó)
+    });
   }, [review, mutations, refreshAfterMutation]);
 
   // ---- sesión / ajustes ----
@@ -386,7 +420,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     drawer, setDrawer, updateBeat, commitDrawerCloudMutation, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
-    showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
+    showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, pendingImports, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
     notice: notice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
     accountId, context,

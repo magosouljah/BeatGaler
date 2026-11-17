@@ -4,6 +4,8 @@
 .bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-track { position: relative; width: 100%; overflow-anchor: none; row-gap: var(--gallery-grid-row-gap); }
 /* T16/V08: el host del track ocupa el lugar de `.lab-gallery-grid` dentro de `.lab-gallery-main` (mismo ancho útil y centrado). */
 .bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-grid-host { width: 100%; }
+/* «Save and finish»: beats en subida (tarjetas cargándose) sobre el track, con la misma rejilla que las filas del catálogo. */
+.bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-pending { display: grid; grid-template-columns: repeat(var(--gallery-grid-columns), minmax(0, var(--gallery-tile-width))); column-gap: var(--gallery-grid-column-gap); row-gap: var(--gallery-grid-row-gap); justify-content: center; margin-bottom: var(--gallery-grid-row-gap); }
 .bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-notice { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
 .bg-product-gallery[data-catalog-mode="postgres"] .bg-catalog-track-notice { padding: 0 0 12px; color: #888; }
 /* Región de avisos del shell (selección/importación/errores): sin el padding del estado vacío; vacía no ocupa altura (paridad con la Gallery LOCAL). */

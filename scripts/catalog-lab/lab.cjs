@@ -1,5 +1,5 @@
 'use strict';
-// LAB navegador: orquestador. Uso: node scripts/catalog-lab/lab.cjs <up|down|status|detect> [--no-legacy] [--keep-pg] [--seed N]
+// LAB navegador: orquestador. Uso: node scripts/catalog-lab/lab.cjs <up|down|status|detect|cloud-restart> [--no-legacy] [--keep-pg] [--seed N]
 //   up     PG efímero propio (WSL) → bootstrap → Cloud real + gateway fake + siembra → Vite (POSTGRES y LEGACY) → espera siembra
 //   down   mata Cloud/Vite, borra la DB/rol del LAB y detiene+borra el clúster WSL (salvo --keep-pg)
 //   status procesos, puertos y estado de siembra
@@ -39,6 +39,13 @@ function killPid(name) {
   fs.unlinkSync(f);
 }
 
+function cloudEnv(cfg) {
+  const env = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, TEMP: process.env.TEMP, TMP: process.env.TMP, USERPROFILE: process.env.USERPROFILE, ...cfg.env, DATABASE_URL: cfg.databaseUrl, LAB_STATE_DIR: L2.STATE_DIR, LAB_SEED_N: String(cfg.seedN), ...(process.env.LAB_SYNTH_AUDIO ? { LAB_SYNTH_AUDIO: process.env.LAB_SYNTH_AUDIO } : {}),
+    ...(REAL ? { LAB_REAL: '1', LAB_REAL_DESCRIPTOR: process.env.LAB_REAL_DESCRIPTOR, BEATGALER_T11_SANDBOX_APPROVAL: process.env.BEATGALER_T11_SANDBOX_APPROVAL, BEATGALER_CATALOG_JOURNAL_DIR: L2.statePath('journal').split(path.sep).join('/') } : {}) };
+  if (REAL) fs.mkdirSync(L2.statePath('journal'), { recursive: true });
+  return env;
+}
+
 async function up() {
   fs.mkdirSync(L2.STATE_DIR, { recursive: true });
   if (fs.existsSync(L2.CFG_FILE)) throw new Error('Ya hay un LAB levantado (lab.env.json existe). Ejecuta `down` primero.');
@@ -51,9 +58,7 @@ async function up() {
   const cfg = JSON.parse(fs.readFileSync(L2.CFG_FILE, 'utf8'));
   // Cloud real: cwd con .env VACÍO → dotenv jamás lee cloud-server/.env. Entorno mínimo y explícito.
   fs.writeFileSync(L2.statePath('.env'), '');
-  const env = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, TEMP: process.env.TEMP, TMP: process.env.TMP, USERPROFILE: process.env.USERPROFILE, ...cfg.env, DATABASE_URL: cfg.databaseUrl, LAB_STATE_DIR: L2.STATE_DIR, LAB_SEED_N: String(cfg.seedN), ...(process.env.LAB_SYNTH_AUDIO ? { LAB_SYNTH_AUDIO: process.env.LAB_SYNTH_AUDIO } : {}),
-    ...(REAL ? { LAB_REAL: '1', LAB_REAL_DESCRIPTOR: process.env.LAB_REAL_DESCRIPTOR, BEATGALER_T11_SANDBOX_APPROVAL: process.env.BEATGALER_T11_SANDBOX_APPROVAL, BEATGALER_CATALOG_JOURNAL_DIR: L2.statePath('journal').split(path.sep).join('/') } : {}) };
-  if (REAL) fs.mkdirSync(L2.statePath('journal'), { recursive: true });
+  const env = cloudEnv(cfg);
   const cloudLog = L2.statePath('cloud.log'); fs.writeFileSync(cloudLog, '');
   const cl = fs.openSync(cloudLog, 'a');
   const cloud = spawn(process.execPath, ['--require', path.join(__dirname, REAL ? 'real-preload.cjs' : 'lab-preload.cjs'), path.join(L2.ROOT, 'cloud-server', 'server.js')], { cwd: L2.STATE_DIR, env, stdio: ['ignore', cl, cl], detached: true, windowsHide: true });
@@ -74,6 +79,22 @@ async function up() {
   await waitFor(() => httpOk(L2.PORTS.webPostgres, '/gallery'), 180000, 'Vite POSTGRES');
   if (!flag('--no-legacy')) await waitFor(() => httpOk(L2.PORTS.webLegacy, '/gallery'), 180000, 'Vite LEGACY');
   log(`LAB listo: POSTGRES http://127.0.0.1:${L2.PORTS.webPostgres}  ${flag('--no-legacy') ? '(sin LEGACY)' : `LEGACY http://127.0.0.1:${L2.PORTS.webLegacy}`}  beats=${cfg.seedN}`);
+}
+
+async function cloudRestart() { // reinicia SOLO el proceso Cloud (código nuevo del servidor): la base, la biblioteca y el LAB siguen intactos; el log se conserva (append)
+  if (!fs.existsSync(L2.CFG_FILE)) throw new Error('No hay LAB configurado (lab.env.json no existe)');
+  const cfg = JSON.parse(fs.readFileSync(L2.CFG_FILE, 'utf8'));
+  killPid('cloud');
+  await sleep(1500);
+  const env = cloudEnv(cfg);
+  const cloudLog = L2.statePath('cloud.log'); fs.appendFileSync(cloudLog, `
+[lab] ---- cloud-restart ${new Date().toISOString()} ----
+`);
+  const cl = fs.openSync(cloudLog, 'a');
+  const cloud = spawn(process.execPath, ['--require', path.join(__dirname, REAL ? 'real-preload.cjs' : 'lab-preload.cjs'), path.join(L2.ROOT, 'cloud-server', 'server.js')], { cwd: L2.STATE_DIR, env, stdio: ['ignore', cl, cl], detached: true, windowsHide: true });
+  fs.writeFileSync(pidFile('cloud'), String(cloud.pid)); cloud.unref();
+  await waitFor(() => tcpUp(L2.PORTS.cloud), 90000, 'Cloud escuchando');
+  log(`Cloud reiniciado pid=${cloud.pid} :${L2.PORTS.cloud} (base y biblioteca intactas)`);
 }
 
 async function down() {
@@ -102,5 +123,5 @@ function detect() {
   console.log(JSON.stringify(out, null, 2)); return out;
 }
 
-({ up, down, status, detect }[cmd] || (async () => { console.error('uso: lab.cjs <up|down|status|detect> [--no-legacy] [--keep-pg] [--seed N]'); process.exit(2); }))()
+({ up, down, status, detect, 'cloud-restart': cloudRestart }[cmd] || (async () => { console.error('uso: lab.cjs <up|down|status|detect|cloud-restart> [--no-legacy] [--keep-pg] [--seed N]'); process.exit(2); }))()
   .catch((e) => { console.error('[lab] ERROR', e.message); process.exit(1); });

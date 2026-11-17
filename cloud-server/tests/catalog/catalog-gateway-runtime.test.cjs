@@ -160,3 +160,23 @@ test('transiciones tras calentar la caché: cuarentena, rotación y reasignació
   assert.deepEqual(server.messages().map((m) => m.sender), ['20', '20', '21']);
   void effects;
 });
+
+test('FLOOD_WAIT al abrir la sesión del bot (hallazgo G3 real): sin efecto externo (effectPossible=false), cooldown sin volver a llamar a Telegram y reapertura al vencer; no es UNCERTAIN', async () => {
+  const server = createFakeTelegramServer(); let t = 1_000_000; let opens = 0;
+  const flood = () => Object.assign(new Error('FLOOD_WAIT_40'), { code: 420, seconds: 40 });
+  const prov = provider(server, { fail: () => { opens++; return opens === 1 ? flood() : null; } });
+  const { gateway } = rt.createGatewayRuntime({ pool: fakePool({ '-1001': vault('Bot20') }), clientProvider: prov, sdk, now: () => t });
+  const err1 = await send(gateway, '-1001').then(() => null, (e) => e);
+  assert.equal(err1.code, 'GATEWAY_BOT_UNAVAILABLE'); assert.equal(err1.effectPossible, false); assert.equal(err1.retryAfterMs, 40_000); assert.equal(err1.reason, 'FLOOD_WAIT');
+  const callsAfterFlood = opens;
+  t += 10_000; // dentro del cooldown: no se llama a Telegram
+  const err2 = await send(gateway, '-1001').then(() => null, (e) => e);
+  assert.equal(err2.reason, 'FLOOD_COOLDOWN'); assert.equal(err2.effectPossible, false); assert.equal(err2.retryAfterMs, 30_000); assert.equal(opens, callsAfterFlood, 'el cooldown no abre sesión');
+  assert.equal(server.messages().length, 0, 'nada enviado');
+  const cls = require('../../catalog/transport.js').classifySendFailure;
+  if (typeof cls === 'function') { const c = cls(err1); assert.equal(c.outcome, 'UPLOAD_FAILED'); assert.equal(c.effect, false); assert.notEqual(c.outcome, 'UNCERTAIN'); }
+  t += 31_000; // vencido: reabre y envía
+  assert.equal((await send(gateway, '-1001')).senderId, '20');
+  // errores de ruteo (cuarentena, chat sin bot) tampoco tienen efecto posible
+  await assert.rejects(send(gateway, '-1999'), (e) => e.code === 'CHAT_BOT_UNRESOLVED' && e.effectPossible === false);
+});

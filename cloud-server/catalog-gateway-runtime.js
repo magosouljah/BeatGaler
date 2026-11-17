@@ -30,6 +30,9 @@ function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs
   const chatCache = new Map(); // chatId -> { botId, until }
   const bots = new Map(); // botId -> Promise<{ gateway, client }>
   const metrics = { routed: 0, botsOpened: 0, botOpenFailures: 0, botsDropped: 0, rejectedBot: 0, unresolvedChat: 0 };
+  const botCooldown = new Map(); // botId -> epoch ms hasta el que NO se intenta abrir sesión (FLOOD_WAIT del inicio de sesión del bot)
+  // Segundos de espera pedidos por Telegram (FLOOD_WAIT_x / error 420). 0 = el fallo no es una espera de flood.
+  const floodSeconds = (e) => { const n = Number(e && e.seconds); if (Number.isFinite(n) && n > 0) return Math.min(Math.ceil(n), 86_400); const m = /FLOOD_WAIT_?(\d+)/i.exec(String((e && (e.errorMessage || e.message)) || '')); if (m) return Math.min(Number(m[1]), 86_400); return Number(e && e.code) === 420 ? 60 : 0; };
   const warn = (event, fields) => { if (log && typeof log.warn === 'function') log.warn('catalog-gateway-runtime', { event, ...fields }); };
 
   // chat → bot de transporte asignado (SQL es la única autoridad). Nunca se elige un bot "por intuición" si la fila falta.
@@ -49,9 +52,15 @@ function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs
 
   async function openBot(botId) {
     let opened;
+    const waitMs = (botCooldown.get(botId) || 0) - now();
+    // Sesión del bot en espera por flood: no se vuelve a llamar a Telegram (cada intento alarga el castigo). Nada se ha enviado: efecto externo imposible.
+    if (waitMs > 0) throw new GatewayError('GATEWAY_BOT_UNAVAILABLE', 'the transport bot session is cooling down after a Telegram flood wait', { transient: true, retryAfterMs: waitMs, status: 503, effectPossible: false, reason: 'FLOOD_COOLDOWN' });
     try { opened = await clientProvider.open(botId); } catch (error) {
-      metrics.botOpenFailures++; warn('BOT_OPEN_FAILED', { botId, code: error && error.code ? String(error.code).slice(0, 40) : 'ERROR' });
-      throw new GatewayError('GATEWAY_BOT_UNAVAILABLE', 'the transport bot session could not be opened', { transient: error && error.transient === false ? false : true, retryAfterMs: 30_000, status: 503 });
+      metrics.botOpenFailures++; const flood = floodSeconds(error);
+      if (flood > 0) botCooldown.set(botId, now() + flood * 1000);
+      warn('BOT_OPEN_FAILED', { botId, code: error && error.code ? String(error.code).slice(0, 40) : 'ERROR', floodWaitSeconds: flood || null });
+      // El fallo ocurre ANTES de cualquier envío: sin efecto externo posible (effectPossible=false) → el transporte lo trata como subida fallida reintentable, no como UNCERTAIN.
+      throw new GatewayError('GATEWAY_BOT_UNAVAILABLE', 'the transport bot session could not be opened', { transient: error && error.transient === false ? false : true, retryAfterMs: flood > 0 ? flood * 1000 : 30_000, status: 503, effectPossible: false, reason: flood > 0 ? 'FLOOD_WAIT' : 'OPEN_FAILED' });
     }
     const senderId = String(opened.telegramUserId || '');
     if (!/^[0-9]{1,20}$/.test(senderId)) throw new GatewayError('BOT_IDENTITY_INVALID', 'the bot session did not report a numeric identity', { transient: false });
@@ -83,7 +92,12 @@ function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs
   // Operaciones con efecto externo (envío, borrado): asignación y banderas SIEMPRE frescas de SQL (una consulta por la clave única del chat);
   // las lecturas toleran la caché corta (TTL). Un envío ya en vuelo no se puede revocar: el cerco real es el control de credenciales (G2).
   const call = (method, { fresh = false } = {}) => async (args = {}) => {
-    const { botId, gateway } = await routeFor(args.chatId, fresh);
+    let route;
+    try { route = await routeFor(args.chatId, fresh); } catch (error) { // ruteo/apertura: ocurre antes de delegar en el gateway → ningún efecto externo
+      if (error && typeof error === 'object' && error.effectPossible === undefined) error.effectPossible = false;
+      throw error;
+    }
+    const { botId, gateway } = route;
     try { return await gateway[method](args); } catch (error) {
       if (error && error.code === 'CREDENTIAL_REVOKED') { chatCache.clear(); dropBot(botId, 'CREDENTIAL_REVOKED'); }
       throw error;
