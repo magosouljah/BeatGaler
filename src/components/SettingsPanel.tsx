@@ -29,6 +29,8 @@ interface Props {
   onClose: () => void;
   onFolderChanged: (folder: string) => void;
   onBeatRestored?: (beat: Beat) => void;
+  /** Papelera propia de la composición (catálogo PostgreSQL). Sin ella se usa `platform.trash` (flujo anterior). */
+  trashSource?: { listBeats(): Promise<import("../platform/contracts").PlatformTrashItem[]>; restoreBeat(id: string): Promise<Beat>; purgeBeats(): Promise<number> };
 }
 
 type Section = "account" | "plan" | "preferences" | "trash" | "tools" | "privacy" | "terms";
@@ -167,7 +169,7 @@ export default function SettingsPanel(props: Props) {
       window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     }
     if (platform.capabilities.trashLifecycle) {
-      platform.trash.listBeats().then(items => { if (active) setTrashItems(items); })
+      (props.trashSource ?? platform.trash).listBeats().then(items => { if (active) setTrashItems(items); })
         .catch(console.error).finally(() => { if (active) setLoadingTrash(false); });
       if (platform.capabilities.localHelper) {
         platform.trash.listPresets().then(items => { if (active) setPresetTrashItems(items); })
@@ -231,7 +233,7 @@ export default function SettingsPanel(props: Props) {
     });
     setTrashError(null);
 
-    void platform.trash.restoreBeat(item.id)
+    void (props.trashSource ?? platform.trash).restoreBeat(item.id)
       .then(beat => {
         setTrashItems(items => items.filter(x => x.id !== item.id));
         onBeatRestored?.(beat);
@@ -266,8 +268,8 @@ export default function SettingsPanel(props: Props) {
 
     void (async () => {
       try {
-        const purged = await platform.trash.purgeBeats();
-        const remaining = await platform.trash.listBeats();
+        const purged = await (props.trashSource ?? platform.trash).purgeBeats();
+        const remaining = await (props.trashSource ?? platform.trash).listBeats();
         setTrashItems(remaining);
         if (remaining.length > 0) {
           setTrashError(`${remaining.length} item(s) remain in Trash. The deletion can be retried.`);
@@ -281,7 +283,7 @@ export default function SettingsPanel(props: Props) {
         // local Trash instead of pretending deletion succeeded.
         setTrashError(String(e?.message || e));
         setTrashMessage(null);
-        try { setTrashItems(await platform.trash.listBeats()); } catch {}
+        try { setTrashItems(await (props.trashSource ?? platform.trash).listBeats()); } catch {}
       } finally {
         setPurging(false);
       }

@@ -6,11 +6,13 @@
 //  - Nunca crea un beat nuevo: el beatId de la operación es el de la tarjeta.
 import type { CatalogMutations } from "./catalogMutations";
 import { beatFromCatalogDetail } from "./catalogMutations";
+import { isProjectDawFileName } from "../../projects/projectFileTypes";
 
-export type DroppedAudioKind = "MP3" | "WAV";
+export type DroppedAudioKind = "MP3" | "WAV" | "PROJECT";
 export const classifyDroppedAudio = (file: Pick<File, "name" | "type">): DroppedAudioKind | null =>
   /\.wav$/i.test(file.name) || file.type === "audio/wav" || file.type === "audio/x-wav" ? "WAV"
-    : /\.mp3$/i.test(file.name) || file.type === "audio/mpeg" ? "MP3" : null;
+    : /\.mp3$/i.test(file.name) || file.type === "audio/mpeg" ? "MP3"
+      : /\.zip$/i.test(file.name) || isProjectDawFileName(file.name.toLowerCase()) ? "PROJECT" : null;
 
 export interface ReplaceAudioInput {
   mutations: Pick<CatalogMutations, "getBeat" | "replaceBeat">;
@@ -33,11 +35,13 @@ export async function replaceBeatAudio({ mutations, confirm, beatId, file, onPro
   let detail;
   try { detail = await mutations.getBeat(beatId); } catch (e) { return { status: "failed", message: `No se pudo leer el beat: ${String((e as { message?: unknown })?.message ?? e)}` }; }
   const hadWav = Boolean(detail.hasWav);
-  const replacing = kind === "MP3" || hadWav;
+  const replacing = kind === "MP3" || (kind === "WAV" ? hadWav : Boolean(detail.hasProject));
   const ok = await confirm({
-    title: kind === "MP3" ? "Replace MP3?" : hadWav ? "Replace WAV?" : "Add WAV?",
+    title: kind === "MP3" ? "Replace MP3?" : kind === "PROJECT" ? (replacing ? "Replace project?" : "Add project?") : hadWav ? "Replace WAV?" : "Add WAV?",
     message: kind === "MP3"
       ? `Replace the MP3 of “${detail.name}” with “${file.name}”? The current file is kept until the new one is saved.`
+      : kind === "PROJECT"
+        ? (replacing ? `Replace the project of “${detail.name}” with “${file.name}”? The current file is kept until the new one is saved.` : `Add “${file.name}” as the project of “${detail.name}”?`)
       : hadWav
         ? `Replace the WAV of “${detail.name}” with “${file.name}”? The current file is kept until the new one is saved.`
         : `Add “${file.name}” as the WAV of “${detail.name}”?`,
@@ -49,7 +53,7 @@ export async function replaceBeatAudio({ mutations, confirm, beatId, file, onPro
   try {
     const outcome = await mutations.replaceBeat({
       beatId, expectedVersion: detail.version, original, updated: original,
-      files: kind === "WAV" ? { wav: file } : { master: file },
+      files: kind === "WAV" ? { wav: file } : kind === "PROJECT" ? { project: file } : { master: file },
       onProgress: (p) => onProgress?.(`${p.stage} ${Math.round((p.uploadedBytes / Math.max(1, p.totalBytes)) * 100)}%`),
     });
     if (outcome.status === "committed") return { status: "committed", kind, beatId, replacedExisting: replacing };

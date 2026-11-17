@@ -38,7 +38,15 @@ wrap(catalogOperations, 'configureCatalogOperations', (o) => ({ ...o, resolveAcc
 wrap(catalogPurge, 'configureCatalogPurge', (o) => ({ ...o, gateway }));
 const origTransport = catalogTransport.configureCatalogTransport;
 catalogTransport.configureCatalogTransport = (options) => {
-  const transport = origTransport(options && { ...options, gateway });
+  // LAB: PROJECT por MASTER sobre el MISMO proveedor FAKE (sin Bot real) y tope de plan holgado; sin esto PROJECT respondía 503 PROJECT_ACCESS_UNAVAILABLE en el LAB.
+  const master = {
+    async resolveSenderId() { return '20'; },
+    async publishProjectFile({ chatId, filePath, filename, sizeBytes, sha256, randomId, caption }) {
+      const sent = await gateway.sendPart({ operationId: 'lab-project', partKey: 'PROJECT:0', randomId, chatId, file: { name: filename || 'project.zip', size: sizeBytes, path: filePath, sha256 }, mimeType: 'application/zip', fileName: filename || 'project.zip', caption });
+      return { messageId: sent?.messageId, documentId: sent?.documentId ?? null, sizeBytes, senderId: '20' };
+    },
+  };
+  const transport = origTransport(options && { ...options, gateway, master, resolveProjectAccess: async () => ({ maxBytes: 200 * 1024 * 1024 }) });
   if (transport) setTimeout(() => { startWorkerAndSeed(options.pool, transport).catch((e) => console.error('[lab] seed failed', e.stack || e.message, JSON.stringify(e.detail || null), e.cause && (e.cause.message || e.cause))); }, 50);
   return transport;
 };

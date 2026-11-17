@@ -2,7 +2,7 @@
 // `lab-gallery-main` como único scroller, BeatCard, botón «Add beat», Drawer, Player, menús de tags y TagPeek) con las filas
 // virtualizadas de V05 en lugar del grid plano. Ningún nodo nuevo visible: las clases y el orden de los bloques son los del AppShell;
 // el track virtual sustituye a `.lab-gallery-grid` usando las mismas variables de columnas/gaps de gallery.css.
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import GalleryChrome from "../../design/GALLERY/GalleryChrome";
 import { dismissBeatGalerStartupLoader } from "../../startup/startupLoader";
 import { BeatTagPeekLayer, useBeatTagPeek } from "../../design/shared/BeatTagPeek";
@@ -27,6 +27,8 @@ import { appAlert } from "../../../lib/dialog";
 import FloatingNotice from "../../../components/FloatingNotice";
 import { useCatalogFileDrop } from "./useCatalogFileDrop";
 import { routeDrop } from "./catalogDropRouting";
+import { createCatalogTrashSource } from "./catalogTrashSource";
+import CloudFilesModal from "../../downloads/components/CloudFilesModal";
 
 export interface CatalogAppShellProps {
   services: CatalogServices;
@@ -39,6 +41,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   const scope = useCatalogGalleryScope({ services, accountId, context });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const tagPeek = useBeatTagPeek();
+  const trashSource = useMemo(() => createCatalogTrashSource({ api: services.api, mutations: services.mutations }), [services]);
   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);
   const { snapshot, interaction, playback, audio, currentBeat, selectMode, selectedCount, drawer, setDrawer, notice } = scope;
   const tenantKey = `${accountId}:${context.authority_era}:${context.authority_epoch}`;
@@ -81,7 +84,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
         onPlay={scope.handlePlay} onWarm={scope.handleWarm}
         onDetail={(b) => setDrawer({ beat: b, mode: "detail" })} onEdit={(b) => { if (!scope.rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}
         onDelete={scope.deleteBeat} onAddToQueue={scope.addToQueue}
-        onUpload={() => {}} onUploadTelegram={() => {}} onDownloadTelegram={() => {}} onUploadProjectTelegram={() => {}} onOpenProject={() => {}} onUpdateProject={() => {}} onCloudFiles={() => {}}
+        onUpload={() => {}} onUploadTelegram={() => {}} onDownloadTelegram={() => {}} onUploadProjectTelegram={() => {}} onOpenProject={() => {}} onUpdateProject={() => {}} onCloudFiles={scope.openDownloads}
         onToggleSelect={(b, e) => scope.toggleSelection(b, e.shiftKey)} animDelay={0}
       />
     );
@@ -121,7 +124,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           <CatalogVirtualGallery store={services.store} scrollerRef={scrollerRef} tenantKey={tenantKey} renderCard={renderCard} viewportHeightFallback={viewportHeightFallback}
             onMountCard={scope.onMountCard} onUnmountCard={scope.onUnmountCard}
             cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false" })}
-            onGoToStart={() => { void services.store.loadFirst(); }} />
+            onGoToStart={() => { void services.store.loadFirst(); }} onAddBeat={openAdd} onClearFilters={() => { scope.setSearch(""); scope.clearTagFilters(); }} />
         </div>
       </div>
       {!currentBeat && (
@@ -141,11 +144,16 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           </div>
         </div>
       )}
+      {scope.cloudFiles && (
+        <CloudFilesModal beat={scope.cloudFiles.beat}
+          files={scope.cloudFiles.files.map((f) => ({ cloud_file_id: f.fileId, beat_id: scope.cloudFiles!.beat.id, file_type: f.role as never, filename: f.filename ?? "", original_size: Number(f.sizeBytes), part_count: f.partCount, status: f.status }))}
+          busyId={scope.downloadBusy} downloadedIds={scope.downloaded} onDownload={scope.downloadKind} onClose={scope.closeDownloads} />
+      )}
       {scope.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.addBeatsAndReview} existingBeats={[]} maxNameChars={BEAT_NAME_MAX} />}
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={false} onIncompleteWarningsChanged={() => {}} customCursorEnabled onCustomCursorChanged={() => {}}
           telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.handleDisconnectTelegramAccount}
-          onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} />
+          onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} trashSource={trashSource} onBeatRestored={() => { void scope.reloadLibrary(); }} />
       )}
       {drawer && (
         <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }} onSaved={scope.updateBeat}

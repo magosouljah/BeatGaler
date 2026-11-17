@@ -119,7 +119,7 @@ describe("AddBeatModal(initialFile)", () => {
   it("archivo soltado con nombre válido: se importa por el mismo flujo (onAdd con el beat) y cierra", async () => {
     const beat = candidate("Soltado corto.mp3"); const { onAdd, onClose } = mountModal(mp3("Soltado corto.mp3"));
     await act(async () => { await Promise.resolve(); });
-    expect(port.fromFile).toHaveBeenCalledTimes(1); expect(onAdd).toHaveBeenCalledWith([beat]); expect(onClose).toHaveBeenCalled();
+    expect(port.fromFile).toHaveBeenCalledTimes(1); expect(onAdd).toHaveBeenCalledWith([beat], [expect.any(Promise)]); expect(onClose).toHaveBeenCalled();
   });
   it("archivo soltado con nombre > 50: pide renombrar y no sube hasta confirmar un nombre válido", async () => {
     const long = "x".repeat(60) + ".mp3"; candidate(long); const { onAdd } = mountModal(mp3(long));

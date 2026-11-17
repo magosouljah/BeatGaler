@@ -1274,6 +1274,16 @@
           "network": "loopback"
         },
         {
+          "id": "t16-audit-fixes",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogAuditFixes.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
           "id": "t16-catalog-composition",
           "cmd": [
             "node",

@@ -724,3 +724,28 @@ Límites:
 - **Pruebas:** `uiPolish.test.tsx` (6: tono, temporizadores, overlay, búsqueda persistente/cierre/restaurada); caso `t16-ui-polish` en T16; `tsc` limpio. LAB `probe-ui-polish.mjs` 7/7 a 1440, 1024 y 390 px (éxito flotante + autodescarte, error real con subida fallida simulada que permanece, backdrop de la toolbar, búsqueda persistente/limpieza, cursores). Capturas en `tmp/catalog-lab-out/ui-polish/`, `ui-1024/`, `ui-390/`.
 - **CI `44032910479` success sobre `c1fef58`** (no es aprobación visual).
 - **Pendiente de aprobación visual del propietario:** (1) las capturas adjuntas no llegaron a esta sesión: comparación contra el código y los shaders anteriores, no contra imágenes; (2) posición/estética de los avisos (abajo a la derecha) es una propuesta nueva; (3) la intensidad del vidrio depende de las portadas bajo la toolbar (con tarjetas verdes del fixture se ve verde); (4) zoom real del navegador no probado (anchos de ventana 390/1024/1440); (5) cursor de la X nativa verificado por regla CSS, no por puntero real.
+
+## E58. Auditoría funcional BeatGaler anterior ↔ Gallery PostgreSQL (2026-11-17, LOCAL)
+
+**Método:** inventario de `AppShell` + `useBeatGalerComposition` + `BeatCard`/`SettingsPanel`/`Drawer`/hooks de importación y arrastre (código anterior) contra `CatalogAppShell` + `useCatalogGalleryScope` + servicios del catálogo; cada diferencia comprobada en código y, cuando aplica, en el LAB (Chrome aislado, Cloud real + gateway FAKE + PostgreSQL efímero).
+
+**Regresiones reales demostradas y corregidas**
+1. **«Download» de la tarjeta era un no-op** (`onCloudFiles={() => {}}`; el menú «Download» existe en web). Ahora abre `CloudFilesModal` con los archivos vigentes del beat (`GET /beats/:id/files`, nuevo `listBeatFiles`) y baja MP3/WAV/PROJECT por `media.downloadFile` (concesión, partes, tamaño y hash verificados) guardándolos con el navegador (`catalogDownloads.ts`). LAB: descarga del MP3 verificada (`AUDIT-DOWNLOAD`).
+2. **Importación descartaba lo hidratado y mal-subía WAV:** se subía el archivo original como MASTER sin BPM/key/tags/portada del ID3 y un WAV iba como «MASTER». Ahora `AddBeatModal` entrega la hidratación (`onAdd(beats, hydrated)`) y `resolveImportPlan` sube MASTER (MP3 o MP3 convertido) + WAV y los metadatos/portada del archivo; el nombre editado se conserva (`catalogImportPlan.ts`).
+3. **`prepareFiles` no estaba cableado en el provider real:** sin quitar ID3 del MASTER ni empaquetar el PROJECT. Ahora `prepareCatalogFiles` (strip ID3v2/v1 byte-exacto; .zip tal cual; DAW → ZIP con nombre seguro) (`catalogFilePrep.ts`).
+4. **PROJECT por arrastre sobre una tarjeta** (.zip o archivo de DAW) no existía → «Add/Replace project?» con confirmación y subida solo de PROJECT al mismo beat (LAB: `AUDIT-PROJECT-drop`; el LAB necesitó un adaptador MASTER FAKE y tope de plan en `lab-preload.cjs`: antes respondía 503 `PROJECT_ACCESS_UNAVAILABLE`).
+5. **Papelera de Ajustes apuntaba al transporte web LEGACY** (`platform.trash`): no listaba la papelera PostgreSQL y «Empty trash» llamaba a la ruta del INDEX. `SettingsPanel` acepta `trashSource`; `catalogTrashSource` lista beats en TRASH, restaura con `expectedVersion` y vacía con la purga durable (LAB: borrado → aparece en Settings → Trash → restaurar → vuelve al catálogo, `AUDIT-TRASH-native`).
+6. **Estados vacíos sin acciones:** biblioteca vacía («Add a beat… / Add beat») y sin resultados («Clear filters») recuperan sus botones.
+
+**Cambios intencionales aprobados / paridad confirmada (sin acción):** reordenado manual (`manualLibraryReorder` es false en web; `dragEnabled` solo gobierna eso); límite de nombre 50; búsqueda/filtros/orden/selección globales en servidor; Playbar sobre `catalogPlaybackSession`; ajustes de cuenta (Account/Plan/Preferences) comparten componentes con la Gallery anterior; atajos de teclado y TagPeek compartidos.
+
+**Fuera de alcance (capacidades de escritorio = false en web):** subir a YouTube, abrir/actualizar proyecto en DAW, paquete offline, helper local, reveal de archivos, watchers de carpeta, Telegram por tarjeta (`onUpload*`/`onDownloadTelegram`).
+
+**Pendientes / decisión de producto (no tocados)**
+- **Revisión posterior a «Add beat»** (`ImportReviewHost`, edición de nombre/tags/BPM/key y portada antes de guardar): el catálogo importa directo. Restaurarla es una decisión de producto/diseño.
+- **«Download Everything»:** el anterior bajaba a una carpeta nueva; ahora son descargas individuales consecutivas.
+- **Proyecto con archivo de DAW:** el anterior fusionaba con el ZIP existente; ahora el ZIP nuevo sustituye al PROJECT (no se descarga el existente para fusionarlo).
+- **Importación de WAV:** conversión WAV→MP3 y ID3 cubiertas con pruebas unitarias; no se ejecutó en navegador del LAB.
+- Cuentas/billing: no auditados a fondo (componentes compartidos sin cambios; el LAB devuelve 503 en billing/signup por no tener esos servicios).
+
+**Pruebas:** `catalogAuditFixes.test.ts` (12) y caso `t16-audit-fixes`; 74 pruebas vitest de la familia catálogo/Gallery pasan; `tsc` limpio. LAB `probe-audit.mjs` 3/3 (Download, PROJECT, Trash nativa).

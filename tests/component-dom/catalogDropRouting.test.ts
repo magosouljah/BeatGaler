@@ -14,7 +14,8 @@ describe("classifyDroppedFile", () => {
     expect(classifyDroppedFile(f("x", "image/png"))).toBe("image");
     expect(classifyDroppedFile(f("a.mp3"))).toBe("mp3"); expect(classifyDroppedFile(f("x", "audio/mpeg"))).toBe("mp3");
     expect(classifyDroppedFile(f("a.WAV"))).toBe("wav"); expect(classifyDroppedFile(f("x", "audio/x-wav"))).toBe("wav");
-    for (const n of ["a.txt", "a.flac", "a.zip", "a.svg", "a.tiff"]) expect(classifyDroppedFile(f(n))).toBe("unsupported");
+    for (const n of ["a.txt", "a.flac", "a.svg", "a.tiff"]) expect(classifyDroppedFile(f(n))).toBe("unsupported");
+    expect(classifyDroppedFile(f("a.zip"))).toBe("project"); expect(classifyDroppedFile(f("s.flp"))).toBe("project");
   });
 });
 

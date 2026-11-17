@@ -14,6 +14,7 @@ export function assertBeatNameWithinLimit(name: unknown): void {
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
 
 export interface CatalogWriteHeaders { era: string; epoch: string }
+export interface CatalogBeatFile { fileId: string; role: string; revision: string; filename: string | null; mime: string | null; sizeBytes: string; status: string; verified: boolean; slot: string | null; partCount: number; current: boolean }
 export interface CatalogBeatDetail extends CatalogBeatDto {
   manualRank: string | null;
   trash: { trashId: string; trashedAt: string; purgeAfter: string } | null;
@@ -96,6 +97,8 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
   const enc = encodeURIComponent;
 
   return Object.freeze({
+    /** Archivos visibles del beat (MASTER, WAV, PROJECT…): base de «Download». */
+    listBeatFiles: async (beatId: string, signal?: AbortSignal) => (await request<{ items: CatalogBeatFile[] }>("GET", `/catalog/v1/beats/${enc(beatId)}/files`, { signal })).body.items,
     getBeat: async (beatId: string, signal?: AbortSignal) => (await request<CatalogBeatDetail>("GET", `/catalog/v1/beats/${enc(beatId)}`, { signal })).body,
     patchBeat: async (beatId: string, { expectedVersion, patch, idempotencyKey, ifMatch = null }: { expectedVersion: string; patch: CatalogMetadataPatch; idempotencyKey: string; ifMatch?: string | null }, signal?: AbortSignal) => {
       assertBeatNameWithinLimit(patch?.name);

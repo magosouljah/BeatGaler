@@ -16,6 +16,9 @@ import { useCatalogInteraction, type InteractionQuery } from "./catalogInteracti
 import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { beatFromCatalogDetail, metadataPatch } from "./catalogMutations";
 import { replaceBeatAudio } from "./catalogAudioReplace";
+import { resolveImportPlan } from "./catalogImportPlan";
+import { downloadBeatFiles, saveBlobWithBrowser, type DownloadKind } from "./catalogDownloads";
+import type { CatalogBeatFile } from "./catalogCommandsApi";
 import { normalizeArtworkFile, replaceBeatArtwork, resolveArtworkFile } from "./catalogArtworkReplace";
 import type { ArtworkDropSource } from "../../dragdrop/browserArtwork";
 import { setBeatCloudUpdateBusy } from "../../cloud/beatCloudUpdateBusy";
@@ -273,7 +276,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const replaceAudioByDrop = useCallback(async (beatId: string, file: File) => {
     const r = await replaceBeatAudio({ mutations, confirm: appConfirm, beatId, file, onStart: () => setBeatCloudUpdateBusy(beatId, true), onProgress: (t) => setNotice(`Reemplazando audio: ${t}`) });
     if (r.status !== "cancelled" && r.status !== "unsupported") setBeatCloudUpdateBusy(beatId, false, r.status === "committed"); // estado de la tarjeta: ocupada → completada
-    if (r.status === "committed") { setNotice(r.kind === "MP3" ? "MP3 reemplazado." : r.replacedExisting ? "WAV reemplazado." : "WAV añadido."); refreshAfterMutation(); }
+    if (r.status === "committed") { setNotice(r.kind === "MP3" ? "MP3 reemplazado." : r.kind === "PROJECT" ? (r.replacedExisting ? "Proyecto reemplazado." : "Proyecto añadido.") : r.replacedExisting ? "WAV reemplazado." : "WAV añadido."); refreshAfterMutation(); }
     else if (r.status === "failed") setNotice(`No se pudo reemplazar el audio: ${r.message}`);
     else if (r.status === "unsupported") setNotice("Solo se pueden soltar archivos MP3 o WAV.");
     else setNotice(null);
@@ -294,15 +297,17 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
 
   // ---- importación (T12) desde «Add beat» del navegador ----
   const [showAdd, setShowAdd] = useState(false);
-  const addBeatsAndReview = useCallback((beats: Beat[]) => {
-    for (const beat of beats) {
+  const addBeatsAndReview = useCallback((beats: Beat[], hydrated?: Array<Promise<Beat>>) => {
+    beats.forEach((beat, i) => {
       const file = platform.importer.fileForBeat(beat.id);
-      if (!file) { setNotice(IMPORT_NO_FILE_NOTICE); continue; }
+      if (!file) { setNotice(IMPORT_NO_FILE_NOTICE); return; }
       setNotice(`Importando «${beat.name}»…`);
-      void mutations.importBeat({ beat, files: { master: file }, onProgress: (p) => setNotice(`Importando «${beat.name}»: ${p.stage} ${Math.round((p.uploadedBytes / Math.max(1, p.totalBytes)) * 100)}%`) })
+      // Espera la hidratación (ID3, portada, WAV→MP3) y sube MASTER (+ WAV) con los metadatos del archivo.
+      void resolveImportPlan({ beat, hydrated: hydrated?.[i] ?? null, slotFiles: () => platform.importer.slotFilesForBeat(beat.id), originalFile: file })
+        .then((plan) => mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress: (p) => setNotice(`Importando «${beat.name}»: ${p.stage} ${Math.round((p.uploadedBytes / Math.max(1, p.totalBytes)) * 100)}%`) }))
         .then((o) => { setNotice(o.status === "committed" ? `«${beat.name}» importado.` : `Importación de «${beat.name}»: ${o.status}.`); refreshAfterMutation(); })
         .catch((e) => setNotice(importFailureNotice(beat.name, e)));
-    }
+    });
   }, [mutations, refreshAfterMutation]);
 
   // ---- sesión / ajustes ----
@@ -317,6 +322,25 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const cloudSessionVerified = !["idle", "resolving", "loading", "unauthenticated", "unavailable"].includes(snapshot.status);
   const loading = snapshot.status === "loading" || snapshot.status === "resolving";
   const rejectOfflineMutation = useCallback((_action: string) => { if (connectionState !== "online") { setNotice("Reconnect to verify your Galer Cloud library."); return true; } return false; }, [connectionState]);
+  // ---- «Download» de una BeatCard: MP3 / WAV / PROJECT / todo, por el cliente de medios del catálogo (verifica tamaño y hash) ----
+  const [cloudFiles, setCloudFiles] = useState<{ beat: Beat; files: CatalogBeatFile[] } | null>(null);
+  const [downloadBusy, setDownloadBusy] = useState<DownloadKind | null>(null);
+  const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
+  const openDownloads = useCallback((beat: Beat) => {
+    if (rejectOfflineMutation("Downloading")) return;
+    setDownloaded(new Set());
+    void mutations.listBeatFiles(beat.id).then((files) => setCloudFiles({ beat, files })).catch((e) => setNotice(`No se pudo leer los archivos del beat: ${String((e as { message?: unknown })?.message ?? e)}`));
+  }, [mutations, rejectOfflineMutation]);
+  const closeDownloads = useCallback(() => { setCloudFiles(null); setDownloadBusy(null); }, []);
+  const downloadKind = useCallback((kind: DownloadKind) => {
+    if (!cloudFiles || downloadBusy) return;
+    setDownloadBusy(kind);
+    void downloadBeatFiles({ files: cloudFiles.files, kind, beatName: cloudFiles.beat.name, download: (id) => media.downloadFile(id), save: saveBlobWithBrowser }).then((r) => {
+      if (r.status === "done") { setDownloaded((d) => new Set(d).add(kind)); setNotice(r.saved.length > 1 ? `${r.saved.length} archivos descargados.` : `«${r.saved[0]}» descargado.`); }
+      else if (r.status === "empty") setNotice("Ese archivo no está disponible para este beat.");
+      else setNotice(`No se pudo descargar: ${r.message}`);
+    }).finally(() => setDownloadBusy(null));
+  }, [cloudFiles, downloadBusy, media]);
   const dismissNotice = useCallback(() => { setNotice(null); interactionStore.dismissNotice(); }, [interactionStore]);
 
   return {
@@ -330,7 +354,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     drawer, setDrawer, updateBeat, commitDrawerCloudMutation, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
-    showAdd, setShowAdd, addBeatsAndReview, replaceAudioByDrop, replaceArtworkByDrop, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
+    showAdd, setShowAdd, addBeatsAndReview, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
     notice: notice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
     accountId, context,

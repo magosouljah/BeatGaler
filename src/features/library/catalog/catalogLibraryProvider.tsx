@@ -12,6 +12,7 @@ import { createCatalogCommandsApi } from "./catalogCommandsApi";
 import { createCatalogInteractionStore, type CatalogInteractionStore } from "./catalogInteractionStore";
 import { createCatalogMediaClient, type CatalogMediaClient } from "./catalogMediaClient";
 import { createCatalogMutations, type CatalogMutations } from "./catalogMutations";
+import { prepareCatalogFiles } from "./catalogFilePrep";
 import { createCatalogPlaybackSession, type CatalogPlaybackSession, type PlaybackApi } from "./catalogPlaybackSession";
 import { createCatalogQueryStore, type CatalogQueryStore } from "./catalogQueryStore";
 import { createCatalogTransfer } from "./catalogTransfer";
@@ -44,7 +45,7 @@ export function createCatalogServices({ api, accountId, context, fetchImpl, base
   const store = createCatalogQueryStore({ api, accountId });
   const interaction = createCatalogInteractionStore({ commands, api, accountId: () => accountId });
   const media = createCatalogMediaClient({ ...common, accountId: () => accountId });
-  const mutations = createCatalogMutations({ commands, transfer, accountId: () => accountId });
+  const mutations = createCatalogMutations({ commands, transfer, accountId: () => accountId, prepareFiles: prepareCatalogFiles });
   // Comandos musicales del servidor (T14) sobre el mismo transporte HTTP que los comandos (sin RNG en cliente).
   // V09 hallazgo: sin `baseUrl` explícito debe resolverse la misma base del Cloud que el resto de clientes (misma origin del proxy web);
   // antes el default "" enviaba rounds/neighbor a la origin de Vite (404) y Next/Shuffle/Prev no avanzaban.

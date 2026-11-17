@@ -236,6 +236,6 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     return runTransfer({ kind: "REPLACE", beatId, expectedVersion, parts: resolved.map((r) => r.spec), metadata: Object.keys(patch).length ? patch : null }, prepared, resolved, { onProgress, kind: "REPLACE", beatId, label: `Reemplazar archivos de «${updated.name || original.name}»` });
   }
 
-  return Object.freeze({ patchBeat, trashBeats, restoreBeats, bulkOverSelection, purgeTrash, purgeState, importBeat, replaceBeat, pendingOperations, resolvePendingTransfers, rememberOperation, forgetOperation, getBeat: (beatId: string) => commands.getBeat(beatId, options.signal) });
+  return Object.freeze({ patchBeat, trashBeats, restoreBeats, bulkOverSelection, purgeTrash, purgeState, importBeat, replaceBeat, pendingOperations, resolvePendingTransfers, rememberOperation, forgetOperation, getBeat: (beatId: string) => commands.getBeat(beatId, options.signal), listBeatFiles: (beatId: string) => commands.listBeatFiles(beatId, options.signal) });
 }
 export type CatalogMutations = ReturnType<typeof createCatalogMutations>;

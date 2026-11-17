@@ -4,6 +4,8 @@
 
 **Prueba manual G3 del propietario (2026-11-17, [E53](EVIDENCIA.md)):** nombres ≤ 50 caracteres; banda superior de la Tag Bar a todo el ancho (contenido en su posición aprobada; la captura citada no llegó, supuesto a confirmar); «Add beat» verificado de punta a punta en el LAB FAKE (guardado en PostgreSQL, renombrado, reproducción) y aviso claro si falta el transporte. CI `44001769841` PASS sobre `d5b42ba`. G2 NOT_PROVEN.
 
+**Auditoría funcional (2026-11-17, [E58](EVIDENCIA.md)):** recuperados Download, importación con ID3/WAV, preparación de archivos, PROJECT por arrastre, papelera nativa y acciones de estado vacío. Pendiente de decisión de producto: revisión posterior a «Add beat».
+
 **Pulido visual (2026-11-17, [E57](EVIDENCIA.md)):** avisos flotantes, toolbar liquid-glass recuperada (backdrop del track POSTGRES), buscador persistente con texto, cursores de tags/X; portadas verdes = fixture 1×1 del LAB. Pendiente: aprobación visual del propietario.
 
 **Drag & drop restaurado con los visuales del BeatGaler anterior (2026-11-17, [E56](EVIDENCIA.md)):** imagen sobre cualquier zona de una BeatCard → portada; MP3/WAV → audio con confirmación; fuera → beat nuevo; indicadores = los de `BeatCard`/banner legacy. Pendiente: aprobación visual del propietario.

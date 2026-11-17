@@ -18,6 +18,9 @@ export interface CatalogVirtualGalleryProps {
   geometryOverride?: Partial<RowGeometry>;
   viewportHeightFallback?: number;
   onGoToStart?: () => void;
+  /** Acciones del estado vacío (paridad con la Gallery anterior): «Add beat» en biblioteca vacía y «Clear filters» sin resultados. */
+  onAddBeat?: () => void;
+  onClearFilters?: () => void;
   onMountCard?: (id: string) => void;
   onUnmountCard?: (id: string) => void;
   statusCopy?: Partial<Record<CatalogStoreSnapshot["status"], string>>;
@@ -81,6 +84,8 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
       {statusLike && (
         <div className="bg-catalog-status" role="status" data-catalog-state={snapshot.status}>
           <div>{snapshot.status === "error" && error?.code === "LEGACY_OFFSET_UNRESOLVABLE" ? LEGACY_UNRESOLVABLE_COPY : copy[snapshot.status] ?? copy.error}</div>
+          {snapshot.status === "empty" && props.onAddBeat && <div><div style={{ marginTop: 7, fontSize: 12, color: "#888" }}>Add a beat to start your library.</div><button type="button" className="bg-button bg-button--secondary" onClick={() => props.onAddBeat?.()}>Add beat</button></div>}
+          {snapshot.status === "no-results" && props.onClearFilters && <div><button type="button" className="bg-button bg-button--ghost" onClick={() => props.onClearFilters?.()}>Clear filters</button></div>}
           {(snapshot.status === "error" || snapshot.status === "offline" || snapshot.status === "unavailable") && (
             <div>
               {error?.code === "LEGACY_OFFSET_UNRESOLVABLE" || error?.code === "LEGACY_OFFSET_INVALID"

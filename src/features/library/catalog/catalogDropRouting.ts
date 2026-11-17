@@ -8,7 +8,7 @@ import type { CatalogDropEvent } from "./useCatalogFileDrop";
 
 export type DropAction =
   | { type: "import"; file: File }
-  | { type: "replace-audio"; beatId: string; file: File }
+  | { type: "replace-audio"; beatId: string; file: File } // MP3 → MASTER, WAV → WAV HQ, PROJECT ZIP / archivo de DAW → PROJECT
   | { type: "artwork-file"; beatId: string; file: File }
   | { type: "artwork-sources"; beatId: string; sources: Promise<ArtworkDropSource[]> }
   | { type: "alert"; title: string; message: string };
@@ -20,7 +20,8 @@ export function routeDrop(e: CatalogDropEvent): DropAction {
     const file = files[0]; const kind = classifyDroppedFile(file);
     if (kind === "image") return beatId ? { type: "artwork-file", beatId, file } : { type: "alert", title: "Drop the image on a beat", message: "Drop an image onto a beat to change its cover." };
     if (kind === "mp3" || kind === "wav") return beatId ? { type: "replace-audio", beatId, file } : { type: "import", file };
-    return { type: "alert", title: "Unsupported file", message: beatId ? "Drop an MP3 or WAV to replace this beat's audio, or an image (PNG, JPG, WEBP, BMP, GIF, AVIF) to change its cover." : "Drop an MP3 or WAV file to add a beat." };
+    if (kind === "project") return beatId ? { type: "replace-audio", beatId, file } : { type: "alert", title: "Drop the project on a beat", message: "Drop a PROJECT ZIP or DAW project file onto a beat to attach it." };
+    return { type: "alert", title: "Unsupported file", message: beatId ? "Drop an MP3 or WAV to replace this beat's audio, a PROJECT ZIP or DAW project file, or an image (PNG, JPG, WEBP, BMP, GIF, AVIF) to change its cover." : "Drop an MP3 or WAV file to add a beat." };
   }
   if (artwork) return beatId ? { type: "artwork-sources", beatId, sources: artwork } : { type: "alert", title: "Drop the image on a beat", message: "Drop an image onto a beat to change its cover." };
   return { type: "alert", title: "Nothing to import", message: "Drop an MP3 or WAV file to add a beat." };

@@ -25,7 +25,8 @@ import type { PlatformImportCandidate } from "../platform/contracts";
 
 interface Props {
   onClose: () => void;
-  onAdd: (beats: Beat[]) => void;
+  /** `hydrated` (flujo web de un archivo): ID3 / WAV→MP3 listos; el catálogo los espera antes de importar. */
+  onAdd: (beats: Beat[], hydrated?: Promise<Beat>[]) => void;
   onCandidateHydrated?: (beat: Beat) => void;
   existingBeats: Beat[];
   /** Si se define, el nombre del beat no puede superarlo (code points): se pide editarlo antes de subir. Sin definir = flujo actual sin cambios. */
@@ -113,7 +114,7 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
     const finishCandidate = (candidate: PlatformImportCandidate, beat: Beat) => {
       // Review opens while WAV conversion and metadata hydration run in the background.
       handedOff.current = true;
-      onAdd([beat]);
+      onAdd([beat], [candidate.hydrated]);
       onClose();
       void candidate.hydrated.then(onCandidateHydrated).catch(error => {
         if (platform.importer.fileForBeat(candidate.beat.id)) {
