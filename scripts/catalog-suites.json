@@ -1214,6 +1214,16 @@
           "network": "deny"
         },
         {
+          "id": "t16-add-beat-rename",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/addBeatRename.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
           "id": "t16-catalog-composition",
           "cmd": [
             "node",

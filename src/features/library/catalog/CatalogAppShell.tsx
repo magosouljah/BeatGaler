@@ -7,6 +7,7 @@ import GalleryChrome from "../../design/GALLERY/GalleryChrome";
 import { dismissBeatGalerStartupLoader } from "../../startup/startupLoader";
 import { BeatTagPeekLayer, useBeatTagPeek } from "../../design/shared/BeatTagPeek";
 import AddBeatModal from "../../../components/AddBeatModal";
+import { BEAT_NAME_MAX } from "../../../lib/metadataValidation";
 import BeatCard from "../../../components/BeatCard";
 import Drawer from "../../../components/Drawer";
 import Player from "../../../components/Player";
@@ -112,7 +113,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           </button>
         </div>
       )}
-      {scope.showAdd && <AddBeatModal onClose={() => scope.setShowAdd(false)} onAdd={scope.addBeatsAndReview} existingBeats={[]} />}
+      {scope.showAdd && <AddBeatModal onClose={() => scope.setShowAdd(false)} onAdd={scope.addBeatsAndReview} existingBeats={[]} maxNameChars={BEAT_NAME_MAX} />}
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={false} onIncompleteWarningsChanged={() => {}} customCursorEnabled onCustomCursorChanged={() => {}}
           telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.handleDisconnectTelegramAccount}
