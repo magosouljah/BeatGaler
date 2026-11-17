@@ -26,7 +26,8 @@ const ledgerIds = new Set(fs.existsSync(ledgerFile) ? fs.readFileSync(ledgerFile
     const me = await c.getMe(); if (String(me.id) !== String(d.master.telegramUserId)) throw new Error('STOP-ISOLATION: MASTER distinto del descriptor');
     const ent = await c.getInputEntity(chatId);
     const msgs = await c.getMessages(ent, { limit: 400 });
-    const mine = msgs.filter((m) => m && Number(m.id) > Number(baseline.lastMessageId) && /^catalog:v1 op=/.test(String(m.message || '')));
+    const ledgerOnly = process.env.LAB_CLEANUP_LEDGER_ONLY === '1'; // entorno aislado concurrente: solo ids del propio ledger
+    const mine = ledgerOnly ? [] : msgs.filter((m) => m && Number(m.id) > Number(baseline.lastMessageId) && /^catalog:v1 op=/.test(String(m.message || '')));
     const fromLedger = msgs.filter((m) => m && ledgerIds.has(Number(m.id)) && /^catalog:v1 op=/.test(String(m.message || '')) && Number(m.id) > Number(baseline.lastMessageId));
     const ids = [...new Set([...mine, ...fromLedger].map((m) => Number(m.id)))].sort((a, b) => a - b);
     const untouched = msgs.filter((m) => m && !ids.includes(Number(m.id))).map((m) => Number(m.id)).sort((a, b) => a - b);

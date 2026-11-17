@@ -17,7 +17,7 @@ export async function login() {
 }
 export const E = () => ({ 'X-Catalog-Era': ctx.authority_era, 'X-Catalog-Epoch': ctx.authority_epoch });
 export const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
-export const results = []; export const rec = (id, ok, extra) => { results.push(ok); console.log(JSON.stringify({ id, status: ok ? 'PASS' : 'FAIL', ...extra })); };
+export const results = []; export const rec = (id, ok, extra) => { results.push(ok); const { status: http, ...rest } = extra || {}; console.log(JSON.stringify({ id, status: ok ? 'PASS' : 'FAIL', ...(http !== undefined ? { http } : {}), ...rest })); };
 const GRAMMAR = { MASTER: ['MASTER:0', 'MASTER'], WAV: ['FILES:0:0', 'FILES:0'], ARTWORK: ['ARTWORK:0', 'ARTWORK'], PROJECT: ['PROJECT:0', 'PROJECT'] };
 export const part = (role, bytes, filename, mime) => ({ partKey: GRAMMAR[role][0], slotKey: GRAMMAR[role][1], role, partIndex: 0, size: bytes.length, sha256: sha(bytes), filename, mime });
 export async function importBeat(name, files, metadata = {}) { // files: [{role, bytes, filename, mime}]

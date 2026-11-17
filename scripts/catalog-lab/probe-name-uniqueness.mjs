@@ -10,7 +10,7 @@ async function req(method, p, { body, raw, headers } = {}) {
   for (const c of r.headers.getSetCookie?.() ?? []) { const [kv] = c.split(';'); const i = kv.indexOf('='); jar.set(kv.slice(0, i), kv.slice(i + 1)); }
   const t = await r.text(); let j; try { j = JSON.parse(t); } catch { j = t; } return { status: r.status, body: j };
 }
-const results = []; const rec = (id, ok, extra) => { results.push(ok); console.log(JSON.stringify({ id, status: ok ? 'PASS' : 'FAIL', ...extra })); };
+const results = []; const rec = (id, ok, extra) => { results.push(ok); const { status: http, ...rest } = extra || {}; console.log(JSON.stringify({ id, status: ok ? 'PASS' : 'FAIL', ...(http !== undefined ? { http } : {}), ...rest })); }; // `status` HTTP va en `http`: nunca pisa PASS/FAIL
 const login = await req('POST', '/auth/login', { body: { email: cfg.account.email, password: cfg.account.password, mfaCode: '', beatgalerUserId: 'lab-name-probe' } });
 csrf = login.body?.csrf_token || '';
 ctx = (await req('GET', '/catalog/v1/context')).body;
