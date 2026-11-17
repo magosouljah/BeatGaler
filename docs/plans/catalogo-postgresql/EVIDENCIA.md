@@ -748,4 +748,4 @@ Límites:
 - **Importación de WAV:** conversión WAV→MP3 y ID3 cubiertas con pruebas unitarias; no se ejecutó en navegador del LAB.
 - Cuentas/billing: no auditados a fondo (componentes compartidos sin cambios; el LAB devuelve 503 en billing/signup por no tener esos servicios).
 
-**Pruebas:** `catalogAuditFixes.test.ts` (12) y caso `t16-audit-fixes`; 74 pruebas vitest de la familia catálogo/Gallery pasan; `tsc` limpio. LAB `probe-audit.mjs` 3/3 (Download, PROJECT, Trash nativa).
+**CI `44043993763` success sobre `be37174`.** **Pruebas:** `catalogAuditFixes.test.ts` (12) y caso `t16-audit-fixes`; 74 pruebas vitest de la familia catálogo/Gallery pasan; `tsc` limpio. LAB `probe-audit.mjs` 3/3 (Download, PROJECT, Trash nativa).
