@@ -2,6 +2,8 @@
 
 **Decisiones del propietario (2026-11-13, [E46](EVIDENCIA.md)):** pruebas de navegador reales (Edge, lector de pantalla, zoom/táctil/reduced-motion) **manuales por el propietario** ([V09-PRUEBA-MANUAL](V09-PRUEBA-MANUAL-20261113.md)); T20 **solo 500 beats** (1M = limitación conocida); **E7 no se ejecuta** (sin rotación de Bot20). Pendiente: resultados manuales, dictamen de Sol (G2/G3/T20/T21-A).
 
+**Prueba manual G3 del propietario (2026-11-17, [E53](EVIDENCIA.md)):** nombres ≤ 50 caracteres; banda superior de la Tag Bar a todo el ancho (contenido en su posición aprobada; la captura citada no llegó, supuesto a confirmar); «Add beat» verificado de punta a punta en el LAB FAKE (guardado en PostgreSQL, renombrado, reproducción) y aviso claro si falta el transporte. CI `44001769841` PASS sobre `d5b42ba`. G2 NOT_PROVEN.
+
 **«Add beat» con renombrado (2026-11-17, [E52](EVIDENCIA.md)):** si el nombre del archivo supera 15 caracteres se edita antes de subir (archivo original intacto, bloqueo hasta que sea válido, sin pasos extra si ya lo es). CI `43988761486` PASS sobre `6f8c3b3`. Pendiente: revisión manual del propietario en navegador.
 
 **Nombres de beat ≤ 15 caracteres (2026-11-17, [E51](EVIDENCIA.md)):** validación en servidor (`validatePatch`) y cliente (rechazo con mensaje claro, sin recorte, sin tocar nombres de archivo); T06 L01 ya no siembra nombres de 20 000 caracteres (T06 ~8 min → ~15 s). CI `43986457970` PASS sobre `3b17f24`. Pendiente de producto: renombrado al importar archivos con nombre > 15.
