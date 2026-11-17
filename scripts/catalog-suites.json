@@ -1254,6 +1254,16 @@
           "network": "loopback"
         },
         {
+          "id": "t16-drop-routing",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogDropRouting.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
           "id": "t16-catalog-composition",
           "cmd": [
             "node",

@@ -16,6 +16,9 @@ import { useCatalogInteraction, type InteractionQuery } from "./catalogInteracti
 import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { beatFromCatalogDetail, metadataPatch } from "./catalogMutations";
 import { replaceBeatAudio } from "./catalogAudioReplace";
+import { normalizeArtworkFile, replaceBeatArtwork, resolveArtworkFile } from "./catalogArtworkReplace";
+import type { ArtworkDropSource } from "../../dragdrop/browserArtwork";
+import { setBeatCloudUpdateBusy } from "../../cloud/beatCloudUpdateBusy";
 import { appConfirm } from "../../../lib/dialog";
 import type { CatalogStoreSnapshot } from "./catalogQueryStore";
 import { LEGACY_UNRESOLVABLE_COPY, createHistoryWriter, parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
@@ -268,11 +271,25 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
 
   // ---- reemplazo de audio por arrastre sobre una BeatCard (MP3 → MASTER, WAV → añadir/reemplazar WAV HQ), con confirmación ----
   const replaceAudioByDrop = useCallback(async (beatId: string, file: File) => {
-    const r = await replaceBeatAudio({ mutations, confirm: appConfirm, beatId, file, onProgress: (t) => setNotice(`Reemplazando audio: ${t}`) });
+    const r = await replaceBeatAudio({ mutations, confirm: appConfirm, beatId, file, onStart: () => setBeatCloudUpdateBusy(beatId, true), onProgress: (t) => setNotice(`Reemplazando audio: ${t}`) });
+    if (r.status !== "cancelled" && r.status !== "unsupported") setBeatCloudUpdateBusy(beatId, false, r.status === "committed"); // estado de la tarjeta: ocupada → completada
     if (r.status === "committed") { setNotice(r.kind === "MP3" ? "MP3 reemplazado." : r.replacedExisting ? "WAV reemplazado." : "WAV añadido."); refreshAfterMutation(); }
     else if (r.status === "failed") setNotice(`No se pudo reemplazar el audio: ${r.message}`);
     else if (r.status === "unsupported") setNotice("Solo se pueden soltar archivos MP3 o WAV.");
     else setNotice(null);
+  }, [mutations, refreshAfterMutation]);
+
+  // ---- portada por arrastre de una imagen sobre cualquier zona de una BeatCard (servicio del Drawer: replaceBeat solo con el archivo de portada) ----
+  const replaceArtworkByDrop = useCallback(async (beatId: string, sources: ArtworkDropSource[] | Promise<ArtworkDropSource[]>) => {
+    setBeatCloudUpdateBusy(beatId, true);
+    let ok = false;
+    try {
+      const file = await resolveArtworkFile(await sources);
+      const r = await replaceBeatArtwork({ mutations, beatId, file });
+      ok = r.status === "committed";
+      if (r.status === "committed") { setNotice("Portada actualizada."); refreshAfterMutation(); } else setNotice(`No se pudo cambiar la portada: ${r.message}`);
+    } catch (e) { setNotice(`No se pudo cambiar la portada: ${String((e as { message?: unknown })?.message ?? e)}`); }
+    finally { setBeatCloudUpdateBusy(beatId, false, ok); }
   }, [mutations, refreshAfterMutation]);
 
   // ---- importación (T12) desde «Add beat» del navegador ----
@@ -313,7 +330,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     drawer, setDrawer, updateBeat, commitDrawerCloudMutation, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
-    showAdd, setShowAdd, addBeatsAndReview, replaceAudioByDrop, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
+    showAdd, setShowAdd, addBeatsAndReview, replaceAudioByDrop, replaceArtworkByDrop, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
     notice: notice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
     accountId, context,

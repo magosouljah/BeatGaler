@@ -387,6 +387,3 @@
 @media(max-width:750px){.lab-gallery-page{--gallery-grid-columns:3;--gallery-grid-column-gap:15px;--gallery-grid-row-gap:24px;}}
 @media(max-width:590px){.lab-gallery-page{--gallery-grid-columns:2;--gallery-grid-column-gap:13px;--gallery-grid-row-gap:22px;}}
 @media(max-width:359px){.lab-gallery-page{--gallery-grid-columns:1;--gallery-toolbar-right:var(--lab-space-4);}}
-
-/* Arrastrar un MP3/WAV sobre una BeatCard (reemplazo de audio): solo un contorno mientras dura el arrastre; la tarjeta no cambia de otro modo. */
-[data-card][data-drop-target="true"] { outline: 2px dashed rgba(255, 255, 255, 0.55); outline-offset: -2px; border-radius: 14px; }

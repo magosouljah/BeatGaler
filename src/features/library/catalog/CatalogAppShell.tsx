@@ -24,7 +24,8 @@ import type { CatalogServices } from "./catalogLibraryProvider";
 import { useCatalogGalleryScope } from "./useCatalogGalleryScope";
 import { useState } from "react";
 import { appAlert } from "../../../lib/dialog";
-import { useCatalogFileDrop, pickDroppedAudio } from "./useCatalogFileDrop";
+import { useCatalogFileDrop } from "./useCatalogFileDrop";
+import { routeDrop } from "./catalogDropRouting";
 
 export interface CatalogAppShellProps {
   services: CatalogServices;
@@ -42,19 +43,19 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   const tenantKey = `${accountId}:${context.authority_era}:${context.authority_epoch}`;
   // V09 hallazgo: el overlay de arranque (#beatgaler-startup-loader) solo lo retiraba el pipeline LEGACY; en POSTGRES bloqueaba los clics.
   useEffect(() => { dismissBeatGalerStartupLoader(); }, []);
-  // Arrastrar y soltar MP3/WAV: mismo flujo que «Add beat» (AddBeatModal con `initialFile`: validación de nombre, importación real al catálogo).
+  // Arrastrar y soltar: la acción depende del TIPO de archivo y la tarjeta solo decide el destino (catalogDropRouting):
+  // imagen sobre cualquier zona de una BeatCard → portada; MP3/WAV sobre una BeatCard → reemplazo de audio con confirmación; MP3/WAV fuera → beat nuevo (AddBeatModal con `initialFile`).
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const { active: dropActive, targetId: dropTargetId } = useCatalogFileDrop({
     enabled: !droppedFile && !scope.showAdd && !drawer,
-    onFiles: (files, targetBeatId) => {
-      if (scope.rejectOfflineMutation(targetBeatId ? "Replacing audio" : "Importing beats")) return;
-      const picked = pickDroppedAudio(files);
-      // La tarjeta tiene prioridad: MP3 → reemplaza el MASTER; WAV → añade/reemplaza el WAV HQ (siempre con confirmación). Fuera de una tarjeta → beat nuevo.
-      if (picked.kind === "ok" && targetBeatId) { void scope.replaceAudioByDrop(targetBeatId, picked.file); return; }
-      if (picked.kind === "ok") { setDroppedFile(picked.file); scope.setShowAdd(true); return; }
-      void appAlert(picked.kind === "many"
-        ? { title: "Drop one beat at a time", message: "BeatGaler Web imports one beat per drag action." }
-        : { title: "Nothing to import", message: "Drop an MP3 or WAV file to add a beat." });
+    onDrop: (event) => {
+      const action = routeDrop(event);
+      if (action.type === "alert") { void appAlert({ title: action.title, message: action.message }); return; }
+      if (scope.rejectOfflineMutation(action.type === "import" ? "Importing beats" : "Updating a beat")) return;
+      if (action.type === "import") { setDroppedFile(action.file); scope.setShowAdd(true); }
+      else if (action.type === "replace-audio") void scope.replaceAudioByDrop(action.beatId, action.file);
+      else if (action.type === "artwork-file") void scope.replaceArtworkByDrop(action.beatId, [{ kind: "file", file: action.file }]);
+      else void scope.replaceArtworkByDrop(action.beatId, action.sources);
     },
   });
   const closeAdd = () => { setDroppedFile(null); scope.setShowAdd(false); };
@@ -118,7 +119,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
         <div className="bg-catalog-grid-host" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut} onPointerDown={tagPeek.onPointerDown} onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}>
           <CatalogVirtualGallery store={services.store} scrollerRef={scrollerRef} tenantKey={tenantKey} renderCard={renderCard} viewportHeightFallback={viewportHeightFallback}
             onMountCard={scope.onMountCard} onUnmountCard={scope.onUnmountCard}
-            cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false", "data-drop-target": dropTargetId === item.id ? "true" : "false" })}
+            cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false" })}
             onGoToStart={() => { void services.store.loadFirst(); }} />
         </div>
       </div>
@@ -131,7 +132,14 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           </button>
         </div>
       )}
-      {dropActive && !dropTargetId && <div data-testid="catalog-drop-overlay" aria-hidden style={{ position: "fixed", inset: 0, zIndex: 390, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", border: "2px dashed #3a3a3a", color: "#cfcfcf", fontSize: 14, pointerEvents: "none" }}>Drop an MP3 or WAV to add a beat</div>}
+      {dropActive && !dropTargetId && (
+        <div data-testid="catalog-drop-overlay" aria-hidden style={{ position: "fixed", left: "50%", bottom: currentBeat ? 86 : 24, transform: "translateX(-50%)", zIndex: 10000, pointerEvents: "none", width: "min(620px, calc(100vw - 48px))" }}>
+          <div style={{ padding: "13px 18px", borderRadius: 12, border: "2px dashed #f5a623", background: "rgba(17,17,17,0.94)", textAlign: "center", boxShadow: "0 10px 32px rgba(0,0,0,0.42)" }}>
+            <div style={{ fontSize: 13, color: "#eee", fontWeight: 600 }}>Suelta aquí para agregar como beat aparte</div>
+            <div style={{ fontSize: 10, color: "#777", marginTop: 4, lineHeight: 1.45 }}>O arrástralo encima de un beat para agregarlo a ese beat.</div>
+          </div>
+        </div>
+      )}
       {scope.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.addBeatsAndReview} existingBeats={[]} maxNameChars={BEAT_NAME_MAX} />}
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={false} onIncompleteWarningsChanged={() => {}} customCursorEnabled onCustomCursorChanged={() => {}}

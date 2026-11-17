@@ -4,6 +4,8 @@
 
 **Prueba manual G3 del propietario (2026-11-17, [E53](EVIDENCIA.md)):** nombres ≤ 50 caracteres; banda superior de la Tag Bar a todo el ancho (contenido en su posición aprobada; la captura citada no llegó, supuesto a confirmar); «Add beat» verificado de punta a punta en el LAB FAKE (guardado en PostgreSQL, renombrado, reproducción) y aviso claro si falta el transporte. CI `44001769841` PASS sobre `d5b42ba`. G2 NOT_PROVEN.
 
+**Drag & drop restaurado con los visuales del BeatGaler anterior (2026-11-17, [E56](EVIDENCIA.md)):** imagen sobre cualquier zona de una BeatCard → portada; MP3/WAV → audio con confirmación; fuera → beat nuevo; indicadores = los de `BeatCard`/banner legacy. Pendiente: aprobación visual del propietario.
+
 **Reemplazo de audio por arrastre sobre BeatCard y «Siguiente» reparado (2026-11-17, [E55](EVIDENCIA.md)):** MP3/WAV sobre una tarjeta reemplazan MASTER/WAV con confirmación (mismo beat); causa de «Siguiente»: conjunto de resultados BUILDING tomado como vacío + CURSOR_STALE sin recuperación + errores tragados. Pendiente: revisión manual del propietario.
 
 **«Add beat» con renombrado (2026-11-17, [E52](EVIDENCIA.md)):** si el nombre del archivo supera 15 caracteres se edita antes de subir (archivo original intacto, bloqueo hasta que sea válido, sin pasos extra si ya lo es). CI `43988761486` PASS sobre `6f8c3b3`. Pendiente: revisión manual del propietario en navegador.

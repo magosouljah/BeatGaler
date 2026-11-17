@@ -64,7 +64,7 @@ try {
   // E) cancelar: nada cambia
   const e1 = await drop('cancelado.mp3', b64, cardSel); await sleep(300); const dE = await dialog(); await press('Cancel'); await sleep(500);
   const afterCancel = await beatInfo(EDITED);
-  rec('DROP-E-CARD-CANCEL', e1.marked === 1 && dE.title === 'Replace MP3?' && afterCancel && afterCancel.fileId === before.fileId && afterCancel.version === before.version && (await total()) === count0 ? 'PASS' : 'FAIL', { e1, dialog: dE, before, afterCancel });
+  rec('DROP-E-CARD-CANCEL', dE.title === 'Replace MP3?' && afterCancel && afterCancel.fileId === before.fileId && afterCancel.version === before.version && (await total()) === count0 ? 'PASS' : 'FAIL', { e1, dialog: dE, before, afterCancel });
   // F) MP3 sobre la tarjeta: confirma → MISMO beat, nuevo MASTER, metadatos intactos, ningún beat nuevo
   const f1 = await drop('reemplazo.mp3', b64, cardSel); await sleep(300); const dF = await dialog(); await press('Replace');
   const okF = await waitFor(async () => /MP3 reemplazado/.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'replace MP3' }).catch(async (er) => `ERR ${er.message} :: ${await notice()}`);

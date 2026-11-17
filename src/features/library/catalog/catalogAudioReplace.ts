@@ -18,6 +18,8 @@ export interface ReplaceAudioInput {
   beatId: string;
   file: File;
   onProgress?: (text: string) => void;
+  /** Se llama justo después de confirmar (antes de subir): la UI marca la tarjeta como ocupada. */
+  onStart?: () => void;
 }
 export type ReplaceAudioResult =
   | { status: "committed"; kind: DroppedAudioKind; beatId: string; replacedExisting: boolean }
@@ -25,7 +27,7 @@ export type ReplaceAudioResult =
   | { status: "unsupported" }
   | { status: "failed"; message: string };
 
-export async function replaceBeatAudio({ mutations, confirm, beatId, file, onProgress }: ReplaceAudioInput): Promise<ReplaceAudioResult> {
+export async function replaceBeatAudio({ mutations, confirm, beatId, file, onProgress, onStart }: ReplaceAudioInput): Promise<ReplaceAudioResult> {
   const kind = classifyDroppedAudio(file);
   if (!kind) return { status: "unsupported" };
   let detail;
@@ -42,6 +44,7 @@ export async function replaceBeatAudio({ mutations, confirm, beatId, file, onPro
     confirmLabel: replacing ? "Replace" : "Add",
   });
   if (!ok) return { status: "cancelled" };
+  onStart?.();
   const original = beatFromCatalogDetail(detail, null);
   try {
     const outcome = await mutations.replaceBeat({

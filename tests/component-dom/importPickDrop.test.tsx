@@ -11,7 +11,7 @@ vi.mock("../../src/platform", () => ({
 
 import AddBeatModal from "../../src/components/AddBeatModal";
 import { pickOneAudioFile, PICK_FOCUS_GRACE_MS } from "../../src/platform/webImport";
-import { pickDroppedAudio, useCatalogFileDrop } from "../../src/features/library/catalog/useCatalogFileDrop";
+import { useCatalogFileDrop } from "../../src/features/library/catalog/useCatalogFileDrop";
 import type { Beat } from "../../src/types";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -55,45 +55,65 @@ describe("pickOneAudioFile: carrera focus → change", () => {
   });
 });
 
-describe("pickDroppedAudio", () => {
-  it("un MP3/WAV es válido; varios o ninguno no", () => {
-    expect(pickDroppedAudio([mp3("x.mp3")])).toMatchObject({ kind: "ok" });
-    expect(pickDroppedAudio([new File([], "x.WAV")])).toMatchObject({ kind: "ok" });
-    expect(pickDroppedAudio([mp3("x.mp3"), mp3("y.mp3")]).kind).toBe("many");
-    expect(pickDroppedAudio([new File([], "x.txt", { type: "text/plain" })]).kind).toBe("none");
-    expect(pickDroppedAudio([]).kind).toBe("none");
+describe("useCatalogFileDrop (imagen/audio/archivo; la tarjeta decide el destino, el tipo la acción)", () => {
+  let root: Root; let host: HTMLDivElement; const onDrop = vi.fn();
+  const artworkEvents: Array<string | null> = []; const updateEvents: Array<string | null> = [];
+  const onA = (e: Event) => artworkEvents.push((e as CustomEvent).detail.active ? (e as CustomEvent).detail.beatId : null);
+  const onU = (e: Event) => updateEvents.push((e as CustomEvent).detail.active ? (e as CustomEvent).detail.beatId : null);
+  function Probe({ enabled }: { enabled: boolean }) { const a = useCatalogFileDrop({ enabled, onDrop }); return <><i data-active={String(a.active)} data-target={String(a.targetId)} data-kind={a.kind} /><div data-beat-card-id="b-7" data-card="b-7" id="card7"><div id="tags"><span id="inner">x</span></div></div></>; }
+  const ev = (type: string, files: File[], itemTypes: string[] = ["image/png"], target: EventTarget = window, extraTypes: string[] = []) => {
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "dataTransfer", { value: { types: ["Files", ...extraTypes], files, items: files.length ? itemTypes.map((t) => ({ kind: "file", type: t })) : itemTypes.map((t) => ({ kind: "file", type: t })), dropEffect: "none" } });
+    target.dispatchEvent(e); return e;
+  };
+  const state = (k: string) => host.querySelector("i")!.getAttribute(`data-${k}`);
+  beforeEach(() => { vi.clearAllMocks(); artworkEvents.length = 0; updateEvents.length = 0; window.addEventListener("beatgaler:artwork-drag", onA); window.addEventListener("beatgaler:beat-update-drag", onU); host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host); });
+  afterEach(() => { act(() => root.unmount()); host.remove(); window.removeEventListener("beatgaler:artwork-drag", onA); window.removeEventListener("beatgaler:beat-update-drag", onU); });
+  const inner = () => document.getElementById("inner")!;
+
+  it("imagen sobre CUALQUIER zona de la tarjeta (tags, hueco, texto) activa el indicador de PORTADA y nunca el de audio", () => {
+    act(() => { root.render(<Probe enabled />); });
+    for (const target of [inner(), document.getElementById("tags")!, document.getElementById("card7")!]) {
+      artworkEvents.length = 0; updateEvents.length = 0;
+      act(() => { ev("dragenter", [], ["image/png"], target); ev("dragover", [], ["image/png"], target); });
+      expect(artworkEvents.at(-1)).toBe("b-7"); expect(updateEvents.every((x) => x === null)).toBe(true); expect(state("kind")).toBe("image"); expect(state("target")).toBe("b-7");
+      act(() => { ev("dragleave", [], ["image/png"], target); }); expect(state("active")).toBe("false");
+    }
+  });
+  it("MP3/WAV/archivo sobre la tarjeta activa el indicador de reemplazo de audio (tarjeta), no el de portada", () => {
+    act(() => { root.render(<Probe enabled />); });
+    for (const t of ["audio/mpeg", "audio/wav", ""]) {
+      artworkEvents.length = 0; updateEvents.length = 0;
+      act(() => { ev("dragenter", [], [t], inner()); ev("dragover", [], [t], inner()); });
+      expect(updateEvents.at(-1)).toBe("b-7"); expect(artworkEvents.every((x) => x === null)).toBe(true);
+      act(() => { ev("dragleave", [], [t], inner()); });
+    }
+  });
+  it("fuera de una tarjeta: banner global (sin indicador de tarjeta); al pasar de la tarjeta al vacío los indicadores se apagan", () => {
+    act(() => { root.render(<Probe enabled />); });
+    act(() => { ev("dragenter", [], ["audio/mpeg"], inner()); ev("dragover", [], ["audio/mpeg"], inner()); }); expect(updateEvents.at(-1)).toBe("b-7");
+    act(() => { ev("dragover", [], ["audio/mpeg"], document.body); }); expect(updateEvents.at(-1)).toBeNull(); expect(state("target")).toBe("null"); expect(state("active")).toBe("true");
+  });
+  it("drop: entrega archivos, fuentes de imagen y el id de la tarjeta; apaga los indicadores; un drop fuera entrega null", () => {
+    act(() => { root.render(<Probe enabled />); });
+    const f = mp3("x.mp3");
+    act(() => { ev("dragenter", [f], ["audio/mpeg"], inner()); ev("dragover", [f], ["audio/mpeg"], inner()); const e = ev("drop", [f], ["audio/mpeg"], inner()); expect(e.defaultPrevented).toBe(true); });
+    expect(onDrop).toHaveBeenLastCalledWith(expect.objectContaining({ files: [f], targetBeatId: "b-7" })); expect(updateEvents.at(-1)).toBeNull(); expect(state("active")).toBe("false");
+    act(() => { ev("dragenter", [f], ["audio/mpeg"], document.body); ev("drop", [f], ["audio/mpeg"], document.body); });
+    expect(onDrop).toHaveBeenLastCalledWith(expect.objectContaining({ files: [f], targetBeatId: null }));
+  });
+  it("arrastres que no son de archivos/imagen se ignoran; con un modal abierto el drop se cancela pero no se procesa", () => {
+    act(() => { root.render(<Probe enabled />); });
+    const e = new Event("dragover", { cancelable: true }); Object.defineProperty(e, "dataTransfer", { value: { types: ["text/x-nothing"], files: [], items: [] } }); window.dispatchEvent(e); expect(e.defaultPrevented).toBe(false);
+    act(() => { root.render(<Probe enabled={false} />); });
+    act(() => { const d = ev("drop", [mp3("z.mp3")], ["audio/mpeg"], inner()); expect(d.defaultPrevented).toBe(true); }); expect(onDrop).not.toHaveBeenCalled();
   });
 });
 
-describe("useCatalogFileDrop + AddBeatModal(initialFile)", () => {
-  let root: Root; let host: HTMLDivElement; const onFiles = vi.fn();
-  function Probe({ enabled }: { enabled: boolean }) { const a = useCatalogFileDrop({ enabled, onFiles }); return <><i data-active={String(a.active)} data-target={String(a.targetId)} /><div data-card="b-7" id="card7"><span id="inner">x</span></div></>; }
-  const ev = (type: string, files: File[], types = ["Files"], target: EventTarget = window) => { const e = new Event(type, { bubbles: true, cancelable: true }); Object.defineProperty(e, "dataTransfer", { value: { types, files, dropEffect: "none" } }); target.dispatchEvent(e); return e; };
+describe("AddBeatModal(initialFile)", () => {
+  let root: Root; let host: HTMLDivElement;
   beforeEach(() => { vi.clearAllMocks(); host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host); });
   afterEach(() => { act(() => root.unmount()); host.remove(); });
-
-  it("arrastre de archivos activa el aviso; drop entrega los archivos y lo apaga; arrastres que no son archivos se ignoran", () => {
-    act(() => { root.render(<Probe enabled />); });
-    const state = () => host.querySelector("i")!.getAttribute("data-active");
-    act(() => { ev("dragenter", []); }); expect(state()).toBe("true");
-    act(() => { const e = ev("drop", [mp3("z.mp3")]); expect(e.defaultPrevented).toBe(true); }); expect(state()).toBe("false"); expect(onFiles).toHaveBeenCalledTimes(1);
-    act(() => { const e = ev("dragenter", [], ["text/plain"]); expect(e.defaultPrevented).toBe(false); }); expect(state()).toBe("false");
-  });
-  it("la tarjeta tiene prioridad: soltar sobre una BeatCard entrega su id; fuera de una tarjeta, null (beat nuevo)", () => {
-    act(() => { root.render(<Probe enabled />); });
-    const tgt = () => host.querySelector("i")!.getAttribute("data-target");
-    act(() => { ev("dragenter", [], ["Files"], document.getElementById("inner")!); ev("dragover", [], ["Files"], document.getElementById("inner")!); }); expect(tgt()).toBe("b-7");
-    act(() => { ev("dragover", [], ["Files"], document.body); }); expect(tgt()).toBe("null");
-    act(() => { ev("dragover", [], ["Files"], document.getElementById("inner")!); }); expect(tgt()).toBe("b-7");
-    const f = mp3("sobre-tarjeta.mp3");
-    act(() => { ev("drop", [f], ["Files"], document.getElementById("inner")!); }); expect(onFiles).toHaveBeenLastCalledWith([f], "b-7"); expect(tgt()).toBe("null");
-    act(() => { ev("dragenter", []); ev("drop", [f], ["Files"], document.body); }); expect(onFiles).toHaveBeenLastCalledWith([f], null);
-  });
-  it("con un modal abierto (enabled=false) el drop se ignora pero se cancela (el navegador no abre el archivo)", () => {
-    act(() => { root.render(<Probe enabled={false} />); });
-    act(() => { const e = ev("drop", [mp3("z.mp3")]); expect(e.defaultPrevented).toBe(true); }); expect(onFiles).not.toHaveBeenCalled();
-  });
-
   const candidate = (name: string) => { const beat = { id: `drop_${name}`, name: name.replace(/\.[^.]+$/, ""), mp3_path: name, tags: [] } as unknown as Beat; port.fromFile.mockReturnValue({ beat, hydrated: Promise.resolve(beat) }); port.fileForBeat.mockReturnValue(new File([], name)); return beat; };
   const mountModal = (file: File, onAdd = vi.fn(), onClose = vi.fn()) => { act(() => { root.render(<AddBeatModal onClose={onClose} onAdd={onAdd} existingBeats={[]} maxNameChars={50} initialFile={file} />); }); return { onAdd, onClose }; };
   it("archivo soltado con nombre válido: se importa por el mismo flujo (onAdd con el beat) y cierra", async () => {
