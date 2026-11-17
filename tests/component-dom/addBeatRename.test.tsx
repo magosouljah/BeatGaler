@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// «Add beat» (Web, catálogo nativo): si el nombre derivado del archivo supera 15 caracteres Unicode se pide editarlo ANTES de subir.
+// «Add beat» (Web, catálogo nativo): si el nombre derivado del archivo supera 50 caracteres Unicode se pide editarlo ANTES de subir.
 // El archivo original no se modifica; el nombre editado es el metadato del beat; sin subir hasta que sea válido; con nombre válido no hay pasos extra.
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -28,7 +28,7 @@ function candidateFor(fileName: string) {
   port.pickBeat.mockResolvedValue({ beat, hydrated: Promise.resolve(beat) });
   return { file, beat };
 }
-function mount(maxNameChars: number | null = 15) {
+function mount(maxNameChars: number | null = 50) {
   host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
   act(() => { root.render(<AddBeatModal onClose={onClose} onAdd={onAdd} onCandidateHydrated={hydrated} existingBeats={[]} maxNameChars={maxNameChars ?? undefined} />); });
 }
@@ -44,7 +44,7 @@ const confirmBtn = () => q("[data-testid='add-beat-confirm']") as HTMLButtonElem
 beforeEach(() => { vi.clearAllMocks(); });
 afterEach(() => { act(() => root.unmount()); host.remove(); });
 
-describe("Add beat: nombre ≤ 15 caracteres", () => {
+describe("Add beat: nombre ≤ 50 caracteres", () => {
   it("nombre válido: flujo actual sin pasos adicionales (se añade y cierra de inmediato)", async () => {
     const { beat } = candidateFor("Galer Beat.mp3");
     mount(); await pick();
@@ -52,29 +52,29 @@ describe("Add beat: nombre ≤ 15 caracteres", () => {
     expect(onAdd).toHaveBeenCalledTimes(1); expect(onAdd.mock.calls[0][0]).toEqual([beat]); expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("nombre > 15: paso de edición con el archivo original visible; no sube hasta que sea válido; Enter/clic confirma con el nombre editado y el archivo intacto", async () => {
-    const { beat, file } = candidateFor("Mi beat larguísimo de prueba v2.mp3");
+  it("nombre > 50: paso de edición con el archivo original visible; no sube hasta que sea válido; Enter/clic confirma con el nombre editado y el archivo intacto", async () => {
+    const { beat, file } = candidateFor("Mi beat larguísimo de prueba v2 con un título aún más extenso para superar el límite.mp3");
     mount(); await pick();
     expect(onAdd).not.toHaveBeenCalled(); expect(onClose).not.toHaveBeenCalled();
-    expect(q("[data-testid='add-beat-original-file']")!.textContent).toBe("Mi beat larguísimo de prueba v2.mp3");
-    expect((q("#add-beat-name") as HTMLInputElement).value).toBe("Mi beat larguísimo de prueba v2"); // prellenado, sin recortar
+    expect(q("[data-testid='add-beat-original-file']")!.textContent).toBe("Mi beat larguísimo de prueba v2 con un título aún más extenso para superar el límite.mp3");
+    expect((q("#add-beat-name") as HTMLInputElement).value).toBe("Mi beat larguísimo de prueba v2 con un título aún más extenso para superar el límite"); // prellenado, sin recortar
     expect(confirmBtn().disabled).toBe(true);
-    expect(q("[data-testid='add-beat-name-hint']")!.textContent).toMatch(/Máximo 15 caracteres \(tiene 31\)/);
-    type("Dieciséis chars!"); expect(confirmBtn().disabled).toBe(true); expect(q("[data-testid='add-beat-name-count']")!.textContent).toBe("16 / 15");
+    expect(q("[data-testid='add-beat-name-hint']")!.textContent).toMatch(/Máximo 50 caracteres \(tiene 84\)/);
+    type("ñ".repeat(51)); expect(confirmBtn().disabled).toBe(true); expect(q("[data-testid='add-beat-name-count']")!.textContent).toBe("51 / 50");
     type("   "); expect(confirmBtn().disabled).toBe(true); expect(q("[data-testid='add-beat-name-hint']")!.textContent).toMatch(/Escribe un nombre/);
-    type("  Quince chars 15 "); expect(confirmBtn().disabled).toBe(false); expect(q("[data-testid='add-beat-name-count']")!.textContent).toBe("15 / 15");
+    type("  " + "ñ".repeat(50) + " "); expect(confirmBtn().disabled).toBe(false); expect(q("[data-testid='add-beat-name-count']")!.textContent).toBe("50 / 50");
     await act(async () => { confirmBtn().click(); }); await flush();
     expect(onAdd).toHaveBeenCalledTimes(1);
     const [added] = onAdd.mock.calls[0][0] as Beat[];
-    expect(added.name).toBe("Quince chars 15"); // metadato editado y recortado solo en los bordes por el usuario
+    expect(added.name).toBe("ñ".repeat(50)); // metadato editado y recortado solo en los bordes por el usuario
     expect([added.id, added.mp3_path, added.folder_path]).toEqual([beat.id, beat.mp3_path, beat.folder_path]); // identidad y archivo originales intactos
-    expect(port.fileForBeat(beat.id)).toBe(file); expect(file.name).toBe("Mi beat larguísimo de prueba v2.mp3");
+    expect(port.fileForBeat(beat.id)).toBe(file); expect(file.name).toBe("Mi beat larguísimo de prueba v2 con un título aún más extenso para superar el límite.mp3");
     expect(onClose).toHaveBeenCalledTimes(1); expect(port.releaseBeat).not.toHaveBeenCalled();
     expect(hydrated).toHaveBeenCalledTimes(1);
   });
 
   it("Enter con nombre inválido no sube; con válido sí", async () => {
-    candidateFor("Un nombre de archivo demasiado largo.mp3");
+    candidateFor("Un nombre de archivo que es demasiado largo para caber en cincuenta caracteres.mp3");
     mount(); await pick();
     const input = q("#add-beat-name") as HTMLInputElement;
     act(() => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
@@ -84,24 +84,32 @@ describe("Add beat: nombre ≤ 15 caracteres", () => {
   });
 
   it("cancelar o cerrar libera el archivo elegido, no sube nada y no modifica el original", async () => {
-    candidateFor("Un nombre de archivo demasiado largo.mp3");
+    candidateFor("Un nombre de archivo que es demasiado largo para caber en cincuenta caracteres.mp3");
     mount(); await pick();
     const cancel = Array.from(host.querySelectorAll("button")).find((b) => b.textContent === "Cancel")!;
     act(() => { cancel.click(); });
-    expect(onAdd).not.toHaveBeenCalled(); expect(onClose).toHaveBeenCalledTimes(1); expect(port.releaseBeat).toHaveBeenCalledWith("local_file_Un nombre de archivo demasiado largo.mp3");
+    expect(onAdd).not.toHaveBeenCalled(); expect(onClose).toHaveBeenCalledTimes(1); expect(port.releaseBeat).toHaveBeenCalledWith("local_file_Un nombre de archivo que es demasiado largo para caber en cincuenta caracteres.mp3");
   });
 
-  it("cuenta code points Unicode: 15 emojis son válidos y 16 no; un nombre con 15 acentos también", async () => {
-    candidateFor("Un nombre de archivo demasiado largo.mp3");
+  it("cuenta code points Unicode: 50 emojis son válidos y 51 no; un nombre con 50 acentos también", async () => {
+    candidateFor("Un nombre de archivo que es demasiado largo para caber en cincuenta caracteres.mp3");
     mount(); await pick();
-    type("🎵".repeat(16)); expect(confirmBtn().disabled).toBe(true); expect(q("[data-testid='add-beat-name-count']")!.textContent).toBe("16 / 15");
-    type("🎵".repeat(15)); expect(confirmBtn().disabled).toBe(false);
-    type("é".repeat(15)); expect(confirmBtn().disabled).toBe(false);
+    type("🎵".repeat(51)); expect(confirmBtn().disabled).toBe(true); expect(q("[data-testid='add-beat-name-count']")!.textContent).toBe("51 / 50");
+    type("🎵".repeat(50)); expect(confirmBtn().disabled).toBe(false);
+    type("é".repeat(50)); expect(confirmBtn().disabled).toBe(false);
   });
 
   it("sin maxNameChars (flujo LEGACY) un nombre largo pasa tal cual, sin paso de edición", async () => {
-    const { beat } = candidateFor("Un nombre de archivo demasiado largo.mp3");
+    const { beat } = candidateFor("Un nombre de archivo que es demasiado largo para caber en cincuenta caracteres.mp3");
     mount(null); await pick();
     expect(q("#add-beat-name")).toBeNull(); expect(onAdd.mock.calls[0][0]).toEqual([beat]);
+  });
+});
+
+import { importFailureNotice } from "../../src/features/library/catalog/useCatalogGalleryScope";
+describe("Add beat: aviso de fallo de importación", () => {
+  it("sin transporte configurado (TRANSFER_UNAVAILABLE) lo dice claro y confirma que no se guardó; otros errores conservan su mensaje", () => {
+    expect(importFailureNotice("Mi beat", { code: "TRANSFER_UNAVAILABLE", message: "no transfer gateway is configured" })).toMatch(/Mi beat.*no está disponible.*no se guardó/s);
+    expect(importFailureNotice("Mi beat", new Error("El nombre admite como máximo 50 caracteres"))).toBe("No se pudo importar «Mi beat»: El nombre admite como máximo 50 caracteres");
   });
 });

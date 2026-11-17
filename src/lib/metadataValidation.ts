@@ -98,7 +98,7 @@ export function normalizeBeatMetadata<T extends { tags: string[]; bpm: string; k
 }
 
 /** Máximo de caracteres (code points) del nombre de un beat. Se rechaza, nunca se recorta: espejo exacto de cloud-server/catalog/metadata-rules.js. */
-export const BEAT_NAME_MAX = 15;
+export const BEAT_NAME_MAX = 50;
 
 export function beatNameLength(value: string): number {
   return Array.from(value).length;

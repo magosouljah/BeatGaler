@@ -192,18 +192,18 @@ describe("catalogInteractionStore (V07-A)", () => {
     expect([h2.store.getSnapshot().selection.status, h2.store.getSnapshot().accountId, h2.store.getSnapshot().rename]).toEqual(["none", "acc-2", null]);
     expect(h2.server.selection(selId)?.status).toBe("RELEASED");
   });
-  it("editor: nombre de más de 15 caracteres → error claro SIN petición, el texto del usuario se conserva (nunca se recorta); con 15 guarda", async () => {
+  it("editor: nombre de más de 50 caracteres → error claro SIN petición, el texto del usuario se conserva (nunca se recorta); con 50 guarda", async () => {
     const h = harness({ beats: fakeBeats(5) });
     const b = h.server.beats.get("g1")!;
     h.store.openEditor({ id: "g1", version: String(b.version), etag: `W/"2-1"`, name: b.name, bpm: b.bpm, key: b.key, tags: b.tags, rating: b.rating, color: "", color2: "" }, null);
-    h.store.setDraft({ name: "Dieciséis chars!" });
+    h.store.setDraft({ name: "ñ".repeat(51) });
     await h.store.saveEditor();
     let e = h.store.getSnapshot().editor!;
-    expect([e.status, e.draft.name, e.error]).toEqual(["error", "Dieciséis chars!", expect.stringContaining("15 caracteres")]);
+    expect([e.status, e.draft.name, e.error]).toEqual(["error", "ñ".repeat(51), expect.stringContaining("50 caracteres")]);
     expect(h.server.beats.get("g1")!.name).toBe("Beat 1");
-    h.store.setDraft({ name: "Quince chars 15" });
+    h.store.setDraft({ name: "ñ".repeat(50) });
     await h.store.saveEditor();
     e = h.store.getSnapshot().editor!;
-    expect([e.status, h.server.beats.get("g1")!.name]).toEqual(["saved", "Quince chars 15"]);
+    expect([e.status, h.server.beats.get("g1")!.name]).toEqual(["saved", "ñ".repeat(50)]);
   });
 });

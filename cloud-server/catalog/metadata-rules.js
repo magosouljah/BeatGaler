@@ -7,8 +7,8 @@
 
 const TAG_MAX = 40;
 const TAGS_MAX = 30;
-// Nombre de beat: máximo 15 caracteres (code points). Se rechaza con detalle; nunca se recorta. Espejo de src/lib/metadataValidation.ts (BEAT_NAME_MAX).
-const NAME_MAX_CHARS = 15;
+// Nombre de beat: máximo 50 caracteres (code points). Se rechaza con detalle; nunca se recorta. Espejo de src/lib/metadataValidation.ts (BEAT_NAME_MAX).
+const NAME_MAX_CHARS = 50;
 const COLOR_MAX = 64;
 
 function normalizeTag(value) { return String(value).trim().toLowerCase().replace(/\s+/g, ' '); }

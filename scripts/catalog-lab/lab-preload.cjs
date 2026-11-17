@@ -101,3 +101,4 @@ async function startWorkerAndSeed(pool, transport) {
   console.log(`[lab] seed done N=${N} in ${Date.now() - t0}ms; fake messages=${server.messages().length}`);
 }
 console.log('[lab] preload active: fake gateway injected (Bot20 fake), in-process worker, seeding on start');
+console.log('[lab] gateway=FAKE ACTIVO en media/purge/transport/worker (la línea "[catalog] ... gateway=none" del servidor se refiere al gateway real por entorno, apagado a propósito en el LAB; importar/reproducir/descargar usan el proveedor FAKE en memoria).');

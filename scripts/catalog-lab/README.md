@@ -23,3 +23,10 @@ Casos `--only` de V09: `ENV GEOM SCROLL FOCUS QUERY INTERACTION MEDIA RESOURCES 
 Variables opcionales: `LAB_PG_PORT`, `LAB_CLOUD_PORT` (4140), `LAB_WEB_PORT` (1440), `LAB_WEB_LEGACY_PORT` (1441), `LAB_STATE_DIR`, `LAB_OUT_DIR`, `LAB_SEED_N`, `LAB_SYNTH_AUDIO=1` (MP3 sintético en vez de `tmp/gallery-test/*.mp3`).
 
 Notas: el estado del gateway fake es en memoria → no reinicies el Cloud con la DB sembrada (usa `down` + `up`). Requiere WSL Ubuntu con PostgreSQL 18 (`/usr/lib/postgresql/18/bin`). La campaña V09 completa asume N=300 (`bgPage=100` se omite si N ≤ 120). Para V10 usa máquina exclusiva: la medición de frames compite con el resto de procesos.
+
+## Sondas de navegador (Chrome aislado del LAB, no el del propietario)
+
+- `node scripts/catalog-lab/probe-add-beat.mjs`: flujo real de «Add beat» (nombre válido, nombre > 50 con paso de renombrado, guardado en PostgreSQL por la API, reproducción desde el proveedor FAKE). El selector nativo de archivos se sustituye por un `File` inyectado.
+- `node scripts/catalog-lab/probe-chrome-geometry.mjs`: geometría de la barra superior (Tag Bar, sombra, guía y toolbar) a 1440/1920/1024/390 px.
+
+Nota: la línea `[catalog] ... gateway=none` del Cloud se refiere al gateway real por entorno (apagado en el LAB). En el LAB el gateway **FAKE** va inyectado por `lab-preload.cjs` (ver `[lab] gateway=FAKE ACTIVO` en `cloud.log`).

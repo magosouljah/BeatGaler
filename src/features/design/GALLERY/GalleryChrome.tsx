@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import StudioToolbar from "../MASTER/StudioToolbarCandidate";
 import TagNavigation from "./TagNavigation";
 import { clearUploadPreviewCache } from "../../library/libraryPresentationCache";
@@ -21,7 +21,19 @@ export default function GalleryChrome({scope}: {scope: Record<string, any>}) {
     setHintSeen(true);
     try { sessionStorage.setItem("beatgaler:tags-hint-seen", "yes"); } catch { /* optional */ }
   }, [visible]);
-  return <div className="bg-gallery-chrome lab-gallery-page" data-tags-open={visible ? "true" : "false"}>
+  // La banda superior es fija y ocupa todo el ancho disponible: se excluye solo la barra de desplazamiento del scroller de la galería.
+  const chromeRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const chrome = chromeRef.current; if (!chrome) return;
+    const scroller = document.querySelector<HTMLElement>('[data-library-scroll="true"]');
+    const apply = () => { chrome.style.setProperty("--gallery-scrollbar", `${scroller ? Math.max(0, scroller.offsetWidth - scroller.clientWidth) : 0}px`); };
+    apply();
+    window.addEventListener("resize", apply);
+    const observer = scroller && typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
+    if (scroller && observer) observer.observe(scroller);
+    return () => { window.removeEventListener("resize", apply); observer?.disconnect(); };
+  }, []);
+  return <div ref={chromeRef} className="bg-gallery-chrome lab-gallery-page" data-tags-open={visible ? "true" : "false"}>
     <div className="lab-gallery-top-stack" data-tags-open={visible ? "true" : "false"} data-tag-variant="full-black">
       <TagNavigation visible={visible} hasActiveFilters={active} onVisibilityChange={setOpen}
         tags={allTags} filters={filters} onCycleTag={(tag, altKey) => handleTagClick(tag, {altKey})}

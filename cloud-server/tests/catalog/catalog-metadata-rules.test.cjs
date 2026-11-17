@@ -37,19 +37,19 @@ test('validatePatch: solo campos presentes, rechazo con detalle (sin cleanTags),
   assert.equal(rules.validatePatch(null).ok, false); assert.equal(rules.validatePatch([]).ok, false);
 });
 
-test('nombre de beat: máximo 15 code points, rechazo con detalle (nunca recorte), paridad con el TS del cliente', async () => {
+test('nombre de beat: máximo 50 code points, rechazo con detalle (nunca recorte), paridad con el TS del cliente', async () => {
   const ts = await import(TS);
-  const names = ['', 'a', 'Quince chars 15', 'Dieciséis chars!', ' '.repeat(15), '🎵'.repeat(15), '🎵'.repeat(16), 'é'.repeat(15), 'é'.repeat(16), 'ñ'.repeat(20000)];
+  const names = ['', 'a', 'ñ'.repeat(50), 'ñ'.repeat(51), ' '.repeat(50), '🎵'.repeat(50), '🎵'.repeat(51), 'é'.repeat(50), 'é'.repeat(51), 'ñ'.repeat(20000)];
   for (const n of names) {
     const mine = rules.validatePatch({ name: n }); const theirs = ts.validateBeatName(n);
     if (n.trim()) assert.equal(mine.ok, theirs.valid, `paridad ok/valid para ${JSON.stringify(n.slice(0, 20))}…(${Array.from(n).length})`);
   }
   assert.equal(rules.NAME_MAX_CHARS, ts.BEAT_NAME_MAX);
-  assert.deepEqual(rules.validatePatch({ name: 'Quince chars 15' }).set, { name: 'Quince chars 15' });
-  const long = rules.validatePatch({ name: 'Dieciséis chars!' });
+  assert.deepEqual(rules.validatePatch({ name: 'ñ'.repeat(50) }).set, { name: 'ñ'.repeat(50) });
+  const long = rules.validatePatch({ name: 'ñ'.repeat(51) });
   assert.deepEqual([long.ok, long.errors[0].field, long.set.name], [false, 'name', undefined], 'rechazado, no recortado ni escrito');
-  assert.match(long.errors[0].reason, /exceeds 15 characters \(has 16\)/);
-  assert.equal(rules.validatePatch({ name: '🎵'.repeat(15) }).ok, true);
-  assert.equal(rules.validatePatch({ name: '🎵'.repeat(16) }).ok, false);
-  assert.match(ts.validateBeatName('Dieciséis chars!').reason, /15 caracteres/);
+  assert.match(long.errors[0].reason, /exceeds 50 characters \(has 51\)/);
+  assert.equal(rules.validatePatch({ name: '🎵'.repeat(50) }).ok, true);
+  assert.equal(rules.validatePatch({ name: '🎵'.repeat(51) }).ok, false);
+  assert.match(ts.validateBeatName('ñ'.repeat(51)).reason, /50 caracteres/);
 });

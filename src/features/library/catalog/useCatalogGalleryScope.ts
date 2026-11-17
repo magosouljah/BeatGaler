@@ -23,6 +23,12 @@ export const SEARCH_DEBOUNCE_MS = 250;
 export const KNOWN_BEATS_MAX = 512; // tarjetas conocidas fuera de ventana (Playbar/cola): acotado, nunca la biblioteca entera
 export const BULK_TAGS_MODE_NOTICE = "En el catálogo, «añadir» o «quitar» tags en lote aún no está disponible: usa «reemplazar».";
 export const IMPORT_NO_FILE_NOTICE = "No se encontró el archivo del beat a importar.";
+/** Mensaje al usuario cuando una importación falla: sin transporte configurado se dice claramente, no con texto técnico del servidor. */
+export function importFailureNotice(name: string, error: unknown): string {
+  const e = error as { code?: unknown; detail?: { reason?: unknown }; message?: unknown } | null;
+  if (e && e.code === "TRANSFER_UNAVAILABLE") return `No se pudo importar «${name}»: el servicio de almacenamiento de archivos no está disponible en este entorno. El beat no se guardó.`;
+  return `No se pudo importar «${name}»: ${String(e?.message ?? error)}`;
+}
 
 export interface CatalogGalleryScopeOptions {
   services: CatalogServices;
@@ -265,7 +271,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
       setNotice(`Importando «${beat.name}»…`);
       void mutations.importBeat({ beat, files: { master: file }, onProgress: (p) => setNotice(`Importando «${beat.name}»: ${p.stage} ${Math.round((p.uploadedBytes / Math.max(1, p.totalBytes)) * 100)}%`) })
         .then((o) => { setNotice(o.status === "committed" ? `«${beat.name}» importado.` : `Importación de «${beat.name}»: ${o.status}.`); refreshAfterMutation(); })
-        .catch((e) => setNotice(`No se pudo importar «${beat.name}»: ${String(e?.message ?? e)}`));
+        .catch((e) => setNotice(importFailureNotice(beat.name, e)));
     }
   }, [mutations, refreshAfterMutation]);
 

@@ -56,9 +56,9 @@ test('backoff C8: exponencial con jitter, tope 15 min, Retry-After mayor manda; 
   assert.deepEqual(o.limits, { RESERVATION_TTL_MS: 900000, RESERVATION_MAX_MS: 86400000, JOB_LEASE_MS: 60000, JOB_CLAIM_MAX: 10, JOB_BACKOFF_MAX_MS: 900000, JOB_TRANSIENT_FAILURES_TO_BLOCK: 8, PARTS_MAX: 64 });
 });
 
-test('IMPORT/REPLACE: metadata.name de más de 15 caracteres → INPUT_INVALID (no se recorta); 15 se acepta tal cual', () => {
+test('IMPORT/REPLACE: metadata.name de más de 50 caracteres → INPUT_INVALID (no se recorta); 50 se acepta tal cual', () => {
   const master = { partKey: 'm0', slotKey: 'MASTER', role: 'MASTER', partIndex: 0, size: 10, sha256: 'a'.repeat(64), filename: 'beat.mp3', mime: 'audio/mpeg' };
-  assert.throws(() => ops.validateIntent({ kind: 'IMPORT', parts: [master], metadata: { name: 'Dieciséis chars!' } }), (e) => e.code === 'INPUT_INVALID');
-  const ok = ops.validateIntent({ kind: 'IMPORT', parts: [master], metadata: { name: 'Quince chars 15' } });
-  assert.equal(ok.metadata.name, 'Quince chars 15');
+  assert.throws(() => ops.validateIntent({ kind: 'IMPORT', parts: [master], metadata: { name: 'ñ'.repeat(51) } }), (e) => e.code === 'INPUT_INVALID');
+  const ok = ops.validateIntent({ kind: 'IMPORT', parts: [master], metadata: { name: 'ñ'.repeat(50) } });
+  assert.equal(ok.metadata.name, 'ñ'.repeat(50));
 });
