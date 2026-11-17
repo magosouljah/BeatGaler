@@ -55,6 +55,8 @@
   transition:opacity var(--lab-fast) ease;
 }
 .studio-search.is-open input{opacity:1;pointer-events:auto}
+/* La X nativa de limpiar la búsqueda es interactiva: mano. */
+.studio-search input::-webkit-search-cancel-button{cursor:pointer}
 .studio-search input::placeholder{color:color-mix(in srgb,var(--studio-ink) 55%,transparent)}
 /* The laboratory's generic input focus styles must not draw a rectangle in a glass pill. */
 .lab-root .studio-candidate .studio-search input:focus,

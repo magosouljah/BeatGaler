@@ -1264,6 +1264,16 @@
           "network": "loopback"
         },
         {
+          "id": "t16-ui-polish",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/uiPolish.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
           "id": "t16-catalog-composition",
           "cmd": [
             "node",

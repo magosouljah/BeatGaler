@@ -78,7 +78,7 @@ function paintGalleryBackdrop(canvas:HTMLCanvasElement,host:HTMLElement,w:number
   const stage=host.getBoundingClientRect();
   ctx.fillStyle="#0c0c0c";ctx.fillRect(0,0,w,h);
   // Only same-origin local Gallery covers; never capture other apps or windows.
-  document.querySelectorAll<HTMLImageElement>('.lab-gallery-grid [data-beat-artwork-id] img:not([alt=""])').forEach(img=>{
+  document.querySelectorAll<HTMLImageElement>('.lab-gallery-grid [data-beat-artwork-id] img:not([alt=""]),.bg-catalog-track [data-beat-artwork-id] img:not([alt=""])').forEach(img=>{
     if(!img.complete||!img.naturalWidth)return;
     const url=new URL(img.src,location.href);
     if(url.origin!==location.origin && url.protocol!=="data:" && url.protocol!=="blob:")return;
@@ -126,6 +126,7 @@ export default function StudioToolbarCandidate({
   const animate=useRef<()=>void>(()=>{});
   const refreshGallery=useRef<()=>void>(()=>{});
   const searchOpenRef=useRef(false);
+  const searchTextRef=useRef("");
   const [searchOpen,setSearchOpen]=useState(false);
   const [search,setSearch]=useState("");
   const [selecting,setSelecting]=useState(false);
@@ -136,6 +137,8 @@ export default function StudioToolbarCandidate({
   const [message,setMessage]=useState("");
   const searchValue=gallery&&controlledSearch!==undefined?controlledSearch:search;
   const selectingValue=gallery&&controlledSelecting!==undefined?controlledSelecting:selecting;
+  searchTextRef.current=searchValue;
+  // Un filtro de búsqueda activo (p. ej. restaurado desde la URL) mantiene el buscador expandido.
   const sortValue=gallery&&controlledSort!==undefined?controlledSort:sort.toLowerCase();
   searchOpenRef.current=searchOpen;
 
@@ -205,8 +208,10 @@ export default function StudioToolbarCandidate({
     suppressCapturedClick.current.delete(index);
     action();
   };
+  // Con texto de búsqueda el buscador NO se cierra (foco, menús, Select, Escape): solo al quedar vacío el filtro.
+  const closeSearchIfEmpty=()=>{if(!searchTextRef.current.trim())setSearchOpen(false);};
   const openMenu=(target:"sort"|"profile")=>{
-    setSearchOpen(false);
+    closeSearchIfEmpty();
     if(menu===target){setMenu(null);return;}
     setMenu(target);
     requestAnimationFrame(()=>{
@@ -233,6 +238,7 @@ export default function StudioToolbarCandidate({
     query.addEventListener("change",update);
     return()=>query.removeEventListener("change",update);
   },[]);
+  useEffect(()=>{if(searchValue.trim()&&!searchOpen)setSearchOpen(true);},[searchValue]);// eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{
     if(searchOpen)input.current?.focus({preventScroll:true});
     morphSprings.current.search.target=searchOpen
@@ -241,11 +247,11 @@ export default function StudioToolbarCandidate({
   },[searchOpen]);
   useEffect(()=>{morphSprings.current.select.target=selectingValue?44:78;animate.current();},[selectingValue]);
   useEffect(()=>{
-    const outside=(e:PointerEvent)=>{if(!toolbar.current?.contains(e.target as Node)){setMenu(null);setSearchOpen(false);}};
+    const outside=(e:PointerEvent)=>{if(!toolbar.current?.contains(e.target as Node)){setMenu(null);closeSearchIfEmpty();}};
     const escape=(e:KeyboardEvent)=>{
       if(e.key!=="Escape")return;
       if(menu==="sort"||menu==="profile")closeMenu(menu);
-      else setSearchOpen(false);
+      else closeSearchIfEmpty();
     };
     document.addEventListener("pointerdown",outside);document.addEventListener("keydown",escape);
     return()=>{document.removeEventListener("pointerdown",outside);document.removeEventListener("keydown",escape);};
@@ -470,7 +476,7 @@ export default function StudioToolbarCandidate({
               tabIndex={searchOpen?0:-1} value={searchValue} onChange={e=>{setSearch(e.target.value);onSearchChange?.(e.target.value);}}/>
             <button type="button" aria-label={searchOpen?"Close search":"Search beats"}
               aria-expanded={searchOpen}
-              onClick={activate(0,()=>{setMenu(null);setSearchOpen(v=>!v);})}
+              onClick={activate(0,()=>{setMenu(null);setSearchOpen(v=>(v&&searchTextRef.current.trim()?true:!v));if(searchTextRef.current.trim())input.current?.focus({preventScroll:true});})}
               {...handlers(0)}><Glyph kind="search"/></button>
           </div>
         </div>
@@ -484,7 +490,7 @@ export default function StudioToolbarCandidate({
           className={"studio-lens studio-select"+(selectingValue?" is-selecting":"")}>
           <button type="button" aria-pressed={selectingValue}
             aria-label={selectingValue?"Cancel selection":"Select beats"}
-            onClick={activate(2,()=>{setSearchOpen(false);setMenu(null);if(gallery)onToggleSelect?.();else setSelecting(v=>!v);})}
+            onClick={activate(2,()=>{closeSearchIfEmpty();setMenu(null);if(gallery)onToggleSelect?.();else setSelecting(v=>!v);})}
             {...handlers(2)}>
             <span className="studio-select-label">Select</span>
             <span className="studio-select-x"><Glyph kind="close"/></span>

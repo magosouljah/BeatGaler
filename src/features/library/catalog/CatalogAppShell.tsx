@@ -24,6 +24,7 @@ import type { CatalogServices } from "./catalogLibraryProvider";
 import { useCatalogGalleryScope } from "./useCatalogGalleryScope";
 import { useState } from "react";
 import { appAlert } from "../../../lib/dialog";
+import FloatingNotice from "../../../components/FloatingNotice";
 import { useCatalogFileDrop } from "./useCatalogFileDrop";
 import { routeDrop } from "./catalogDropRouting";
 
@@ -114,7 +115,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
       <div ref={scrollerRef} className="lab-gallery-main" data-library-scroll="true" aria-busy={scope.loading}
         style={{ flex: 1, position: "relative", overflowY: "auto", paddingBottom: currentBeat ? 140 : 90 }}>
         <div className="bg-catalog-shell-status" role="status" aria-live="polite" data-selection-count={selectedCount} data-selection-status={interaction.selection.status} data-playback-status={playback.status} data-store-status={snapshot.status}>
-          {notice ? <p className="bg-catalog-notice">{notice}<button type="button" className="bg-button bg-button--ghost" aria-label="Cerrar aviso" onClick={scope.dismissNotice}>×</button></p> : null}
+          {/* Los avisos son flotantes (FloatingNotice, fixed): no ocupan espacio aquí ni desplazan la Gallery. */}
         </div>
         <div className="bg-catalog-grid-host" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut} onPointerDown={tagPeek.onPointerDown} onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}>
           <CatalogVirtualGallery store={services.store} scrollerRef={scrollerRef} tenantKey={tenantKey} renderCard={renderCard} viewportHeightFallback={viewportHeightFallback}
@@ -161,6 +162,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           onDetail={(b) => setDrawer({ beat: b, mode: "detail" })} onEdit={(b) => { if (!scope.rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}
           onDelete={scope.deleteBeat} onAddToQueue={scope.addToQueue} />
       )}
+      <FloatingNotice notice={notice} onDismiss={scope.dismissNotice} lifted={Boolean(currentBeat)} />
       <BeatTagPeekLayer peek={tagPeek.peek} />
     </div>
   );

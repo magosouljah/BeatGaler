@@ -387,3 +387,7 @@
 @media(max-width:750px){.lab-gallery-page{--gallery-grid-columns:3;--gallery-grid-column-gap:15px;--gallery-grid-row-gap:24px;}}
 @media(max-width:590px){.lab-gallery-page{--gallery-grid-columns:2;--gallery-grid-column-gap:13px;--gallery-grid-row-gap:22px;}}
 @media(max-width:359px){.lab-gallery-page{--gallery-grid-columns:1;--gallery-toolbar-right:var(--lab-space-4);}}
+
+/* Tags interactivos de la barra superior (All, tags en cualquier estado: idle, hover, incluido, excluido, foco): mano. */
+.lab-gallery-page .lab-gallery-tag-bar .lab-gallery-tag,
+.lab-gallery-page .lab-gallery-tag-bar .lab-gallery-tag * { cursor: pointer; }
