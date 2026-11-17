@@ -1417,6 +1417,28 @@
           "network": "deny"
         },
         {
+          "id": "t19-catalog-backup-infra",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-backup-infra.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "g3-preflight",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/g3-preflight.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
           "id": "t09-catalog-operations",
           "cmd": [
             "node",

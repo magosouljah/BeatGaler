@@ -144,6 +144,35 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
   }
 
   // ---------- restore (DB aislada, vacía, mismas migraciones, backup posterior a la activación) ----------
+  // ---- postura de seguridad de un restore (común al restore NDJSON y a un `pg_restore` físico) ----
+  // Época+1 y restore_hold en TODAS las bibliotecas, capacidades/concesiones revocadas, leases soltados y corrida HELD: nadie reclama jobs ni sirve medios
+  // hasta reconciliar contra el journal externo y el proveedor. Sin esto una base restaurada con pg_restore sería utilizable con datos posteriores al backup.
+  async function applyRestorePosture(q, { restoreId, backupId, manifestSha256, takenAt }) {
+    const bumped = (await q('UPDATE catalog_libraries SET restore_hold = true, authority_epoch = authority_epoch + 1, updated_at = now()')).rowCount;
+    await q("UPDATE catalog_transfer_capabilities SET status = 'REVOKED', resolved_at = now(), last_error = 'RESTORE' WHERE status IN ('ISSUED', 'REDEEMED')");
+    await q("UPDATE catalog_media_grants SET status = 'REVOKED' WHERE status = 'ACTIVE'");
+    await q("UPDATE catalog_jobs SET state = 'QUEUED', lease_owner = NULL, lease_until = NULL, next_attempt_at = now() WHERE state = 'LEASED'");
+    await q(`INSERT INTO catalog_restore_runs(restore_id, backup_id, manifest_sha256, source_taken_at, status, libraries_epoch_bumped) VALUES ($1, $2, $3, $4, 'HELD', $5)`, [restoreId, backupId, manifestSha256, takenAt, bumped]);
+    return bumped;
+  }
+  // Una base restaurada con `pg_restore` (copia física, `scripts/backup/pg-restore.sh`) se «adopta» aquí ANTES de abrirla al tráfico: exige la activación nativa
+  // (STOP-DATA si el backup es anterior), aplica la postura HELD y ANALYZE. Idempotente: si ya hay una corrida abierta de ese backup devuelve ALREADY_ADOPTED sin subir otra época.
+  async function adoptRestoredDatabase({ backupId, manifestSha256, takenAt, restoreId = `rs-${randomUUID()}` } = {}) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(backupId || ''))) throw new BackupError('BACKUP_ID_INVALID', 'invalid backup id');
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const q = (t, p) => client.query(t, p);
+      if (!(await q('SELECT 1 FROM catalog_native_activation LIMIT 1')).rows.length) throw new BackupError('RESTORE_BEFORE_ACTIVATION', 'STOP-DATA: the restored database has no native activation record', { stop: 'STOP-DATA' });
+      const dup = (await q("SELECT 1 FROM catalog_restore_runs WHERE restore_id = $1 OR (backup_id = $2 AND status <> 'RECONCILED')", [restoreId, backupId])).rows.length; // una segunda adopción del mismo backup no vuelve a subir la época
+      if (dup) { await client.query('ROLLBACK'); return { restoreId, status: 'ALREADY_ADOPTED' }; }
+      const bumped = await applyRestorePosture(q, { restoreId, backupId, manifestSha256: manifestSha256 || '', takenAt: takenAt || new Date().toISOString() });
+      await q('COMMIT');
+      try { for (const t of await discoverTables((x, p) => client.query(x, p))) await client.query(`ANALYZE ${qi(t)}`); } catch (error) { log('catalog-restore-analyze-failed', { code: error && error.code }); }
+      return { restoreId, status: 'HELD', librariesEpochBumped: bumped };
+    } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; } finally { client.release(); }
+  }
+
   async function restoreBackup({ store, backupId, restoreId = `rs-${randomUUID()}` } = {}) {
     const t0 = Date.now();
     const v = await verifyBackup({ store, backupId }); // nada se toca en el destino si el backup no verifica
@@ -176,11 +205,7 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
       await q('SET CONSTRAINTS ALL IMMEDIATE'); // las FKs diferidas se validan aquí (y evitan eventos pendientes que impiden el ALTER)
       for (const t of order) await q(`ALTER TABLE ${qi(t)} ENABLE TRIGGER USER`);
       // ---- postura de seguridad del restore ----
-      const bumped = (await q('UPDATE catalog_libraries SET restore_hold = true, authority_epoch = authority_epoch + 1, updated_at = now()')).rowCount;
-      await q("UPDATE catalog_transfer_capabilities SET status = 'REVOKED', resolved_at = now(), last_error = 'RESTORE' WHERE status IN ('ISSUED', 'REDEEMED')");
-      await q("UPDATE catalog_media_grants SET status = 'REVOKED' WHERE status = 'ACTIVE'");
-      await q("UPDATE catalog_jobs SET state = 'QUEUED', lease_owner = NULL, lease_until = NULL, next_attempt_at = now() WHERE state = 'LEASED'");
-      await q(`INSERT INTO catalog_restore_runs(restore_id, backup_id, manifest_sha256, source_taken_at, status, libraries_epoch_bumped) VALUES ($1, $2, $3, $4, 'HELD', $5)`, [restoreId, backupId, v.manifestSha256, m.taken_at, bumped]);
+      const bumped = await applyRestorePosture(q, { restoreId, backupId, manifestSha256: v.manifestSha256, takenAt: m.taken_at });
       await q('COMMIT');
       // Tras una carga masiva en una instancia nueva faltan estadísticas: sin ellas PostgreSQL 16 elige planes cuadráticos para búsquedas de 1-2 caracteres
       // (E50). ANALYZE es la práctica estándar tras pg_restore; no altera datos y es idempotente.
@@ -308,7 +333,7 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
     return purge.releaseRestoreHold(args);
   }
 
-  return Object.freeze({ createBackup, verifyBackup, restoreBackup, verifyBytes, reconcileJournal, finalizeRestore, reconcileRestore, openRuns, releaseRestoreHold, metrics, BLOCKING });
+  return Object.freeze({ createBackup, verifyBackup, restoreBackup, adoptRestoredDatabase, verifyBytes, reconcileJournal, finalizeRestore, reconcileRestore, openRuns, releaseRestoreHold, metrics, BLOCKING });
 }
 
 module.exports = { SCHEMA, BLOCKING, BackupError, createMemoryBackupStore, createFileBackupStore, createCatalogBackup };
