@@ -44,11 +44,13 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   useEffect(() => { dismissBeatGalerStartupLoader(); }, []);
   // Arrastrar y soltar MP3/WAV: mismo flujo que «Add beat» (AddBeatModal con `initialFile`: validación de nombre, importación real al catálogo).
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
-  const dropActive = useCatalogFileDrop({
+  const { active: dropActive, targetId: dropTargetId } = useCatalogFileDrop({
     enabled: !droppedFile && !scope.showAdd && !drawer,
-    onFiles: (files) => {
-      if (scope.rejectOfflineMutation("Importing beats")) return;
+    onFiles: (files, targetBeatId) => {
+      if (scope.rejectOfflineMutation(targetBeatId ? "Replacing audio" : "Importing beats")) return;
       const picked = pickDroppedAudio(files);
+      // La tarjeta tiene prioridad: MP3 → reemplaza el MASTER; WAV → añade/reemplaza el WAV HQ (siempre con confirmación). Fuera de una tarjeta → beat nuevo.
+      if (picked.kind === "ok" && targetBeatId) { void scope.replaceAudioByDrop(targetBeatId, picked.file); return; }
       if (picked.kind === "ok") { setDroppedFile(picked.file); scope.setShowAdd(true); return; }
       void appAlert(picked.kind === "many"
         ? { title: "Drop one beat at a time", message: "BeatGaler Web imports one beat per drag action." }
@@ -116,7 +118,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
         <div className="bg-catalog-grid-host" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut} onPointerDown={tagPeek.onPointerDown} onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}>
           <CatalogVirtualGallery store={services.store} scrollerRef={scrollerRef} tenantKey={tenantKey} renderCard={renderCard} viewportHeightFallback={viewportHeightFallback}
             onMountCard={scope.onMountCard} onUnmountCard={scope.onUnmountCard}
-            cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false" })}
+            cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false", "data-drop-target": dropTargetId === item.id ? "true" : "false" })}
             onGoToStart={() => { void services.store.loadFirst(); }} />
         </div>
       </div>
@@ -129,7 +131,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           </button>
         </div>
       )}
-      {dropActive && <div data-testid="catalog-drop-overlay" aria-hidden style={{ position: "fixed", inset: 0, zIndex: 390, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", border: "2px dashed #3a3a3a", color: "#cfcfcf", fontSize: 14, pointerEvents: "none" }}>Drop an MP3 or WAV to add a beat</div>}
+      {dropActive && !dropTargetId && <div data-testid="catalog-drop-overlay" aria-hidden style={{ position: "fixed", inset: 0, zIndex: 390, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", border: "2px dashed #3a3a3a", color: "#cfcfcf", fontSize: 14, pointerEvents: "none" }}>Drop an MP3 or WAV to add a beat</div>}
       {scope.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.addBeatsAndReview} existingBeats={[]} maxNameChars={BEAT_NAME_MAX} />}
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={false} onIncompleteWarningsChanged={() => {}} customCursorEnabled onCustomCursorChanged={() => {}}

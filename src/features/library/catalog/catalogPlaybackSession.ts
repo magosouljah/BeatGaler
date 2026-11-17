@@ -44,6 +44,8 @@ export interface PlaybackSessionOptions {
   api: PlaybackApi;
   /** Conjunto READY para el query vigente (preparación visible; compartido con la selección). */
   resolveSet: (query: PlaybackQuery) => Promise<{ setId: string; memberCount: number }>;
+  /** Descarta el conjunto en caché del query: el servidor lo dio por obsoleto (revisión/época nuevas) y el siguiente `resolveSet` debe crear uno nuevo. */
+  invalidateSet?: (query: PlaybackQuery) => void;
   /** Referencia de audio de un beat (detalle SQL / DTO residente); null si no hay MASTER. */
   resolveFile: (beatId: string) => Promise<{ fileId: string; version: string } | null>;
   /** Media manager (T14 cliente): arrienda la URL de la fuente para el consumidor `player`. */
@@ -89,17 +91,29 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
       set({ current: target, status: "error", error: error instanceof CatalogApiError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : String(error) });
     }
   }
+  // El conjunto de resultados está ligado a una revisión del catálogo: si otra sesión/dispositivo la sube, el servidor responde CURSOR_STALE (409).
+  // Se descarta el conjunto en caché y se repite UNA vez con uno nuevo sobre la revisión vigente; cualquier otro error (o un segundo CURSOR_STALE) se propaga.
+  async function withFreshSet<T>(q: PlaybackQuery, g: number, run: (setInfo: { setId: string; memberCount: number }) => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      const setInfo = await options.resolveSet(q); assertGen(g);
+      try { return await run(setInfo); } catch (error) {
+        if (attempt === 0 && error instanceof CatalogApiError && error.code === "CURSOR_STALE") { options.invalidateSet?.(q); continue; }
+        throw error;
+      }
+    }
+  }
   // ---- ronda Shuffle (servidor) ----
   async function ensureRound(g: number, { excludeCurrent = true } = {}): Promise<RoundState | null> {
     const q = snapshot.query; if (!q) return null;
     const r = snapshot.round;
     if (r && !r.stale) return r; // completa incluida: el servidor responde beatId null y el comando decide si abre otra ronda
-    const setInfo = await options.resolveSet(q); assertGen(g);
-    if (setInfo.memberCount === 0) { set({ round: null }); return null; }
-    const started = await api.startRound({ setId: setInfo.setId, currentBeatId: excludeCurrent ? snapshot.current?.beatId ?? null : null, consumerId, fromRoundId: r && r.stale ? r.roundId : null }); assertGen(g);
-    const round: RoundState = { roundId: started.roundId, setId: started.setId ?? setInfo.setId, remaining: started.remaining, sequence: started.sequence, complete: started.remaining === 0, stale: false };
-    set({ round });
-    return round;
+    return withFreshSet(q, g, async (setInfo) => {
+      if (setInfo.memberCount === 0) { set({ round: null }); return null; }
+      const started = await api.startRound({ setId: setInfo.setId, currentBeatId: excludeCurrent ? snapshot.current?.beatId ?? null : null, consumerId, fromRoundId: r && r.stale ? r.roundId : null }); assertGen(g);
+      const round: RoundState = { roundId: started.roundId, setId: started.setId ?? setInfo.setId, remaining: started.remaining, sequence: started.sequence, complete: started.remaining === 0, stale: false };
+      set({ round });
+      return round;
+    });
   }
   async function drawFromRound(g: number): Promise<PlaybackTarget | null | "complete"> {
     const round = await ensureRound(g); if (!round) return null;
@@ -127,14 +141,15 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
   // ---- vecino secuencial sobre el conjunto del query vigente ----
   async function neighbor(direction: "next" | "previous", g: number): Promise<PlaybackTarget | null> {
     const q = snapshot.query; if (!q) return null;
-    const setInfo = await options.resolveSet(q); assertGen(g);
-    if (setInfo.memberCount === 0) return null; // query vacío: no inventa resultados ni interrumpe la canción
-    const n = await api.neighbor({ setId: setInfo.setId, beatId: snapshot.current?.beatId ?? null, direction, sort: q.sort }); assertGen(g);
-    if (n.beatId === null) {
-      if (snapshot.repeat === "all") { const wrap = await api.neighbor({ setId: setInfo.setId, beatId: null, direction, sort: q.sort }); assertGen(g); return wrap.beatId ? { beatId: wrap.beatId, version: wrap.version, fileId: null } : null; }
-      return null;
-    }
-    return { beatId: n.beatId, version: n.version, fileId: null };
+    return withFreshSet(q, g, async (setInfo) => {
+      if (setInfo.memberCount === 0) return null; // query vacío: no inventa resultados ni interrumpe la canción
+      const n = await api.neighbor({ setId: setInfo.setId, beatId: snapshot.current?.beatId ?? null, direction, sort: q.sort }); assertGen(g);
+      if (n.beatId === null) {
+        if (snapshot.repeat === "all") { const wrap = await api.neighbor({ setId: setInfo.setId, beatId: null, direction, sort: q.sort }); assertGen(g); return wrap.beatId ? { beatId: wrap.beatId, version: wrap.version, fileId: null } : null; }
+        return null;
+      }
+      return { beatId: n.beatId, version: n.version, fileId: null };
+    });
   }
 
   // ---- comandos ----

@@ -1234,6 +1234,26 @@
           "network": "loopback"
         },
         {
+          "id": "t16-playbar-next-recovery",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/playbarNextRecovery.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-audio-replace",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogAudioReplace.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
           "id": "t16-catalog-composition",
           "cmd": [
             "node",

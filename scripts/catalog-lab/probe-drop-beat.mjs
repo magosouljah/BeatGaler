@@ -9,12 +9,13 @@ const { rec, ex, shot, waitFor, login, galleryState, typeSearch, installAudioCap
 
 const silentMp3Base64 = () => { const frame = Buffer.alloc(417); frame[0] = 0xff; frame[1] = 0xfb; frame[2] = 0x90; return Buffer.concat(Array.from({ length: 1500 }, () => frame)).toString('base64'); };
 
-const drop = async (name, b64) => {
-  await ex((n, data) => { const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0)); const dt = new DataTransfer(); dt.items.add(new File([bytes], n, { type: /.(mp3|wav)$/i.test(n) ? 'audio/mpeg' : 'text/plain' })); window.__dt = dt; const e = new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }); window.dispatchEvent(e); }, name, b64);
+const drop = async (name, b64, targetSel = null) => {
+  await ex((n, data, sel) => { const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0)); const dt = new DataTransfer(); dt.items.add(new File([bytes], n, { type: /\.mp3$/i.test(n) ? 'audio/mpeg' : /\.wav$/i.test(n) ? 'audio/wav' : 'text/plain' })); window.__dt = dt; window.__tgt = sel; const t = sel ? document.querySelector(sel) : window; const mk = (type) => new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }); t.dispatchEvent(mk('dragenter')); t.dispatchEvent(mk('dragover')); }, name, b64, targetSel);
   await sleep(150);
   const overlay = await ex(() => Boolean(document.querySelector('[data-testid="catalog-drop-overlay"]')));
-  const prevented = await ex(() => { const e = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt }); window.dispatchEvent(e); return e.defaultPrevented; });
-  return { overlay, prevented };
+  const marked = await ex(() => document.querySelectorAll('[data-card][data-drop-target="true"]').length);
+  const prevented = await ex(() => { const t = window.__tgt ? document.querySelector(window.__tgt) : window; const e = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt }); t.dispatchEvent(e); return e.defaultPrevented; });
+  return { overlay, marked, prevented };
 };
 const clickByText = (text, sel = 'button') => ex((t, s) => { const b = [...document.querySelectorAll(s)].find((x) => (x.textContent || '').includes(t)); if (!b) return false; b.click(); return true; }, text, sel);
 const notice = () => ex(() => document.querySelector('.bg-catalog-notice')?.textContent || '');
@@ -52,6 +53,38 @@ try {
   let played = null;
   if (card) { await (await browser.$(`[data-card="${card}"] [data-beat-artwork-id]`)).click(); played = await waitFor(async () => { const x = (await audioState())[0]; return x && !x.paused && x.t > 0.1 && !x.error ? x : null; }, { timeout: 30000, msg: 'audio' }).catch(async () => (await audioState())[0] || null); }
   rec('DROP-C-PLAY', card && played && !played.paused ? 'PASS' : 'FAIL', { card: Boolean(card), audio: played });
+  // E-G) arrastre sobre una BeatCard: reemplazo de audio con confirmación (servicios de mutación PostgreSQL + gateway FAKE)
+  const beatInfo = async (name) => { const r = (await apiBeats(name)).body; const it = (r.items || r.beats || []).find((x) => x.name === name); return it ? { id: it.id, version: it.version, fileId: it.playback?.fileId, hasWav: it.hasWav, name: it.name, tags: it.tags, bpm: it.bpm, key: it.key } : null; };
+  const total = async () => { const r = await ex(async () => { const x = await fetch('/beatgaler-api/catalog/v1/beats?limit=200', { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); return x.json(); }); return (r.items || r.beats || []).length; };
+  const dialog = () => ex(() => { const b = [...document.querySelectorAll('button')].map((x) => x.textContent.trim()); const t = document.body.innerText; return { buttons: b.filter((x) => /^(Replace|Add|Cancel)$/.test(x)), title: /Replace MP3\?|Replace WAV\?|Add WAV\?/.exec(t)?.[0] || null }; });
+  const press = (label) => ex((l) => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === l); b?.click(); return Boolean(b); }, label);
+  await typeSearch(EDITED); await sleep(900);
+  const tag = `[data-card] `; const cardSel = await ex(() => { const c = document.querySelector('[data-card]'); return c ? `[data-card="${c.getAttribute('data-card')}"]` : null; });
+  const before = await beatInfo(EDITED); const count0 = await total();
+  // E) cancelar: nada cambia
+  const e1 = await drop('cancelado.mp3', b64, cardSel); await sleep(300); const dE = await dialog(); await press('Cancel'); await sleep(500);
+  const afterCancel = await beatInfo(EDITED);
+  rec('DROP-E-CARD-CANCEL', e1.marked === 1 && dE.title === 'Replace MP3?' && afterCancel && afterCancel.fileId === before.fileId && afterCancel.version === before.version && (await total()) === count0 ? 'PASS' : 'FAIL', { e1, dialog: dE, before, afterCancel });
+  // F) MP3 sobre la tarjeta: confirma → MISMO beat, nuevo MASTER, metadatos intactos, ningún beat nuevo
+  const f1 = await drop('reemplazo.mp3', b64, cardSel); await sleep(300); const dF = await dialog(); await press('Replace');
+  const okF = await waitFor(async () => /MP3 reemplazado/.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'replace MP3' }).catch(async (er) => `ERR ${er.message} :: ${await notice()}`);
+  const afterF = await beatInfo(EDITED);
+  rec('DROP-F-CARD-MP3-REPLACE', dF.title === 'Replace MP3?' && /MP3 reemplazado/.test(String(okF)) && afterF && afterF.id === before.id && afterF.fileId !== before.fileId && afterF.name === before.name && JSON.stringify(afterF.tags) === JSON.stringify(before.tags) && afterF.bpm === before.bpm && (await total()) === count0 && !(await beatInfo('reemplazo')) ? 'PASS' : 'FAIL', { f1, dialog: dF, notice: okF, before, afterF, countBefore: count0, countAfter: await total() });
+  // G) WAV: primero «Add WAV?» (el beat no tiene WAV) y luego «Replace WAV?»
+  const g1 = await drop('hq.wav', b64, cardSel); await sleep(300); const dG1 = await dialog(); await press('Add');
+  const okG1 = await waitFor(async () => /WAV añadido/.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'add WAV' }).catch(async (er) => `ERR ${er.message} :: ${await notice()}`);
+  const afterG1 = await beatInfo(EDITED);
+  await sleep(600);
+  const g2 = await drop('hq2.wav', b64, cardSel); await sleep(300); const dG2 = await dialog(); await press('Replace');
+  const okG2 = await waitFor(async () => /WAV reemplazado/.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'replace WAV' }).catch(async (er) => `ERR ${er.message} :: ${await notice()}`);
+  const afterG2 = await beatInfo(EDITED);
+  rec('DROP-G-CARD-WAV', !before.hasWav && dG1.title === 'Add WAV?' && /WAV añadido/.test(String(okG1)) && afterG1?.hasWav && afterG1.id === before.id && afterG1.fileId === afterF.fileId && dG2.title === 'Replace WAV?' && /WAV reemplazado/.test(String(okG2)) && afterG2?.hasWav && afterG2.id === before.id && (await total()) === count0 ? 'PASS' : 'FAIL', { g1, dG1, okG1, afterG1, dG2, okG2, afterG2 });
+  await shot('d4-card-replaced');
+  // H) fuera de una tarjeta sigue importando un beat nuevo (la tarjeta no captura todo)
+  await typeSearch(''); await sleep(800);
+  await drop('Nuevo fuera de tarjeta.mp3', b64);
+  const okH = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import outside card' }).catch(async (er) => `ERR ${er.message} :: ${await notice()}`);
+  rec('DROP-H-OUTSIDE-IMPORTS-NEW', /importado\./.test(String(okH)) && (await total()) === count0 + 1 ? 'PASS' : 'FAIL', { notice: okH, total: await total(), expected: count0 + 1 });
   // D) archivos no soportados / varios: aviso y no se importa nada; arrastre que no es de archivos se ignora
   const d = await drop('notas.txt', b64);
   await sleep(500); const dialogText = await ex(() => /Nothing to import|Drop an MP3 or WAV file/.test(document.body.innerText));

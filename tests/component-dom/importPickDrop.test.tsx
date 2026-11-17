@@ -67,8 +67,8 @@ describe("pickDroppedAudio", () => {
 
 describe("useCatalogFileDrop + AddBeatModal(initialFile)", () => {
   let root: Root; let host: HTMLDivElement; const onFiles = vi.fn();
-  function Probe({ enabled }: { enabled: boolean }) { const a = useCatalogFileDrop({ enabled, onFiles }); return <i data-active={String(a)} />; }
-  const ev = (type: string, files: File[], types = ["Files"]) => { const e = new Event(type, { bubbles: true, cancelable: true }); Object.defineProperty(e, "dataTransfer", { value: { types, files, dropEffect: "none" } }); window.dispatchEvent(e); return e; };
+  function Probe({ enabled }: { enabled: boolean }) { const a = useCatalogFileDrop({ enabled, onFiles }); return <><i data-active={String(a.active)} data-target={String(a.targetId)} /><div data-card="b-7" id="card7"><span id="inner">x</span></div></>; }
+  const ev = (type: string, files: File[], types = ["Files"], target: EventTarget = window) => { const e = new Event(type, { bubbles: true, cancelable: true }); Object.defineProperty(e, "dataTransfer", { value: { types, files, dropEffect: "none" } }); target.dispatchEvent(e); return e; };
   beforeEach(() => { vi.clearAllMocks(); host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host); });
   afterEach(() => { act(() => root.unmount()); host.remove(); });
 
@@ -78,6 +78,16 @@ describe("useCatalogFileDrop + AddBeatModal(initialFile)", () => {
     act(() => { ev("dragenter", []); }); expect(state()).toBe("true");
     act(() => { const e = ev("drop", [mp3("z.mp3")]); expect(e.defaultPrevented).toBe(true); }); expect(state()).toBe("false"); expect(onFiles).toHaveBeenCalledTimes(1);
     act(() => { const e = ev("dragenter", [], ["text/plain"]); expect(e.defaultPrevented).toBe(false); }); expect(state()).toBe("false");
+  });
+  it("la tarjeta tiene prioridad: soltar sobre una BeatCard entrega su id; fuera de una tarjeta, null (beat nuevo)", () => {
+    act(() => { root.render(<Probe enabled />); });
+    const tgt = () => host.querySelector("i")!.getAttribute("data-target");
+    act(() => { ev("dragenter", [], ["Files"], document.getElementById("inner")!); ev("dragover", [], ["Files"], document.getElementById("inner")!); }); expect(tgt()).toBe("b-7");
+    act(() => { ev("dragover", [], ["Files"], document.body); }); expect(tgt()).toBe("null");
+    act(() => { ev("dragover", [], ["Files"], document.getElementById("inner")!); }); expect(tgt()).toBe("b-7");
+    const f = mp3("sobre-tarjeta.mp3");
+    act(() => { ev("drop", [f], ["Files"], document.getElementById("inner")!); }); expect(onFiles).toHaveBeenLastCalledWith([f], "b-7"); expect(tgt()).toBe("null");
+    act(() => { ev("dragenter", []); ev("drop", [f], ["Files"], document.body); }); expect(onFiles).toHaveBeenLastCalledWith([f], null);
   });
   it("con un modal abierto (enabled=false) el drop se ignora pero se cancela (el navegador no abre el archivo)", () => {
     act(() => { root.render(<Probe enabled={false} />); });

@@ -5,7 +5,8 @@
 // invalida y remonta: todos los servicios tienen teardown por cuenta.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
-import { createCatalogApi, type CatalogApi } from "./catalogApi";
+import { CatalogApiError, createCatalogApi, type CatalogApi } from "./catalogApi";
+import { playbackSetKey, resolveReadyQuerySet } from "./catalogPlaybackSets";
 import { chooseLibraryComposition, isCatalogClientEnabled, type LibraryComposition } from "./catalogComposition";
 import { createCatalogCommandsApi } from "./catalogCommandsApi";
 import { createCatalogInteractionStore, type CatalogInteractionStore } from "./catalogInteractionStore";
@@ -70,7 +71,9 @@ export function createCatalogServices({ api, accountId, context, fetchImpl, base
   const sets = new Map<string, Promise<{ setId: string; memberCount: number }>>();
   const playback = createCatalogPlaybackSession({
     api: playbackApi,
-    resolveSet: (q) => { const k = JSON.stringify([q.filters, q.sort, q.revision]); if (!sets.has(k)) sets.set(k, commands.createQuerySet({ ...q.filters, includeTags: [...q.filters.includeTags], excludeTags: [...q.filters.excludeTags], sort: q.sort }, { id: `player-${accountId}`, kind: "SHUFFLE" }).then((s) => ({ setId: s.setId, memberCount: s.memberCount }))); return sets.get(k)!; },
+    // Un conjunto fallido NO se queda en caché (antes un rechazo se reutilizaba para siempre) y el servidor puede invalidarlo (CURSOR_STALE) → `invalidateSet`.
+    resolveSet: (q) => { const k = playbackSetKey(q); if (!sets.has(k)) sets.set(k, resolveReadyQuerySet({ commands, accountId, query: q }).catch((e) => { sets.delete(k); throw e; })); return sets.get(k)!; },
+    invalidateSet: (q) => { sets.delete(playbackSetKey(q)); },
     resolveFile: async (beatId) => { const d = await commands.getBeat(beatId); return d.playback ? { fileId: d.playback.fileId, version: d.version } : null; },
     acquireSource: (fileId) => media.acquire(fileId, "player"),
     accountId: () => accountId,

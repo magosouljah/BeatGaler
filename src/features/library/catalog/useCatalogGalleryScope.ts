@@ -15,6 +15,8 @@ import type { CatalogServices } from "./catalogLibraryProvider";
 import { useCatalogInteraction, type InteractionQuery } from "./catalogInteractionStore";
 import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { beatFromCatalogDetail, metadataPatch } from "./catalogMutations";
+import { replaceBeatAudio } from "./catalogAudioReplace";
+import { appConfirm } from "../../../lib/dialog";
 import type { CatalogStoreSnapshot } from "./catalogQueryStore";
 import { LEGACY_UNRESOLVABLE_COPY, createHistoryWriter, parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
 import { useAppShortcuts } from "../../../app/useAppShortcuts";
@@ -172,6 +174,9 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   }, [residentKey, interactionStore]); // eslint-disable-line react-hooks/exhaustive-deps
   const isSelected = useCallback((id: string) => interactionStore.isSelected(id), [interactionStore, interaction.selection]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [notice, setNotice] = useState<string | null>(null);
+  // Los fallos de Siguiente/Anterior se muestran (nunca se tragan): el aviso dice qué pasó y la sesión conserva el target para reintentar.
+  const reportPlaybackFailure = useCallback((action: string, e: unknown) => { const code = (e as { code?: unknown })?.code; setNotice(`${action}: ${code ? `${String(code)} — ` : ""}${String((e as { message?: unknown })?.message ?? e)}`); }, []);
   // ---- reproducción: la sesión decide, el motor aprobado suena ----
   const lastEnded = useRef(audio.endedSeq);
   useEffect(() => session.onEvent((e) => {
@@ -180,31 +185,30 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     else if (e.kind === "seek0") seek(0);
     else if (e.kind === "replay") { seek(0); const a = document.querySelector("audio"); if (a && a.paused) togglePause(); }
   }), [session, play, seek, togglePause]);
-  useEffect(() => { if (audio.endedSeq !== lastEnded.current) { lastEnded.current = audio.endedSeq; void session.ended().catch(() => {}); } }, [audio.endedSeq, session]);
+  useEffect(() => { if (audio.endedSeq !== lastEnded.current) { lastEnded.current = audio.endedSeq; void session.ended().catch((e) => reportPlaybackFailure("No se pudo continuar con el siguiente beat", e)); } }, [audio.endedSeq, session, reportPlaybackFailure]);
   const lastProgress = useRef(0);
   useEffect(() => { if (Math.abs(audio.progress - lastProgress.current) >= 0.01 || audio.progress === 0) { lastProgress.current = audio.progress; session.setProgress(audio.progress); } }, [audio.progress, session]);
   const targetOf = useCallback((beat: Beat) => { const dto = dtoById.current.get(beat.id); return { beatId: beat.id, version: dto?.version ?? null, fileId: dto?.playback?.fileId ?? null }; }, []);
   const handlePlay = useCallback((beat: Beat) => {
     if (audio.playingId === beat.id) { togglePause(); return; }
-    void session.play(targetOf(beat)).catch(() => {});
-  }, [audio.playingId, togglePause, session, targetOf]);
+    void session.play(targetOf(beat)).catch((e) => reportPlaybackFailure("No se pudo reproducir el beat", e));
+  }, [audio.playingId, togglePause, session, targetOf, reportPlaybackFailure]);
   const handleWarm = useCallback(() => {}, []);
   const addToQueue = useCallback((beat: Beat) => { session.enqueue(targetOf(beat)); }, [session, targetOf]);
-  const handleNext = useCallback(() => { void session.next().catch(() => {}); }, [session]);
-  const handlePrev = useCallback(() => { void session.previous().catch(() => {}); }, [session]);
+  const handleNext = useCallback(() => { void session.next().catch((e) => reportPlaybackFailure("No se pudo pasar al siguiente beat", e)); }, [session, reportPlaybackFailure]);
+  const handlePrev = useCallback(() => { void session.previous().catch((e) => reportPlaybackFailure("No se pudo volver al beat anterior", e)); }, [session, reportPlaybackFailure]);
   const toggleShuffle = useCallback(() => { void session.setShuffle(!session.getSnapshot().shuffle); }, [session]);
   const cycleRepeat = useCallback(() => { const m = session.getSnapshot().repeat; session.setRepeat(m === "off" ? "all" : m === "all" ? "one" : "off"); }, [session]);
   const [showQueue, setShowQueue] = useState(false);
   const toggleQueue = useCallback(() => setShowQueue((v) => !v), []);
   const closeQueue = useCallback(() => setShowQueue(false), []);
-  const playQueueIndex = useCallback((index: number) => { const t = session.getSnapshot().queue[index]; if (!t) return; session.dequeue(t.beatId); void session.play(t).catch(() => {}); }, [session]);
+  const playQueueIndex = useCallback((index: number) => { const t = session.getSnapshot().queue[index]; if (!t) return; session.dequeue(t.beatId); void session.play(t).catch((e) => reportPlaybackFailure("No se pudo reproducir el beat", e)); }, [session, reportPlaybackFailure]);
   const queuedBeats = useMemo(() => playback.queue.map((t) => beatById(t.beatId)), [playback.queue, beatById]);
   const currentBeat = audio.playingId ? beatById(audio.playingId) : undefined;
   useEffect(() => { if (playback.queue.length === 0) setShowQueue(false); }, [playback.queue.length]);
 
   // ---- Drawer, edición, papelera, lote ----
   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const refreshAfterMutation = useCallback(() => { store.notifyLibraryChanged(); interactionStore.invalidateFacets(); }, [store, interactionStore]);
   const commitDrawerCloudMutation = useCallback(async (updated: Beat) => {
     const dto = dtoById.current.get(updated.id);
@@ -262,6 +266,15 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     });
   }, [interactionStore, refreshAfterMutation]);
 
+  // ---- reemplazo de audio por arrastre sobre una BeatCard (MP3 → MASTER, WAV → añadir/reemplazar WAV HQ), con confirmación ----
+  const replaceAudioByDrop = useCallback(async (beatId: string, file: File) => {
+    const r = await replaceBeatAudio({ mutations, confirm: appConfirm, beatId, file, onProgress: (t) => setNotice(`Reemplazando audio: ${t}`) });
+    if (r.status === "committed") { setNotice(r.kind === "MP3" ? "MP3 reemplazado." : r.replacedExisting ? "WAV reemplazado." : "WAV añadido."); refreshAfterMutation(); }
+    else if (r.status === "failed") setNotice(`No se pudo reemplazar el audio: ${r.message}`);
+    else if (r.status === "unsupported") setNotice("Solo se pueden soltar archivos MP3 o WAV.");
+    else setNotice(null);
+  }, [mutations, refreshAfterMutation]);
+
   // ---- importación (T12) desde «Add beat» del navegador ----
   const [showAdd, setShowAdd] = useState(false);
   const addBeatsAndReview = useCallback((beats: Beat[]) => {
@@ -300,7 +313,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     drawer, setDrawer, updateBeat, commitDrawerCloudMutation, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
-    showAdd, setShowAdd, addBeatsAndReview, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
+    showAdd, setShowAdd, addBeatsAndReview, replaceAudioByDrop, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
     notice: notice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
     accountId, context,
