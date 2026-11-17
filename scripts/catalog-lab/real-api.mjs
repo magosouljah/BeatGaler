@@ -26,6 +26,7 @@ export async function importBeat(name, files, metadata = {}) { // files: [{role,
   if (op.status >= 300) return { op };
   for (const f of files) {
     const pk = encodeURIComponent(GRAMMAR[f.role][0]);
+    if (f.role === 'PROJECT') { const up = await req('PUT', `/catalog/v1/operations/${op.body.operationId}/parts/${pk}/project`, { raw: f.bytes, headers: { 'X-Catalog-Filename': f.filename, ...E() } }); if (up.status >= 300) return { op, up }; continue; }
     const cap = await req('POST', `/catalog/v1/operations/${op.body.operationId}/parts/${pk}/capability`, { headers: E() });
     if (cap.status >= 300) return { op, cap };
     const up = await req('PUT', cap.body.uploadPath, { raw: f.bytes, headers: { Authorization: `Bearer ${cap.body.token}`, ...E() } });

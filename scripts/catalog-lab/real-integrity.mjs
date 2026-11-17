@@ -10,6 +10,7 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const cases = [
   ['MP3-625KB-2chunks', [{ role: 'MASTER', bytes: Buffer.concat([mp3(1500), rnd(64)]), filename: 'a.mp3', mime: 'audio/mpeg' }, { role: 'ARTWORK', bytes: PNG, filename: 'c.png', mime: 'image/png' }]],
   ['WAV-3MB-random', [{ role: 'MASTER', bytes: mp3(300), filename: 'm.mp3', mime: 'audio/mpeg' }, { role: 'WAV', bytes: rnd(3 * 1024 * 1024 + 123), filename: 'hq.wav', mime: 'audio/wav' }]],
+  ['PROJECT-2MB-zip', [{ role: 'MASTER', bytes: mp3(200), filename: 'm.mp3', mime: 'audio/mpeg' }, { role: 'PROJECT', bytes: (() => { const z = Buffer.concat([Buffer.from('PK'), rnd(2 * 1024 * 1024 + 77)]); return Buffer.concat([z, Buffer.from([0x50, 0x4b, 5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])]); })(), filename: 'p.zip', mime: 'application/zip' }]],
 ];
 for (const [label, files] of cases) {
   const name = `Integridad ${label} ${S}`;
