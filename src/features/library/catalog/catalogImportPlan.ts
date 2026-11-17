@@ -4,10 +4,10 @@
 import type { Beat } from "../../../types";
 import { cleanTags } from "../../../lib/metadataValidation";
 
-export interface ImportPlan { beat: Beat; files: { master: File; wav: File | null } }
+export interface ImportPlan { beat: Beat; files: { master: File; wav: File | null; project: File | null } }
 
 export async function resolveImportPlan({ beat, hydrated, slotFiles, originalFile }: {
-  beat: Beat; hydrated?: Promise<Beat> | null; slotFiles: () => { MASTER?: File | Blob; WAV?: File | Blob }; originalFile: File | null;
+  beat: Beat; hydrated?: Promise<Beat> | null; slotFiles: () => { MASTER?: File | Blob; WAV?: File | Blob; PROJECT?: File | Blob }; originalFile: File | null;
 }): Promise<ImportPlan> {
   const isWav = Boolean(beat.has_wav) || /\.wav$/i.test(originalFile?.name ?? "");
   let h: Beat | null = null;
@@ -16,7 +16,8 @@ export async function resolveImportPlan({ beat, hydrated, slotFiles, originalFil
   const asFile = (b: File | Blob | undefined, fallbackName: string): File | null => (!b ? null : b instanceof File ? b : new File([b], fallbackName, { type: b.type }));
   const master = asFile(slots.MASTER, `${beat.name}.mp3`) ?? (isWav ? null : originalFile);
   const wav = asFile(slots.WAV, originalFile?.name ?? `${beat.name}.wav`);
+  const project = asFile(slots.PROJECT, `${beat.name}.zip`);
   if (!master) throw new Error("El WAV no pudo convertirse a MP3 para la reproducción.");
   const merged: Beat = { ...beat, bpm: beat.bpm || h?.bpm || "", key: beat.key || h?.key || "", tags: cleanTags([...(beat.tags || []), ...(h?.tags || [])]).tags, image_base64: beat.image_base64 ?? h?.image_base64 ?? null };
-  return { beat: merged, files: { master, wav } };
+  return { beat: merged, files: { master, wav, project } };
 }

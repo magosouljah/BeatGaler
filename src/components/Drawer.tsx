@@ -26,6 +26,8 @@ interface Props {
   onSaveAll?: (currentUpdated: Beat) => Promise<void> | void;
   isReviewNameTaken?: (name: string, beatId: string) => boolean;
   mutationAllowed?: boolean;
+  /** Límite de caracteres Unicode del nombre (catálogo PostgreSQL: 50). Nunca se recorta: se rechaza el guardado. */
+  maxNameChars?: number;
   onCloudMutationCommit?: (
     updated: Beat,
     options: { syncMetadata: boolean; reason: string },
@@ -64,7 +66,7 @@ const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] 
   OTHER: { name: "Any file", extensions: ["mp3", "wav", "zip", "flp", "als", "mid", "midi", "txt", "pdf", "png", "jpg", "jpeg"] },
 };
 
-export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit }: Props) {
+export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, maxNameChars }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
@@ -269,6 +271,10 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       return;
     }
     const requestedName = data.name.trim();
+    if (maxNameChars !== undefined && Array.from(requestedName).length > maxNameChars) {
+      setError(`Máximo ${maxNameChars} caracteres en el nombre (tiene ${Array.from(requestedName).length}).`);
+      return;
+    }
     if (reviewInfo && isReviewNameTaken?.(requestedName, beat.id)) {
       setDuplicateNameError(true);
       setError(`A beat named "${requestedName}" already exists. Change the name to continue.`);

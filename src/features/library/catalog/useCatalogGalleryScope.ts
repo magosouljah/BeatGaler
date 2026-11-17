@@ -17,6 +17,8 @@ import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { beatFromCatalogDetail, metadataPatch } from "./catalogMutations";
 import { replaceBeatAudio } from "./catalogAudioReplace";
 import { resolveImportPlan } from "./catalogImportPlan";
+import { appAlert } from "../../../lib/dialog";
+import { cleanTags } from "../../../lib/metadataValidation";
 import { downloadBeatFiles, saveBlobWithBrowser, type DownloadKind } from "./catalogDownloads";
 import type { CatalogBeatFile } from "./catalogCommandsApi";
 import { normalizeArtworkFile, replaceBeatArtwork, resolveArtworkFile } from "./catalogArtworkReplace";
@@ -32,6 +34,14 @@ export const KNOWN_BEATS_MAX = 512; // tarjetas conocidas fuera de ventana (Play
 export const BULK_TAGS_MODE_NOTICE = "En el catálogo, «añadir» o «quitar» tags en lote aún no está disponible: usa «reemplazar».";
 export const IMPORT_NO_FILE_NOTICE = "No se encontró el archivo del beat a importar.";
 /** Mensaje al usuario cuando una importación falla: sin transporte configurado se dice claramente, no con texto técnico del servidor. */
+/** Mensaje claro de un fallo de importación (cuota del plan, transporte no disponible, tamaño de PROJECT…); el resto conserva su texto. */
+export function importFailureMessage(error: unknown): string {
+  const e = error as { code?: unknown; detail?: { max?: unknown; used?: unknown; max_bytes?: unknown }; message?: unknown } | null;
+  if (e?.code === "QUOTA_EXCEEDED") return `Tu plan alcanzó el límite de beats${e.detail?.max != null ? ` (${String(e.detail.used ?? "?")} de ${String(e.detail.max)})` : ""}. Revisa Settings → Plan para ampliarlo.`;
+  if (e?.code === "TRANSFER_UNAVAILABLE") return "El servicio de almacenamiento de archivos no está disponible en este entorno. El beat no se guardó.";
+  if (e?.code === "PROJECT_TOO_LARGE") return "El PROJECT supera el tamaño máximo de tu plan.";
+  return String(e?.message ?? error);
+}
 export function importFailureNotice(name: string, error: unknown): string {
   const e = error as { code?: unknown; detail?: { reason?: unknown }; message?: unknown } | null;
   if (e && e.code === "TRANSFER_UNAVAILABLE") return `No se pudo importar «${name}»: el servicio de almacenamiento de archivos no está disponible en este entorno. El beat no se guardó.`;
@@ -272,15 +282,23 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     });
   }, [interactionStore, refreshAfterMutation]);
 
+  // PROJECT vigente del beat (para fusionar un archivo de DAW con su ZIP, como el flujo anterior).
+  const loadProject = useCallback(async (beatId: string): Promise<File | null> => {
+    const files = await mutations.listBeatFiles(beatId);
+    const p = files.find((f) => f.role === "PROJECT" && f.current); if (!p) return null;
+    const { blob } = await media.downloadFile(p.fileId);
+    return new File([blob], p.filename || "project.zip", { type: "application/zip" });
+  }, [mutations, media]);
+
   // ---- reemplazo de audio por arrastre sobre una BeatCard (MP3 → MASTER, WAV → añadir/reemplazar WAV HQ), con confirmación ----
   const replaceAudioByDrop = useCallback(async (beatId: string, file: File) => {
-    const r = await replaceBeatAudio({ mutations, confirm: appConfirm, beatId, file, onStart: () => setBeatCloudUpdateBusy(beatId, true), onProgress: (t) => setNotice(`Reemplazando audio: ${t}`) });
+    const r = await replaceBeatAudio({ mutations, confirm: appConfirm, beatId, file, onStart: () => setBeatCloudUpdateBusy(beatId, true), loadProject, onProgress: (t) => setNotice(`Reemplazando audio: ${t}`) });
     if (r.status !== "cancelled" && r.status !== "unsupported") setBeatCloudUpdateBusy(beatId, false, r.status === "committed"); // estado de la tarjeta: ocupada → completada
     if (r.status === "committed") { setNotice(r.kind === "MP3" ? "MP3 reemplazado." : r.kind === "PROJECT" ? (r.replacedExisting ? "Proyecto reemplazado." : "Proyecto añadido.") : r.replacedExisting ? "WAV reemplazado." : "WAV añadido."); refreshAfterMutation(); }
     else if (r.status === "failed") setNotice(`No se pudo reemplazar el audio: ${r.message}`);
     else if (r.status === "unsupported") setNotice("Solo se pueden soltar archivos MP3 o WAV.");
     else setNotice(null);
-  }, [mutations, refreshAfterMutation]);
+  }, [mutations, refreshAfterMutation, loadProject]);
 
   // ---- portada por arrastre de una imagen sobre cualquier zona de una BeatCard (servicio del Drawer: replaceBeat solo con el archivo de portada) ----
   const replaceArtworkByDrop = useCallback(async (beatId: string, sources: ArtworkDropSource[] | Promise<ArtworkDropSource[]>) => {
@@ -297,18 +315,30 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
 
   // ---- importación (T12) desde «Add beat» del navegador ----
   const [showAdd, setShowAdd] = useState(false);
+  // «Add beat» → pantalla de revisión (el Drawer en modo edición con `reviewInfo`, como el flujo anterior): nombre, BPM, key, tags, rating, portada y
+  // archivos (MASTER/WAV/PROJECT) se editan ANTES de importar. Cancelar/omitir libera el archivo y no importa ni modifica nada.
+  const [review, setReview] = useState<{ beat: Beat; hydrated: Promise<Beat> | null } | null>(null);
   const addBeatsAndReview = useCallback((beats: Beat[], hydrated?: Array<Promise<Beat>>) => {
-    beats.forEach((beat, i) => {
-      const file = platform.importer.fileForBeat(beat.id);
-      if (!file) { setNotice(IMPORT_NO_FILE_NOTICE); return; }
-      setNotice(`Importando «${beat.name}»…`);
-      // Espera la hidratación (ID3, portada, WAV→MP3) y sube MASTER (+ WAV) con los metadatos del archivo.
-      void resolveImportPlan({ beat, hydrated: hydrated?.[i] ?? null, slotFiles: () => platform.importer.slotFilesForBeat(beat.id), originalFile: file })
-        .then((plan) => mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress: (p) => setNotice(`Importando «${beat.name}»: ${p.stage} ${Math.round((p.uploadedBytes / Math.max(1, p.totalBytes)) * 100)}%`) }))
-        .then((o) => { setNotice(o.status === "committed" ? `«${beat.name}» importado.` : `Importación de «${beat.name}»: ${o.status}.`); refreshAfterMutation(); })
-        .catch((e) => setNotice(importFailureNotice(beat.name, e)));
+    const beat = beats[0]; if (!beat) return;
+    const h = hydrated?.[0] ?? null;
+    if (!platform.importer.fileForBeat(beat.id)) { setNotice(IMPORT_NO_FILE_NOTICE); return; }
+    setReview({ beat, hydrated: h });
+    // Metadatos ID3 / WAV→MP3 se hidratan en segundo plano (como antes): la revisión se abre al instante y se completa al terminar.
+    void h?.then((hb) => setReview((r) => (r && r.beat.id === beat.id ? { ...r, beat: { ...hb, tags: cleanTags(hb.tags || []).tags } } : r))).catch((error) => {
+      if (platform.importer.fileForBeat(beat.id)) void appAlert({ title: "Import failed", message: String(error), danger: true });
     });
-  }, [mutations, refreshAfterMutation]);
+  }, []);
+  const cancelReview = useCallback(() => { setReview((r) => { if (r) platform.importer.releaseBeat(r.beat.id); return null; }); }, []);
+  const saveReview = useCallback(async (updated: Beat, onProgress?: (p: { stage: "preparing" | "master" | "wav" | "artwork" | "project" | "library"; uploadedBytes: number; totalBytes: number }) => void) => {
+    const r = review; if (!r) return;
+    const original = platform.importer.fileForBeat(r.beat.id);
+    // Espera la conversión WAV→MP3 y la hidratación; `updated` es la versión editada por el usuario (no se re-añaden tags quitados).
+    const plan = await resolveImportPlan({ beat: updated, hydrated: r.hydrated ? r.hydrated.then(() => updated) : null, slotFiles: () => platform.importer.slotFilesForBeat(r.beat.id), originalFile: original });
+    const outcome = await mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress }).catch((e) => { throw new Error(importFailureMessage(e)); });
+    if (outcome.status !== "committed") throw new Error(`La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
+    platform.importer.releaseBeat(r.beat.id); setReview(null);
+    setNotice(`«${updated.name}» importado.`); refreshAfterMutation();
+  }, [review, mutations, refreshAfterMutation]);
 
   // ---- sesión / ajustes ----
   const [showSettings, setShowSettings] = useState(false);
@@ -354,7 +384,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     drawer, setDrawer, updateBeat, commitDrawerCloudMutation, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
-    showAdd, setShowAdd, addBeatsAndReview, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
+    showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
     notice: notice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
     accountId, context,

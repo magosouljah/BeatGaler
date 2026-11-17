@@ -1,6 +1,7 @@
-// Sonda LAB: flujo real de «Add beat» en el navegador del LAB (Chrome aislado, Cloud real + gateway FAKE + PostgreSQL efímero).
-// El selector de archivos nativo no es automatizable: se sustituye HTMLInputElement.click() por un File inyectado; todo lo demás es la UI real.
-// Comprueba que el beat se guarda de verdad (lista de PostgreSQL por la API del Cloud), aparece en la Gallery y se reproduce desde el proveedor FAKE.
+// Sonda LAB: flujo de «Add beat» con PANTALLA DE REVISIÓN (Drawer en modo review, como el BeatGaler anterior) en el LAB (Chrome aislado, Cloud real + gateway FAKE + PostgreSQL efímero).
+// El selector nativo no es automatizable: se sustituye HTMLInputElement.click() por un File inyectado; todo lo demás es la UI real.
+//   A) MP3: revisar (nombre/BPM/key/tag/portada) → guardar → PostgreSQL + reproducción   B) nombre > 50: rechazado, no importa
+//   C) cancelar: no importa nada   D) WAV: conversión WAV→MP3 (MASTER) + WAV HQ   E) PROJECT elegido en la revisión (ZIP)
 //   node scripts/catalog-lab/probe-add-beat.mjs [--out DIR]
 import { parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
@@ -9,79 +10,86 @@ if (!R) process.exit(0);
 const { rec, ex, shot, waitFor, login, galleryState, typeSearch, installAudioCapture, audioState, browser, POSTGRES, cfg, sleep } = R;
 
 const silentMp3Base64 = () => { const frame = Buffer.alloc(417); frame[0] = 0xff; frame[1] = 0xfb; frame[2] = 0x90; return Buffer.concat(Array.from({ length: 1500 }, () => frame)).toString('base64'); };
-const LONG = 'Un nombre de archivo que supera con holgura los cincuenta caracteres.mp3'; // 66 sin extensión
-const EDITED = 'Nombre editado en Add beat';
-const SHORT = 'Beat corto Add';
-
-const armPicker = (name, b64) => ex((n, data) => {
-  const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-  window.__pickName = n; window.__pickBytes = bytes;
+const BUILD = `window.__mk = async (name, kind) => {
+  if (kind === 'wav') { const rate = 44100, n = rate; const buf = new ArrayBuffer(44 + n * 2); const v = new DataView(buf); const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.round(Math.sin(i / 20) * 8000), true); return new File([buf], name, { type: 'audio/wav' }); }
+  if (kind === 'png') { const cv = Object.assign(document.createElement('canvas'), { width: 64, height: 64 }); const g = cv.getContext('2d'); g.fillStyle = '#c0392b'; g.fillRect(0, 0, 64, 64); return new File([await new Promise((r) => cv.toBlob(r, 'image/png'))], name, { type: 'image/png' }); }
+  if (kind === 'zip') return new File([new Uint8Array([0x50, 0x4b, 5, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])], name, { type: 'application/zip' });
+  const bytes = Uint8Array.from(atob(window.__mp3), (c) => c.charCodeAt(0)); return new File([bytes], name, { type: 'audio/mpeg' });
+};`;
+// Parchea el selector de archivos: la siguiente apertura devuelve el File (o varios, por cola, para los selectores del paso de revisión).
+const armPicker = (...files) => ex((list) => (async () => {
+  window.__queue = [];
+  for (const [n, k] of list) window.__queue.push(await window.__mk(n, k));
   if (!window.__pickerPatched) {
-    window.__pickerPatched = true;
-    const orig = HTMLInputElement.prototype.click;
+    window.__pickerPatched = true; const orig = HTMLInputElement.prototype.click;
     HTMLInputElement.prototype.click = function () {
-      if (this.type !== 'file' || !window.__pickName) return orig.call(this);
-      const file = new File([window.__pickBytes], window.__pickName, { type: 'audio/mpeg' });
-      const dt = new DataTransfer(); dt.items.add(file);
-      this.files = dt.files; window.__pickName = null;
+      if (this.type !== 'file' || !window.__queue.length) return orig.call(this);
+      const file = window.__queue.shift(); const dt = new DataTransfer(); dt.items.add(file); this.files = dt.files;
       setTimeout(() => this.dispatchEvent(new Event('change', { bubbles: true })), 0);
     };
   }
-}, name, b64);
-const clickByText = (text, sel = 'button') => ex((t, s) => { const b = [...document.querySelectorAll(s)].find((x) => (x.textContent || '').trim() === t || (x.textContent || '').includes(t)); if (!b) return false; b.click(); return true; }, text, sel);
+})(), files);
+const clickByText = (text, sel = 'button') => ex((t, s) => { const b = [...document.querySelectorAll(s)].find((x) => (x.textContent || '').trim() === t || (t.length > 8 && (x.textContent || '').includes(t))); if (!b) return false; b.click(); return true; }, text, 'button');
+const clickStarts = (text) => ex((t) => { const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim().startsWith(t) && !x.disabled); if (!b) return false; b.click(); return true; }, text);
 const notice = () => ex(() => document.querySelector('.bg-catalog-notice')?.textContent || '');
-const apiBeats = (q) => ex(async (query) => {
-  const r = await fetch(`/beatgaler-api/catalog/v1/beats?limit=50&q=${encodeURIComponent(query)}`, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } });
-  return { status: r.status, body: await r.json().catch(() => null) };
-}, q);
+const apiBeat = (name) => ex(async (n) => { const r = await fetch(`/beatgaler-api/catalog/v1/beats?limit=200&q=${encodeURIComponent(n)}`, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); const it = ((await r.json()).items || []).find((x) => x.name === n); return it ? { id: it.id, bpm: it.bpm, key: it.key, tags: it.tags, hasWav: it.hasWav, hasProject: it.hasProject, hasArtwork: it.hasArtwork, master: it.playback?.fileId ?? null } : null; }, name);
+const total = () => ex(async () => { const r = await fetch('/beatgaler-api/catalog/v1/beats?limit=200', { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); return ((await r.json()).items || []).length; });
+const setField = (idx, value) => ex((i, v) => { const inputs = [...document.querySelectorAll('input:not([type=file]):not([type=checkbox]):not([type=search])')].filter((x) => x.offsetParent !== null); const el = inputs[i]; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('blur', { bubbles: true })); return inputs.length; }, idx, value);
+const review = () => ex(() => ({ open: /Review beat 1 of 1/.test(document.body.innerText), name: [...document.querySelectorAll('input')].find((i) => i.offsetParent !== null && i.value && !i.type.match(/file|checkbox|search/))?.value, inputs: [...document.querySelectorAll('input:not([type=file]):not([type=checkbox]):not([type=search])')].filter((x) => x.offsetParent !== null).map((x) => ({ v: x.value, p: x.placeholder })) }));
+const openPicker = async (files) => { await armPicker(...files); await clickByText('Add beat'); await sleep(500); await clickByText('Choose MP3 or WAV'); await waitFor(async () => (await review()).open || null, { timeout: 30000, msg: 'review open' }); await sleep(800); };
 
 try {
   await login(POSTGRES, cfg.account);
   await waitFor(async () => (await galleryState()).cards > 0, { timeout: 90000, msg: 'catalog cards' });
   await installAudioCapture();
-  const b64 = silentMp3Base64();
-  const before = (await apiBeats(''))?.body;
-  rec('ADD-PRE', 'INFO', { listStatus: (await apiBeats('')).status, keys: Object.keys(before || {}) });
+  await ex((b64, build) => { window.__mp3 = b64; (0, eval)(build); }, silentMp3Base64(), BUILD);
+  const count0 = await total();
 
-  // A) nombre válido: sin paso adicional
-  await armPicker(`${SHORT}.mp3`, b64);
-  await clickByText('Add beat'); await sleep(400);
-  await shot('a1-modal');
-  await clickByText('Choose MP3 or WAV'); await sleep(300);
-  const dialogA = await ex(() => Boolean(document.querySelector('#add-beat-name')));
-  const okA = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import A notice' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
-  await shot('a2-imported');
-  const listA = await apiBeats(SHORT);
-  rec('ADD-A-SHORT-NAME', !dialogA && /importado\./.test(String(okA)) && JSON.stringify(listA.body).includes(SHORT) ? 'PASS' : 'FAIL', { renameDialogShown: dialogA, notice: okA, inPostgres: JSON.stringify(listA.body).includes(SHORT) });
+  // A) MP3 → revisión → editar → guardar
+  await openPicker([['Beat revisado.mp3', 'mp3']]); await shot('a1-review'); const r0 = await review();
+  const NAME = 'Revisado ' + (Date.now() % 1000000);
+  await setField(0, NAME); await setField(2, '128'); await setField(3, 'Am');
+  // tag: el campo «Add tag, press Enter…»
+  await ex(() => { const t = [...document.querySelectorAll('input')].find((i) => /Add tag/.test(i.placeholder)); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(t, 'Trap'); t.dispatchEvent(new Event('input', { bubbles: true })); t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+  // portada: el input de imagen del Drawer
+  await ex(() => (async () => { const inp = document.querySelector('input[type=file][accept^="image"]'); const dt = new DataTransfer(); dt.items.add(await window.__mk('portada.png', 'png')); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); })());
+  await sleep(1200); await shot('a1b-crop'); await clickByText('Apply crop'); await sleep(1500); await shot('a2-edited');
+  const earlyA = await apiBeat(NAME);
+  await clickStarts('Save');
+  const okA = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import A' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
+  const bA = await apiBeat(NAME);
+  rec('ADD-A-REVIEW-SAVE', r0.open && r0.name === 'Beat revisado' && !earlyA && /importado\./.test(String(okA)) && bA && bA.bpm === '128' && /^a/i.test(bA.key) && bA.tags.map((t) => t.toLowerCase()).includes('trap') && bA.hasArtwork && bA.master && (await total()) === count0 + 1 ? 'PASS' : 'FAIL', { review: r0, earlyListed: Boolean(earlyA), notice: okA, saved: bA });
+  await sleep(800); await typeSearch(NAME); await sleep(900);
+  const card = await ex(() => document.querySelector('[data-beat-card-id]')?.getAttribute('data-beat-card-id'));
+  let played = null; if (card) { await (await browser.$(`[data-beat-card-id="${card}"] [data-beat-artwork-id]`)).click(); played = await waitFor(async () => { const a = (await audioState())[0]; return a && !a.paused && a.t > 0.1 && !a.error ? a : null; }, { timeout: 30000, msg: 'play' }).catch(() => null); }
+  rec('ADD-A-PLAYS', played ? 'PASS' : 'FAIL', { audio: played }); await typeSearch(''); await sleep(600);
 
-  // B) nombre largo: paso de renombrado; sin subir hasta que sea válido
-  await sleep(500);
-  await armPicker(LONG, b64);
-  await clickByText('Add beat'); await sleep(400);
-  await clickByText('Choose MP3 or WAV'); await sleep(500);
-  const dlg = await ex(() => ({ shown: Boolean(document.querySelector('#add-beat-name')), original: document.querySelector('[data-testid="add-beat-original-file"]')?.textContent, count: document.querySelector('[data-testid="add-beat-name-count"]')?.textContent, disabled: document.querySelector('[data-testid="add-beat-confirm"]')?.disabled }));
-  await shot('b1-rename-dialog');
-  const earlyList = JSON.stringify((await apiBeats('Un nombre de archivo')).body).includes('Un nombre de archivo');
-  await ex((v) => { const i = document.querySelector('#add-beat-name'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, v); i.dispatchEvent(new Event('input', { bubbles: true })); }, EDITED);
-  await sleep(200);
-  const after = await ex(() => ({ count: document.querySelector('[data-testid="add-beat-name-count"]')?.textContent, disabled: document.querySelector('[data-testid="add-beat-confirm"]')?.disabled }));
-  await clickByText('Add beat', '[data-testid="add-beat-confirm"]');
-  const okB = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import B notice' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
-  await shot('b2-imported');
-  const listB = await apiBeats('Nombre editado');
-  const listOrig = JSON.stringify((await apiBeats('Un nombre de archivo')).body).includes('Un nombre de archivo');
-  rec('ADD-B-LONG-NAME', dlg.shown && dlg.original === LONG && dlg.disabled === true && !earlyList && after.disabled === false && /importado\./.test(String(okB)) && JSON.stringify(listB.body).includes(EDITED) && !listOrig ? 'PASS' : 'FAIL',
-    { dialog: dlg, earlyListedBeforeConfirm: earlyList, afterEdit: after, notice: okB, savedUnderEditedName: JSON.stringify(listB.body).includes(EDITED), savedUnderFileName: listOrig });
+  // B) nombre > 50: se rechaza el guardado, nada se importa
+  const count1 = await total();
+  await openPicker([['Otro.mp3', 'mp3']]); await setField(0, 'N'.repeat(51)); await sleep(300); await clickStarts('Save'); await sleep(1500);
+  const errB = await ex(() => /Máximo 50 caracteres/.test(document.body.innerText)); await shot('b-name-too-long');
+  const still = (await review()).open;
+  rec('ADD-B-NAME-50', errB && still && (await total()) === count1 ? 'PASS' : 'FAIL', { errB, reviewStillOpen: still });
+  // C) cancelar (Cancel import): nada se importa ni se modifica
+  await clickByText('Cancel import'); await sleep(900);
+  rec('ADD-C-CANCEL', !(await review()).open && (await total()) === count1 && !(await apiBeat('N'.repeat(51))) ? 'PASS' : 'FAIL', { total: await total(), count1 });
 
-  // C) el beat importado aparece en la Gallery y se reproduce (medio servido por el proveedor FAKE: send → verify → read)
-  await typeSearch(EDITED); await sleep(800);
-  const card = await waitFor(async () => (await ex(() => { const c = document.querySelector('[data-card]'); return c ? c.getAttribute('data-card') : null; })), { timeout: 20000, msg: 'imported card' }).catch(() => null);
-  let played = null;
-  if (card) {
-    await (await browser.$(`[data-card="${card}"] [data-beat-artwork-id]`)).click();
-    played = await waitFor(async () => { const a = (await audioState())[0]; return a && !a.paused && a.t > 0.1 && !a.error ? a : null; }, { timeout: 30000, msg: 'audio playing' }).catch(async () => (await audioState())[0] || null);
-  }
-  await shot('c-playing');
-  rec('ADD-C-GALLERY-PLAY', card && played && !played.paused ? 'PASS' : 'FAIL', { card: Boolean(card), audio: played });
+  // D) WAV: conversión WAV → MP3 (MASTER) + WAV HQ
+  await openPicker([['Beat wav.wav', 'wav']]); await shot('d1-wav-review');
+  const WN = 'WAV ' + (Date.now() % 1000000); await setField(0, WN); await sleep(300); await clickStarts('Save');
+  const okD = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 90000, msg: 'import WAV' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
+  const bD = await apiBeat(WN);
+  rec('ADD-D-WAV', /importado\./.test(String(okD)) && bD && bD.hasWav && bD.master ? 'PASS' : 'FAIL', { notice: okD, saved: bD });
+
+  // E) PROJECT elegido en la revisión (slot PROJECT)
+  await openPicker([['Con proyecto.mp3', 'mp3']]); const PN = 'Con proyecto ' + (Date.now() % 100000); await setField(0, PN);
+  await armPicker(['mi-proyecto.zip', 'zip']);
+  await ex(() => { const rows = [...document.querySelectorAll('span')].filter((s) => s.textContent.trim() === 'PROJECT'); const btn = rows[0]?.parentElement?.querySelector('button'); btn?.click(); }); await sleep(900);
+  await ex(() => document.querySelector('.bg-catalog-notice button')?.click()); await clickStarts('Save');
+  const okE = await waitFor(async () => /Con proyecto.*importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import project' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
+  const bE = await apiBeat(PN);
+  rec('ADD-E-PROJECT-IN-REVIEW', /importado\./.test(String(okE)) && bE && bE.hasProject ? 'PASS' : 'FAIL', { notice: okE, saved: bE });
   rec('ADD-LOGS', 'INFO', { severe: (await browser.getLogs('browser').catch(() => [])).filter((l) => l.level === 'SEVERE').map((l) => String(l.message).slice(0, 200)) });
 } catch (e) { rec('ADD', 'ERROR', { message: String(e && e.message || e) }); await shot('error').catch(() => {}); } finally { await R.finish(); }

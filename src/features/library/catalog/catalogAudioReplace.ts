@@ -7,6 +7,7 @@
 import type { CatalogMutations } from "./catalogMutations";
 import { beatFromCatalogDetail } from "./catalogMutations";
 import { isProjectDawFileName } from "../../projects/projectFileTypes";
+import { prepareProjectForBeat } from "./catalogProjectMerge";
 
 export type DroppedAudioKind = "MP3" | "WAV" | "PROJECT";
 export const classifyDroppedAudio = (file: Pick<File, "name" | "type">): DroppedAudioKind | null =>
@@ -22,6 +23,8 @@ export interface ReplaceAudioInput {
   onProgress?: (text: string) => void;
   /** Se llama justo después de confirmar (antes de subir): la UI marca la tarjeta como ocupada. */
   onStart?: () => void;
+  /** Descarga el PROJECT vigente del beat (para fusionar un archivo de DAW con su ZIP). */
+  loadProject?: (beatId: string) => Promise<File | null>;
 }
 export type ReplaceAudioResult =
   | { status: "committed"; kind: DroppedAudioKind; beatId: string; replacedExisting: boolean }
@@ -29,7 +32,7 @@ export type ReplaceAudioResult =
   | { status: "unsupported" }
   | { status: "failed"; message: string };
 
-export async function replaceBeatAudio({ mutations, confirm, beatId, file, onProgress, onStart }: ReplaceAudioInput): Promise<ReplaceAudioResult> {
+export async function replaceBeatAudio({ mutations, confirm, beatId, file, onProgress, onStart, loadProject }: ReplaceAudioInput): Promise<ReplaceAudioResult> {
   const kind = classifyDroppedAudio(file);
   if (!kind) return { status: "unsupported" };
   let detail;
@@ -51,9 +54,11 @@ export async function replaceBeatAudio({ mutations, confirm, beatId, file, onPro
   onStart?.();
   const original = beatFromCatalogDetail(detail, null);
   try {
+    // PROJECT: archivo de DAW → se fusiona con el ZIP actual (lógica anterior); si no se puede cargar, se aborta sin tocar nada.
+    const projectFile = kind === "PROJECT" ? await prepareProjectForBeat({ beatName: detail.name, incoming: file, hasProject: Boolean(detail.hasProject), loadExisting: () => (loadProject ? loadProject(beatId) : Promise.resolve(null)) }) : null;
     const outcome = await mutations.replaceBeat({
       beatId, expectedVersion: detail.version, original, updated: original,
-      files: kind === "WAV" ? { wav: file } : kind === "PROJECT" ? { project: file } : { master: file },
+      files: kind === "WAV" ? { wav: file } : kind === "PROJECT" ? { project: projectFile } : { master: file },
       onProgress: (p) => onProgress?.(`${p.stage} ${Math.round((p.uploadedBytes / Math.max(1, p.totalBytes)) * 100)}%`),
     });
     if (outcome.status === "committed") return { status: "committed", kind, beatId, replacedExisting: replacing };

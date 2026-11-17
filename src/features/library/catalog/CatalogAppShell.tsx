@@ -41,6 +41,9 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   const scope = useCatalogGalleryScope({ services, accountId, context });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const tagPeek = useBeatTagPeek();
+  // Preferencia «Incomplete file warnings» (se guarda en este dispositivo; por defecto activada, como en la Gallery anterior). Antes el panel la mostraba fija en OFF.
+  const [incompleteWarnings, setIncompleteWarnings] = useState(true);
+  useEffect(() => { void platform.preferences.load().then((p) => setIncompleteWarnings(p.incomplete_warnings_enabled ?? true)).catch(() => {}); }, []);
   const trashSource = useMemo(() => createCatalogTrashSource({ api: services.api, mutations: services.mutations }), [services]);
   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);
   const { snapshot, interaction, playback, audio, currentBeat, selectMode, selectedCount, drawer, setDrawer, notice } = scope;
@@ -51,7 +54,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   // imagen sobre cualquier zona de una BeatCard → portada; MP3/WAV sobre una BeatCard → reemplazo de audio con confirmación; MP3/WAV fuera → beat nuevo (AddBeatModal con `initialFile`).
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const { active: dropActive, targetId: dropTargetId } = useCatalogFileDrop({
-    enabled: !droppedFile && !scope.showAdd && !drawer,
+    enabled: !droppedFile && !scope.showAdd && !drawer && !scope.review,
     onDrop: (event) => {
       const action = routeDrop(event);
       if (action.type === "alert") { void appAlert({ title: action.title, message: action.message }); return; }
@@ -77,7 +80,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
     const beat = scope.toBeat(item);
     return (
       <BeatCard
-        beat={beat} visible interactive playbackInteractive={Boolean(item.playback)} openableProject={false} tagFrequency={scope.tagFrequency} showIncompleteWarnings={false}
+        beat={beat} visible interactive playbackInteractive={Boolean(item.playback)} openableProject={false} tagFrequency={scope.tagFrequency} showIncompleteWarnings={incompleteWarnings}
         playing={audio.playingId === beat.id && audio.isPlaying} selected={scope.isSelected(beat.id)} selectedCount={selectedCount} selectMode={selectMode}
         dragEnabled={false} networkOnline={scope.connectionState === "online"} offlineBusy={false} canUseOfflinePackage={false} canUseLocalHelper={false} canInspectNativeProject={false}
         onToggleOffline={() => {}} onRetryUpload={() => {}} onBulkEdit={scope.handleEditBulk} onBulkUpload={() => {}} onBulkDelete={scope.handleRemoveBulk}
@@ -149,9 +152,14 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           files={scope.cloudFiles.files.map((f) => ({ cloud_file_id: f.fileId, beat_id: scope.cloudFiles!.beat.id, file_type: f.role as never, filename: f.filename ?? "", original_size: Number(f.sizeBytes), part_count: f.partCount, status: f.status }))}
           busyId={scope.downloadBusy} downloadedIds={scope.downloaded} onDownload={scope.downloadKind} onClose={scope.closeDownloads} />
       )}
-      {scope.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.addBeatsAndReview} existingBeats={[]} maxNameChars={BEAT_NAME_MAX} />}
+      {scope.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.addBeatsAndReview} existingBeats={[]} />}
+      {scope.review && !drawer && (
+        <Drawer beat={scope.review.beat} mode="edit" tagSuggestions={scope.tagSuggestions} reviewInfo={{ current: 1, total: 1 }} closeAfterSave={false}
+          onClose={scope.cancelReview} onSkipCurrent={scope.cancelReview} onSkipAll={scope.cancelReview} isReviewNameTaken={() => false}
+          mutationAllowed={scope.connectionState === "online"} maxNameChars={BEAT_NAME_MAX} onSaved={scope.saveReview} onReleaseAudio={() => {}} />
+      )}
       {scope.showSettings && (
-        <SettingsPanel currentFolder={null} showIncompleteWarnings={false} onIncompleteWarningsChanged={() => {}} customCursorEnabled onCustomCursorChanged={() => {}}
+        <SettingsPanel currentFolder={null} showIncompleteWarnings={incompleteWarnings} onIncompleteWarningsChanged={setIncompleteWarnings} customCursorEnabled onCustomCursorChanged={() => {}}
           telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.handleDisconnectTelegramAccount}
           onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} trashSource={trashSource} onBeatRestored={() => { void scope.reloadLibrary(); }} />
       )}
