@@ -64,7 +64,7 @@ async function main() {
       return { userId, email: `${userId}@example.test`, password };
     };
     // Vaults insertados tras la activación → elegibles por trigger.
-    const A = await mkUser('v09u'); const chatId = '-1009000000001';
+    const A = await mkUser('v09u'); const chatId = process.env.LAB_REAL === '1' ? String(process.env.LAB_REAL_CHAT_ID) : '-1009000000001';
     const vaultId = deterministicId('vlt', A.userId, chatId);
     await pool.query("INSERT INTO vaults(id, user_id, telegram_chat_id, transport_bot_id, index_bootstrap_pending) VALUES ($1, $2, $3, 'Bot20', true)", [vaultId, A.userId, chatId]);
     const a = authority.createCatalogAuthority({ pool, env: { BEATGALER_CATALOG_NATIVE_ENABLED: 'true' }, controlPlaneAuthority: 'postgres' });

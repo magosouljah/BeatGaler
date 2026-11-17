@@ -14,6 +14,7 @@ const L = require('./lab-env.cjs');
 
 const cmd = process.argv[2];
 const flag = (f) => process.argv.includes(f);
+const REAL = process.env.LAB_REAL === '1'; // LAB REAL: gateway Telegram de pruebas (descriptor T11-SANDBOX), sin siembra
 const argVal = (f) => { const i = process.argv.indexOf(f); return i >= 0 ? process.argv[i + 1] : undefined; };
 if (argVal('--seed')) process.env.LAB_SEED_N = argVal('--seed');
 const L2 = argVal('--seed') ? (delete require.cache[require.resolve('./lab-env.cjs')], require('./lab-env.cjs')) : L;
@@ -50,10 +51,12 @@ async function up() {
   const cfg = JSON.parse(fs.readFileSync(L2.CFG_FILE, 'utf8'));
   // Cloud real: cwd con .env VACÍO → dotenv jamás lee cloud-server/.env. Entorno mínimo y explícito.
   fs.writeFileSync(L2.statePath('.env'), '');
-  const env = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, TEMP: process.env.TEMP, TMP: process.env.TMP, USERPROFILE: process.env.USERPROFILE, ...cfg.env, DATABASE_URL: cfg.databaseUrl, LAB_STATE_DIR: L2.STATE_DIR, LAB_SEED_N: String(cfg.seedN), ...(process.env.LAB_SYNTH_AUDIO ? { LAB_SYNTH_AUDIO: process.env.LAB_SYNTH_AUDIO } : {}) };
+  const env = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, TEMP: process.env.TEMP, TMP: process.env.TMP, USERPROFILE: process.env.USERPROFILE, ...cfg.env, DATABASE_URL: cfg.databaseUrl, LAB_STATE_DIR: L2.STATE_DIR, LAB_SEED_N: String(cfg.seedN), ...(process.env.LAB_SYNTH_AUDIO ? { LAB_SYNTH_AUDIO: process.env.LAB_SYNTH_AUDIO } : {}),
+    ...(REAL ? { LAB_REAL: '1', LAB_REAL_DESCRIPTOR: process.env.LAB_REAL_DESCRIPTOR, BEATGALER_T11_SANDBOX_APPROVAL: process.env.BEATGALER_T11_SANDBOX_APPROVAL, BEATGALER_CATALOG_JOURNAL_DIR: L2.statePath('journal').split(path.sep).join('/') } : {}) };
+  if (REAL) fs.mkdirSync(L2.statePath('journal'), { recursive: true });
   const cloudLog = L2.statePath('cloud.log'); fs.writeFileSync(cloudLog, '');
   const cl = fs.openSync(cloudLog, 'a');
-  const cloud = spawn(process.execPath, ['--require', path.join(__dirname, 'lab-preload.cjs'), path.join(L2.ROOT, 'cloud-server', 'server.js')], { cwd: L2.STATE_DIR, env, stdio: ['ignore', cl, cl], detached: true, windowsHide: true });
+  const cloud = spawn(process.execPath, ['--require', path.join(__dirname, REAL ? 'real-preload.cjs' : 'lab-preload.cjs'), path.join(L2.ROOT, 'cloud-server', 'server.js')], { cwd: L2.STATE_DIR, env, stdio: ['ignore', cl, cl], detached: true, windowsHide: true });
   fs.writeFileSync(pidFile('cloud'), String(cloud.pid)); cloud.unref();
   log(`Cloud pid=${cloud.pid} :${L2.PORTS.cloud} log=${cloudLog}`);
   const cloudUrl = `http://127.0.0.1:${L2.PORTS.cloud}`;
@@ -66,7 +69,7 @@ async function up() {
   startVite('web-postgres', L2.PORTS.webPostgres, true);
   if (!flag('--no-legacy')) startVite('web-legacy', L2.PORTS.webLegacy, false);
   const seedTimeout = Math.max(240000, cfg.seedN * 4000);
-  await waitFor(() => { const t = fs.readFileSync(cloudLog, 'utf8'); if (/\[lab\] seed failed|commit not committed|EADDRINUSE|startup failed/.test(t)) throw new Error('Cloud/seed falló: ver ' + cloudLog); return /\[lab\] (seed done|library already seeded)/.test(t); }, seedTimeout, 'siembra del Cloud');
+  if (!REAL) await waitFor(() => { const t = fs.readFileSync(cloudLog, 'utf8'); if (/\[lab\] seed failed|commit not committed|EADDRINUSE|startup failed/.test(t)) throw new Error('Cloud/seed falló: ver ' + cloudLog); return /\[lab\] (seed done|library already seeded)/.test(t); }, seedTimeout, 'siembra del Cloud');
   await waitFor(() => { if (/startup failed|cloud-server will not start/.test(fs.readFileSync(cloudLog, 'utf8'))) throw new Error('Cloud no arrancó: ver ' + cloudLog); return tcpUp(L2.PORTS.cloud); }, 60000, 'Cloud escuchando');
   await waitFor(() => httpOk(L2.PORTS.webPostgres, '/gallery'), 180000, 'Vite POSTGRES');
   if (!flag('--no-legacy')) await waitFor(() => httpOk(L2.PORTS.webLegacy, '/gallery'), 180000, 'Vite LEGACY');

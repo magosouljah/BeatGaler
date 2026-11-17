@@ -241,7 +241,28 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
     const msg = (Array.isArray(res && res.messages) ? res.messages : []).find((m) => m && toInt(m.id) === id && m.media && m.media.document);
     if (!msg) throw new GatewayError('PROVIDER_MESSAGE_NOT_FOUND', 'the provider has no document message with that id', { transient: false, status: 404 });
     metrics.downloads = (metrics.downloads || 0) + 1;
-    return client.iterDownload({ file: msg.media, offset, limit, requestSize });
+    // gramjs (iterDownload real): `offset` es un BigInteger y `limit` cuenta TROZOS (peticiones de requestSize), no bytes. Un número crudo
+    // fallaba con "offset.divide is not a function" y el iterador multi-trozo de gramjs 2.26 repetía el primer trozo (la parte 2 salía igual
+    // que el inicio del archivo, hash distinto) — hallazgos de la prueba integrada real, 2026-11-17. Se pide UN trozo alineado por iterador,
+    // se recorta el primero al `offset` solicitado y se detiene al cubrir `limit` bytes.
+    const reqSize = Number(requestSize) > 0 ? Math.floor(Number(requestSize) / 4096) * 4096 || 4096 : 512 * 1024;
+    const startAt = Math.max(0, Math.trunc(Number(offset) || 0));
+    const wanted = limit == null ? Infinity : Math.max(1, Math.trunc(Number(limit)));
+    const toBig = (n) => (typeof sdk.bigInt === 'function' ? sdk.bigInt(String(n)) : n);
+    async function* chunks() {
+      let aligned = Math.floor(startAt / reqSize) * reqSize; let skip = startAt - aligned; let delivered = 0;
+      while (delivered < wanted) {
+        let got = null;
+        for await (const piece of client.iterDownload({ file: msg.media, offset: toBig(aligned), limit: 1, requestSize: reqSize })) { got = piece; break; }
+        if (!got || !got.length) return;
+        const body = skip ? got.subarray(skip) : got; const short = got.length < reqSize;
+        const out = delivered + body.length > wanted ? body.subarray(0, wanted - delivered) : body;
+        if (out.length) { delivered += out.length; yield out; }
+        if (short) return;
+        aligned += reqSize; skip = 0;
+      }
+    }
+    return chunks();
   }
   // T15 (C9): borrado de un mensaje propio del bot. Nunca se llama sin journal externo persistido (lo garantiza catalog/purge.js).
   async function deleteMessage({ chatId, messageId } = {}) {

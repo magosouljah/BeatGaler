@@ -1,7 +1,7 @@
 // Sonda LAB (PostgreSQL real + gateway FAKE): unicidad de nombres de beats ACTIVOS — duplicados, variantes (mayúsculas/espacios), concurrencia y restaurar.
 //   node scripts/catalog-lab/probe-name-uniqueness.mjs
 import fs from 'node:fs'; import crypto from 'node:crypto';
-const cfg = JSON.parse(fs.readFileSync('E:/777/app/BeatGaler/tmp/catalog-lab/state/lab.env.json', 'utf8'));
+const cfg = JSON.parse(fs.readFileSync(`${process.env.LAB_STATE_DIR || 'E:/777/app/BeatGaler/tmp/catalog-lab/state'}/lab.env.json`, 'utf8'));
 const BASE = `http://127.0.0.1:${cfg.ports.webPostgres}/beatgaler-api`;
 const jar = new Map(); let csrf = ''; let ctx;
 const H = (extra = {}) => ({ 'Content-Type': 'application/json', 'X-BeatGaler-Client': 'web', Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; '), ...(csrf ? { 'X-BeatGaler-CSRF': csrf } : {}), ...extra });

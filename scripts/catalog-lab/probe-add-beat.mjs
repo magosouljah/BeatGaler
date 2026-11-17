@@ -42,7 +42,7 @@ const openPicker = async (files) => { await armPicker(...files); await clickByTe
 
 try {
   await login(POSTGRES, cfg.account);
-  await waitFor(async () => (await galleryState()).cards > 0, { timeout: 90000, msg: 'catalog cards' });
+  await waitFor(async () => { const g = await galleryState(); return g.cards > 0 || (process.env.LAB_REAL === '1' && g.mode === 'postgres' && g.storeStatus === 'empty'); }, { timeout: 90000, msg: 'catalog cards' }); // LAB REAL: biblioteca inicialmente vacía
   await installAudioCapture();
   await ex((b64, build) => { window.__mp3 = b64; (0, eval)(build); }, silentMp3Base64(), BUILD);
   const count0 = await total();

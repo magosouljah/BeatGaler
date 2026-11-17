@@ -132,3 +132,18 @@ test('gateway: FLOOD_WAIT → SEND_REJECTED con retryAfterMs y sin mensaje; perm
   await assert.rejects(t.verifyMessage({ chatId: '1001', messageId: 1 }), (e) => e.code === 'CREDENTIAL_REVOKED');
   assert.throws(() => g.createTelegramGateway({ client, sdk, senderId: 'Bot20', resolvePeer: async () => ({}) }), (e) => e.code === 'SENDER_INVALID');
 });
+
+test('downloadPart: contrato real de gramjs — offset BigInteger, un trozo alineado por iterador (el multi-trozo de gramjs repetía el primer trozo) y bytes exactos por rango', async () => {
+  const server = createFakeTelegramServer(); const client = server.session({ selfId: '20' });
+  const calls = []; const orig = client.iterDownload.bind(client);
+  client.iterDownload = (opts) => { calls.push({ offset: String(opts.offset), limit: opts.limit }); if (!bigInt.isInstance(opts.offset)) throw new TypeError('offset.divide is not a function'); return orig(opts); };
+  const t = g.createTelegramGateway({ client, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
+  const bytes = Buffer.from(Array.from({ length: 1_300_000 }, (_, i) => (i * 31 + (i >> 9)) & 255)); // contenido NO periódico: un trozo repetido o desplazado cambia el hash
+  const sent = await t.sendPart(part({ file: { name: 'a.wav', buffer: bytes } }));
+  const read = async (offset, limit) => { const out = []; for await (const c of await t.downloadPart({ chatId: '1001', messageId: sent.messageId, offset, limit, requestSize: 512 * 1024 })) out.push(c); return Buffer.concat(out); };
+  assert.ok((await read(0, null)).equals(bytes), 'archivo completo idéntico');
+  assert.deepEqual(calls.map((c) => c.offset), ['0', '524288', '1048576']); assert.ok(calls.every((c) => c.limit === 1));
+  calls.length = 0;
+  const mid = await read(600_001, 500_000); assert.ok(mid.equals(bytes.subarray(600_001, 1_100_001)), 'rango desalineado exacto');
+  assert.equal((await read(0, 100)).length, 100); assert.ok((await read(1_299_990, 1000)).equals(bytes.subarray(1_299_990)), 'cola corta');
+});

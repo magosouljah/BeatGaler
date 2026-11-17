@@ -46,7 +46,7 @@ function createFakeTelegramServer({ dedupWindowMs = null, legacyCanDelete = true
           if (f?.type === 'downloadFail') throw netError('Connection lost', 'ECONNRESET');
           if (!bytes) throw rpcError('FILE_REFERENCE_EXPIRED', 400);
           state.counters.downloads++;
-          const start = Number(offset); const end = limit == null ? bytes.length : Math.min(bytes.length, start + Number(limit));
+          const start = Number(offset); const end = limit == null ? bytes.length : Math.min(bytes.length, start + Number(limit) * requestSize); // gramjs: `limit` = nº de trozos, `offset` BigInteger
           for (let pos = start; pos < end; pos += requestSize) { const chunk = bytes.subarray(pos, Math.min(end, pos + requestSize)); state.counters.downloadBytes += chunk.length; yield Buffer.from(chunk); }
         }
         return gen();

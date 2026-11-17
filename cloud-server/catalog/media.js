@@ -160,6 +160,7 @@ function createCatalogMedia({ pool = null, authority = null, gateway = null, gra
     } catch (error) {
       metrics.providerErrors++;
       const code = error && error.code;
+      console.warn('[catalog-media] provider failure', JSON.stringify({ code: code || null, name: error && error.name, message: String(error && error.message || '').slice(0, 160) }));
       if (code === 'PROVIDER_MESSAGE_NOT_FOUND') throw new CatalogQueryError('MEDIA_UNAVAILABLE', 404, 'the provider has no document for this part (not proof of deletion)', { reason: 'PROVIDER_MESSAGE_NOT_FOUND' });
       if (code === 'CREDENTIAL_REVOKED') throw new CatalogQueryError('CREDENTIAL_REVOKED', 503, 'media gateway credential revoked', { reason: 'REVOKED' });
       throw new CatalogQueryError('MEDIA_UNAVAILABLE', 502, 'media gateway failed before the first byte', { reason: code || 'PROVIDER', retry_after_ms: Number(error?.retryAfterMs) || 5000 });
