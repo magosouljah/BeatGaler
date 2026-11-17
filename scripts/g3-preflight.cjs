@@ -16,7 +16,7 @@ const env = process.env; const isSet = (k) => (env[k] !== undefined && env[k] !=
 
 // 1. Repositorio
 const branch = git('rev-parse', '--abbrev-ref', 'HEAD'); add('rama', branch === 'local/landing-gallery-unificada' ? 'PASS' : 'FAIL', branch);
-const dirty = git('status', '--porcelain').split('\n').filter((l) => l && !/^\?\? (Claude outputs\/|beatgaler-console\.jpg)/.test(l));
+const dirty = git('status', '--porcelain').split('\n').filter((l) => l && !/^\?\? "?(Claude outputs\/|beatgaler-console\.jpg)/.test(l));
 add('arbol-limpio', dirty.length === 0 ? 'PASS' : 'FAIL', dirty.length ? `${dirty.length} cambios sin confirmar` : 'sin cambios propios');
 const head = git('rev-parse', 'HEAD'); const remote = (git('ls-remote', 'origin', 'refs/heads/local/landing-gallery-unificada').split(/\s/)[0] || ''); // única lectura de red: git ls-remote (solo lectura) al remoto del repositorio
 add('head-igual-remoto', head === remote ? 'PASS' : 'FAIL', `${head.slice(0, 7)} / ${remote.slice(0, 7)}`);
