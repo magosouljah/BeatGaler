@@ -78,7 +78,7 @@ test('catalog/ no importa transporte ni red', () => {
     const reqs = [...src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
     // T05-N: ./authority es módulo interno del catálogo (solo SQL + crypto); sigue prohibido importar transporte o red.
     // T06: ./cursor y ./queries son módulos internos (SQL + HMAC); routes.js es el único que requiere express (servidor HTTP, no cliente de red).
-    const allowed = ['crypto', './contract', './legacy-codec', './migration', './authority', './cursor', './queries', './metadata-rules', './commands', './facets'];
+    const allowed = ['crypto', './contract', './legacy-codec', './migration', './authority', './cursor', './queries', './metadata-rules', './commands', './facets', './name-uniqueness'];
     if (f === 'worker.js') allowed.length = 1; // worker.js: solo crypto; transporte inyectado, nunca importado
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
     if (f === 'transport.js') allowed.push('fs', 'path', 'stream', 'stream/promises', './transport-gateway'); // T12: temporal acotado en disco; gateway y MASTER inyectados
