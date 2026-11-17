@@ -2,6 +2,8 @@
 
 **Decisiones del propietario (2026-11-13, [E46](EVIDENCIA.md)):** pruebas de navegador reales (Edge, lector de pantalla, zoom/táctil/reduced-motion) **manuales por el propietario** ([V09-PRUEBA-MANUAL](V09-PRUEBA-MANUAL-20261113.md)); T20 **solo 500 beats** (1M = limitación conocida); **E7 no se ejecuta** (sin rotación de Bot20). Pendiente: resultados manuales, dictamen de Sol (G2/G3/T20/T21-A).
 
+**Flake T06 resuelto en su causa (2026-11-16, [E50](EVIDENCIA.md)):** sin estadísticas, PostgreSQL 16 elige un Nested Loop cuadrático para búsquedas de 1–2 caracteres (389 ms con 241 beats vs 3,6 ms con ANALYZE); corregido con ANALYZE tras sembrar (T06) y tras restore (`backup.js`). CI `43983008312` PASS sobre `8974dca`. Sin cambio de timeouts/SLO. Pendiente: observar próximos runs; hallazgo L01 (10 min, nombres de 20 000 caracteres).
+
 **G3/G4/T21-A (2026-11-14, [E49](EVIDENCIA.md)):** 401 de V10 explicado (sesión caducada por perfil de Chrome persistente tras recrear el LAB; el arnés ahora lo registra aparte); G4 parcial: restore a 500 beats con medios falsos y verificación de bytes PASS en CI (`43634557289`, `68c40fe`); `pg_dump` real y destino de backups NO ejecutados. Paquete T21-A actualizado. **G2 NOT_PROVEN; G3 y G4 sin dictamen; sin GO.**
 
 **Gateway fail-closed reforzado (2026-11-14, [E48](EVIDENCIA.md)):** envío/borrado revalidan SQL en cada llamada (cuarentena, rotación, reasignación); lecturas caché 5 s. CI `43578622103` PASS sobre `c3dc732`. G2 sigue NOT_PROVEN.
