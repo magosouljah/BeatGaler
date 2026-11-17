@@ -1224,6 +1224,16 @@
           "network": "loopback"
         },
         {
+          "id": "t16-import-pick-drop",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/importPickDrop.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
           "id": "t16-catalog-composition",
           "cmd": [
             "node",

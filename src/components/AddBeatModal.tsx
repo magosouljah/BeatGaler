@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { appAlert } from "../lib/dialog";
 import type { Beat, FolderScanResult, ResolveFilesPayload } from "../types";
 import { Artwork, FolderIcon } from "./ui";
@@ -30,6 +30,8 @@ interface Props {
   existingBeats: Beat[];
   /** Si se define, el nombre del beat no puede superarlo (code points): se pide editarlo antes de subir. Sin definir = flujo actual sin cambios. */
   maxNameChars?: number;
+  /** Archivo soltado (arrastrar y soltar): entra por el MISMO flujo que «Choose MP3 or WAV» (validación de nombre incluida). */
+  initialFile?: File;
 }
 
 type Step = "choose" | "scanning" | "results" | "conflict";
@@ -84,7 +86,7 @@ function isDuplicateCandidate(beat: Beat, existingBeats: Beat[]) {
   ));
 }
 
-export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, existingBeats , maxNameChars }: Props) {
+export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, existingBeats , maxNameChars, initialFile }: Props) {
   const [step, setStep] = useState<Step>("choose");
   const [scanned, setScanned] = useState<Beat[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -96,6 +98,16 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
   const [importBatch, setImportBatch] = useState<ImportBatchPreview | null>(null);
   const [pending, setPending] = useState<{ candidate: PlatformImportCandidate; draft: string } | null>(null);
   const handedOff = useRef(false);
+  const acceptRef = useRef<((candidate: PlatformImportCandidate) => void) | null>(null);
+  const initialStarted = useRef(false);
+  useEffect(() => {
+    if (!initialFile || initialStarted.current || !platform.capabilities.browserFileImport) return;
+    initialStarted.current = true;
+    setImporting(true);
+    try { acceptRef.current?.(platform.importer.fromFile(initialFile)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setImporting(false); }
+  }, [initialFile]);
 
   if (platform.capabilities.browserFileImport) {
     const finishCandidate = (candidate: PlatformImportCandidate, beat: Beat) => {
@@ -115,6 +127,12 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
       onClose();
     };
     const nameOk = (value: string) => value.trim().length > 0 && maxNameChars !== undefined && beatNameLength(value.trim()) <= maxNameChars;
+    const acceptCandidate = (candidate: PlatformImportCandidate) => {
+      // Nombre derivado del archivo válido (o sin límite): flujo actual, sin pasos adicionales.
+      if (maxNameChars === undefined || beatNameLength(candidate.beat.name.trim()) <= maxNameChars) { finishCandidate(candidate, candidate.beat); return; }
+      setPending({ candidate, draft: candidate.beat.name });
+    };
+    acceptRef.current = acceptCandidate;
     const handleBrowserPick = async () => {
       if (importing) return;
       setImporting(true);
@@ -122,9 +140,7 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
       try {
         const candidate = await platform.importer.pickBeat();
         if (!candidate) return;
-        // Nombre derivado del archivo válido (o sin límite): flujo actual, sin pasos adicionales.
-        if (maxNameChars === undefined || beatNameLength(candidate.beat.name.trim()) <= maxNameChars) { finishCandidate(candidate, candidate.beat); return; }
-        setPending({ candidate, draft: candidate.beat.name });
+        acceptCandidate(candidate);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason));
       } finally {

@@ -23,6 +23,8 @@ import { CatalogVirtualGallery } from "./CatalogVirtualGallery";
 import type { CatalogServices } from "./catalogLibraryProvider";
 import { useCatalogGalleryScope } from "./useCatalogGalleryScope";
 import { useState } from "react";
+import { appAlert } from "../../../lib/dialog";
+import { useCatalogFileDrop, pickDroppedAudio } from "./useCatalogFileDrop";
 
 export interface CatalogAppShellProps {
   services: CatalogServices;
@@ -40,6 +42,20 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   const tenantKey = `${accountId}:${context.authority_era}:${context.authority_epoch}`;
   // V09 hallazgo: el overlay de arranque (#beatgaler-startup-loader) solo lo retiraba el pipeline LEGACY; en POSTGRES bloqueaba los clics.
   useEffect(() => { dismissBeatGalerStartupLoader(); }, []);
+  // Arrastrar y soltar MP3/WAV: mismo flujo que «Add beat» (AddBeatModal con `initialFile`: validación de nombre, importación real al catálogo).
+  const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const dropActive = useCatalogFileDrop({
+    enabled: !droppedFile && !scope.showAdd && !drawer,
+    onFiles: (files) => {
+      if (scope.rejectOfflineMutation("Importing beats")) return;
+      const picked = pickDroppedAudio(files);
+      if (picked.kind === "ok") { setDroppedFile(picked.file); scope.setShowAdd(true); return; }
+      void appAlert(picked.kind === "many"
+        ? { title: "Drop one beat at a time", message: "BeatGaler Web imports one beat per drag action." }
+        : { title: "Nothing to import", message: "Drop an MP3 or WAV file to add a beat." });
+    },
+  });
+  const closeAdd = () => { setDroppedFile(null); scope.setShowAdd(false); };
   const openAdd = () => { if (!scope.rejectOfflineMutation("Adding a beat")) scope.setShowAdd(true); };
   // Scope para GalleryChrome (misma forma que el legacy; `displayedBeats` no existe en POSTGRES: la selección es global en el servidor).
   const chromeScope = {
@@ -113,7 +129,8 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           </button>
         </div>
       )}
-      {scope.showAdd && <AddBeatModal onClose={() => scope.setShowAdd(false)} onAdd={scope.addBeatsAndReview} existingBeats={[]} maxNameChars={BEAT_NAME_MAX} />}
+      {dropActive && <div data-testid="catalog-drop-overlay" aria-hidden style={{ position: "fixed", inset: 0, zIndex: 390, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)", border: "2px dashed #3a3a3a", color: "#cfcfcf", fontSize: 14, pointerEvents: "none" }}>Drop an MP3 or WAV to add a beat</div>}
+      {scope.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.addBeatsAndReview} existingBeats={[]} maxNameChars={BEAT_NAME_MAX} />}
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={false} onIncompleteWarningsChanged={() => {}} customCursorEnabled onCustomCursorChanged={() => {}}
           telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.handleDisconnectTelegramAccount}
