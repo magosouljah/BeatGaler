@@ -12,6 +12,7 @@ import { useSyncExternalStore } from "react";
 import { CatalogApiError, type CatalogApi, type CatalogFacetsPage, type CatalogQueryFilters, type CatalogSort, type CatalogState } from "./catalogApi";
 import { type CatalogBulkKind, type CatalogBulkOperation, type CatalogBulkStatus, type CatalogBulkTagsOp, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogRenamePreview, type CatalogSelection, normalizeTagKey } from "./catalogCommandsApi";
 import { metadataPatch } from "./catalogMutations";
+import { validateBeatName } from "../../../lib/metadataValidation";
 
 export interface InteractionQuery { filters: CatalogQueryFilters; sort: CatalogSort; revision: string }
 export type SelectionStatus = "none" | "preparing" | "active" | "pending" | "conflict" | "frozen";
@@ -218,6 +219,7 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
     const e = snapshot.editor; if (!e) return null;
     const patch: CatalogMetadataPatch = metadataPatch(e.original, e.draft);
     if (Object.keys(patch).length === 0) { set({ editor: { ...e, status: "saved", dirty: false } }); return snapshot.editor; }
+    if (typeof patch.name === "string") { const nameCheck = validateBeatName(patch.name); if (!nameCheck.valid) { set({ editor: { ...e, status: "error", error: nameCheck.reason } }); return snapshot.editor; } } // sin petición; el texto del usuario se conserva
     const key = retry && e.idempotencyKey ? e.idempotencyKey : newKey(); // retry = misma operación (misma clave y versión de origen)
     set({ editor: { ...e, status: "saving", idempotencyKey: key, error: null } });
     try {

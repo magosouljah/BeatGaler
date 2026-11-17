@@ -341,15 +341,16 @@ test('B01/B02 legacy: offsets 0/1/239/240/241 sobre N=241, fuera de rango → ú
   await bad({ offset: ['1', '2'] }, 'INPUT_INVALID'); await bad({ offset: '0', cursor: 'x' }, 'INPUT_INVALID'); await bad({ offset: '0', includeTag: 'a' }, 'INPUT_INVALID');
 }));
 
-test('L01: default 100, máximo 240, 241 → 400 sin clamp; página > 2 MiB → 413 sin truncar; q 64 KiB +1 → 400', () => withDb(async (pool) => {
+test('L01: default 100, máximo 240, 241 → 400 sin clamp; nombres largos heredados íntegros (sin truncar); q 64 KiB +1 → 400', () => withDb(async (pool) => {
   const q = mk(pool);
   const lib = await nativeLibrary(pool);
-  await seedBeats(pool, lib, gen(241, (i) => ({ name: i < 120 ? 'x'.repeat(20000) : `n${i}` })));
+  await seedBeats(pool, lib, gen(241, (i) => ({ name: i < 3 ? 'x'.repeat(4000) : `n${i}` }))); // el API limita nombres a 15 caracteres; filas heredadas/sembradas por SQL pueden ser más largas
   assert.equal((await q.listBeats({ userId: lib.userId, query: { sort: 'manual', edge: 'last' } })).items.length, 100);
   await assert.rejects(q.listBeats({ userId: lib.userId, query: { limit: '241' } }), (e) => e.code === 'INPUT_INVALID' && e.detail.reason === 'LIMIT');
-  await assert.rejects(q.listBeats({ userId: lib.userId, query: { sort: 'manual', limit: '240' } }), (e) => e.code === 'CATALOG_PAGE_TOO_LARGE' && e.status === 413 && e.detail.bytes > 2 * 1024 * 1024);
+  // El 413 por página > 2 MiB se prueba en unitario (catalog-queries.test.cjs, 240 filas de 9000 caracteres): con nombres ≤ 15 caracteres ya no se alcanza con datos válidos.
+  assert.equal((await q.listBeats({ userId: lib.userId, query: { sort: 'manual', limit: '240' } })).items.length, 240);
   const small = await q.listBeats({ userId: lib.userId, query: { sort: 'manual', limit: '100' } });
-  assert.equal(small.items[0].name.length, 20000, 'nombres largos íntegros, sin truncar');
+  assert.equal(small.items[0].name.length, 4000, 'nombres largos heredados íntegros, sin truncar');
   await assert.rejects(q.listBeats({ userId: lib.userId, query: { q: 'é'.repeat(32 * 1024 + 1) } }), (e) => e.code === 'INPUT_INVALID' && e.detail.reason === 'QUERY_TOO_LARGE');
   const ok = await q.listBeats({ userId: lib.userId, query: { q: 'é'.repeat(32 * 1024), includeTotal: 'true' } });
   assert.deepEqual([ok.items, ok.totalMatched], [[], 0], 'q de exactamente 64 KiB UTF-8 es válido');

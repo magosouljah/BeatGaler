@@ -3,6 +3,14 @@
 // flags, CAS por selectionVersion), operaciones bulk/rename (crear, consultar, cancelar, reanudar) y detalle SQL de un beat.
 // Nunca carga INDEX ni toca Telegram; las credenciales son la sesión Cloud existente. Errores estables como CatalogApiError.
 import { CatalogApiError, type CatalogBeatDto, type CatalogSort, type CatalogState } from "./catalogApi";
+import { validateBeatName } from "../../../lib/metadataValidation";
+
+/** Valida el nombre ANTES de cualquier petición: se rechaza con un mensaje claro, nunca se recorta. El servidor repite la regla. */
+export function assertBeatNameWithinLimit(name: unknown): void {
+  if (typeof name !== "string") return;
+  const r = validateBeatName(name);
+  if (!r.valid) throw new CatalogApiError(400, "INPUT_INVALID", r.reason, { reason: "NAME_TOO_LONG", field: "name" });
+}
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
 
 export interface CatalogWriteHeaders { era: string; epoch: string }
@@ -89,8 +97,10 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
 
   return Object.freeze({
     getBeat: async (beatId: string, signal?: AbortSignal) => (await request<CatalogBeatDetail>("GET", `/catalog/v1/beats/${enc(beatId)}`, { signal })).body,
-    patchBeat: async (beatId: string, { expectedVersion, patch, idempotencyKey, ifMatch = null }: { expectedVersion: string; patch: CatalogMetadataPatch; idempotencyKey: string; ifMatch?: string | null }, signal?: AbortSignal) =>
-      (await request<CatalogPatchResult>("PATCH", `/catalog/v1/beats/${enc(beatId)}`, { body: { expectedVersion, patch }, idempotencyKey, ifMatch, signal })).body,
+    patchBeat: async (beatId: string, { expectedVersion, patch, idempotencyKey, ifMatch = null }: { expectedVersion: string; patch: CatalogMetadataPatch; idempotencyKey: string; ifMatch?: string | null }, signal?: AbortSignal) => {
+      assertBeatNameWithinLimit(patch?.name);
+      return (await request<CatalogPatchResult>("PATCH", `/catalog/v1/beats/${enc(beatId)}`, { body: { expectedVersion, patch }, idempotencyKey, ifMatch, signal })).body;
+    },
     trashBeats: async (items: CatalogVersionedItem[], idempotencyKey: string, signal?: AbortSignal) => {
       if (items.length > BATCH_MAX) throw new CatalogApiError(413, "PAYLOAD_TOO_LARGE", `trash batch exceeds ${BATCH_MAX} items`, { max: BATCH_MAX });
       return (await request<CatalogBatchResult>("POST", "/catalog/v1/beats/trash", { body: { items }, idempotencyKey, signal })).body;
@@ -113,8 +123,10 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
     applySelectionOp: async (selectionId: string, { selectionVersion, op, idempotencyKey }: { selectionVersion: string; op: CatalogSelectionOp; idempotencyKey: string }, signal?: AbortSignal) =>
       (await request<CatalogSelection>("POST", `/catalog/v1/selections/${enc(selectionId)}/ops`, { body: { selectionVersion, op }, idempotencyKey, signal })).body,
     releaseSelection: async (selectionId: string, signal?: AbortSignal) => (await request<CatalogSelection>("POST", `/catalog/v1/selections/${enc(selectionId)}/release`, { body: {}, signal })).body,
-    createBulkOperation: async ({ kind, selectionId, selectionVersion, patch, tagsOp, idempotencyKey }: { kind: Exclude<CatalogBulkKind, "TAG_RENAME">; selectionId: string; selectionVersion: string; patch?: CatalogMetadataPatch; tagsOp?: CatalogBulkTagsOp; idempotencyKey: string }, signal?: AbortSignal) =>
-      (await request<CatalogBulkOperation>("POST", "/catalog/v1/operations", { body: { kind, selectionId, selectionVersion, patch, tagsOp }, idempotencyKey, signal })).body,
+    createBulkOperation: async ({ kind, selectionId, selectionVersion, patch, tagsOp, idempotencyKey }: { kind: Exclude<CatalogBulkKind, "TAG_RENAME">; selectionId: string; selectionVersion: string; patch?: CatalogMetadataPatch; tagsOp?: CatalogBulkTagsOp; idempotencyKey: string }, signal?: AbortSignal) => {
+      assertBeatNameWithinLimit(patch?.name);
+      return (await request<CatalogBulkOperation>("POST", "/catalog/v1/operations", { body: { kind, selectionId, selectionVersion, patch, tagsOp }, idempotencyKey, signal })).body;
+    },
     getOperation: async (operationId: string, detailsAfter: string | null = null, signal?: AbortSignal) =>
       (await request<CatalogBulkOperation>("GET", `/catalog/v1/operations/${enc(operationId)}${detailsAfter ? `?detailsAfter=${enc(detailsAfter)}` : ""}`, { signal })).body,
     cancelOperation: async (operationId: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", `/catalog/v1/operations/${enc(operationId)}/cancel`, { body: {}, signal })).body,

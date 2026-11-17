@@ -199,7 +199,7 @@ test('revisión externa → ROUND_STALE (sin mezclar revisiones); ronda nueva so
   const r0 = await playback.startRound({ ...hdr, setId: set.setId, consumerId: 'c1' });
   const first = []; let sequence = '0';
   for (let i = 0; i < 300; i++) { const r = await playback.nextInRound({ ...hdr, roundId: r0.roundId, sequence, idempotencyKey: key() }); sequence = r.sequence; first.push(r.beatId); }
-  await cmd.patchBeat({ ...hdr, idempotencyKey: key(), beatId: 'b0499', expectedVersion: '1', patch: { name: 'Edited elsewhere' } });
+  await cmd.patchBeat({ ...hdr, idempotencyKey: key(), beatId: 'b0499', expectedVersion: '1', patch: { name: 'Edited remote' } });
   await rejects(playback.nextInRound({ ...hdr, roundId: r0.roundId, sequence, idempotencyKey: key() }), 'ROUND_STALE');
   assert.equal((await playback.getRound({ userId: lib.userId, roundId: r0.roundId })).status, 'STALE');
   const set2 = await readySet(q, lib);

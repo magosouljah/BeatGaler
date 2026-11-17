@@ -131,3 +131,30 @@ describe("catalogMutations", () => {
     expect(r.status).toBe("error"); if (r.status === "error") expect((r.error as CatalogApiError).code).toBe("LIBRARY_FROZEN");
   });
 });
+
+describe("nombre de beat: máximo 15 caracteres (rechazo claro, nunca recorte)", () => {
+  const long = "Dieciséis chars!"; // 16 caracteres
+  it("patch con nombre de 15 se envía tal cual; de 16 se rechaza ANTES de cualquier petición con mensaje claro y sin tocar el beat", async () => {
+    const h = harness();
+    const ok = await h.mutations.patchBeat({ beatId: "g1", expectedVersion: "1", patch: { name: "Quince chars 15" } });
+    expect(ok.status).toBe("ok"); expect(h.server.beats.get("g1")?.name).toBe("Quince chars 15");
+    const before = h.server.beats.get("g1")?.name;
+    const bad = await h.mutations.patchBeat({ beatId: "g1", expectedVersion: "2", patch: { name: long } });
+    expect(bad).toMatchObject({ status: "error", error: { code: "INPUT_INVALID", detail: { reason: "NAME_TOO_LONG", field: "name" }, message: expect.stringContaining("15 caracteres") } });
+    expect(h.server.beats.get("g1")?.name).toBe(before);
+  });
+  it("import: nombre de 16 se rechaza antes de preparar o subir archivos (el archivo original no se toca ni se renombra); 15 se importa íntegro", async () => {
+    const h = harness();
+    const meta = { bpm: "120", key: "Cm", tags: ["trap"], rating: 3, color: "#111", color2: "#222", image_base64: null };
+    await expect(h.mutations.importBeat({ beat: { name: long, ...meta }, files: { master: blob(3000) } })).rejects.toMatchObject({ code: "INPUT_INVALID", detail: { reason: "NAME_TOO_LONG" } });
+    expect(h.prepared).toEqual([]);
+    const r = await h.mutations.importBeat({ beat: { name: " Quince chars 15 ", ...meta }, files: { master: blob(3000) } });
+    expect(r.status).toBe("committed"); if (r.status === "committed") expect(h.server.beats.get(r.beatId)?.name).toBe("Quince chars 15");
+  });
+  it("cuenta code points, no unidades UTF-16: 15 emojis son válidos, 16 no", async () => {
+    const h = harness();
+    const e15 = "🎵".repeat(15);
+    expect((await h.mutations.patchBeat({ beatId: "g1", expectedVersion: "1", patch: { name: e15 } })).status).toBe("ok");
+    expect(await h.mutations.patchBeat({ beatId: "g1", expectedVersion: "2", patch: { name: "🎵".repeat(16) } })).toMatchObject({ status: "error", error: { detail: { reason: "NAME_TOO_LONG" } } });
+  });
+});

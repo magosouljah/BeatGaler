@@ -36,3 +36,20 @@ test('validatePatch: solo campos presentes, rechazo con detalle (sin cleanTags),
   assert.equal(rules.validatePatch({ name: 'a\u0000b' }).ok, false, 'NUL rechazado');
   assert.equal(rules.validatePatch(null).ok, false); assert.equal(rules.validatePatch([]).ok, false);
 });
+
+test('nombre de beat: máximo 15 code points, rechazo con detalle (nunca recorte), paridad con el TS del cliente', async () => {
+  const ts = await import(TS);
+  const names = ['', 'a', 'Quince chars 15', 'Dieciséis chars!', ' '.repeat(15), '🎵'.repeat(15), '🎵'.repeat(16), 'é'.repeat(15), 'é'.repeat(16), 'ñ'.repeat(20000)];
+  for (const n of names) {
+    const mine = rules.validatePatch({ name: n }); const theirs = ts.validateBeatName(n);
+    if (n.trim()) assert.equal(mine.ok, theirs.valid, `paridad ok/valid para ${JSON.stringify(n.slice(0, 20))}…(${Array.from(n).length})`);
+  }
+  assert.equal(rules.NAME_MAX_CHARS, ts.BEAT_NAME_MAX);
+  assert.deepEqual(rules.validatePatch({ name: 'Quince chars 15' }).set, { name: 'Quince chars 15' });
+  const long = rules.validatePatch({ name: 'Dieciséis chars!' });
+  assert.deepEqual([long.ok, long.errors[0].field, long.set.name], [false, 'name', undefined], 'rechazado, no recortado ni escrito');
+  assert.match(long.errors[0].reason, /exceeds 15 characters \(has 16\)/);
+  assert.equal(rules.validatePatch({ name: '🎵'.repeat(15) }).ok, true);
+  assert.equal(rules.validatePatch({ name: '🎵'.repeat(16) }).ok, false);
+  assert.match(ts.validateBeatName('Dieciséis chars!').reason, /15 caracteres/);
+});

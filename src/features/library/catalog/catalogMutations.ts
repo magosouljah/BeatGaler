@@ -9,6 +9,7 @@
 import type { Beat } from "../../../types";
 import type { BeatAssets, GalerCloudObjectRef } from "../../../domain/beat";
 import { CatalogApiError, type CatalogBeatDto } from "./catalogApi";
+import { assertBeatNameWithinLimit } from "./catalogCommandsApi";
 import { BATCH_MAX, type CatalogBeatDetail, type CatalogBulkOperation, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogPurgeOperation, type CatalogVersionedItem } from "./catalogCommandsApi";
 import { describePart, type CatalogTransfer, type CommitResult, type TransferIntent, type TransferOperationDto, type TransferPartSpec, type TransferRole, type UploadPartResult } from "./catalogTransfer";
 
@@ -217,6 +218,7 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
   }
   async function importBeat({ beat, files, onProgress }: { beat: Pick<Beat, "name" | "bpm" | "key" | "tags" | "rating" | "color" | "color2" | "image_base64">; files: TransferFiles; onProgress?: (p: MutationProgress) => void }): Promise<TransferOutcome> {
     if (!files.master) throw new CatalogApiError(400, "INPUT_INVALID", "Add a MASTER MP3 before saving this beat.", { reason: "IMPORT_REQUIRES_MASTER" });
+    assertBeatNameWithinLimit(beat.name.trim()); // antes de leer/subir nada: el nombre nunca se recorta ni se toca el archivo original
     const prepared = await prepareFiles({ ...files, artwork: files.artwork ?? (beat.image_base64 ? dataUrlToFile(beat.image_base64, beat.name) : null) }, beat.name);
     const specs = partSpecs(prepared); const resolved = await Promise.all(specs.map(async (s) => ({ ...s, spec: await s.spec })));
     const metadata: Record<string, unknown> = { name: beat.name.trim(), bpm: beat.bpm, key: beat.key, tags: [...beat.tags], rating: beat.rating };
@@ -225,6 +227,7 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
   }
   async function replaceBeat({ beatId, expectedVersion, original, updated, files, onProgress }: { beatId: string; expectedVersion: string; original: Pick<Beat, "name" | "bpm" | "key" | "tags" | "rating" | "color" | "color2">; updated: Pick<Beat, "name" | "bpm" | "key" | "tags" | "rating" | "color" | "color2">; files: TransferFiles; onProgress?: (p: MutationProgress) => void }): Promise<TransferOutcome | (PatchOutcome & { idempotencyKey: string })> {
     const patch = metadataPatch(original, updated);
+    assertBeatNameWithinLimit(patch.name);
     const prepared = await prepareFiles(files, updated.name || original.name);
     const specs = partSpecs(prepared);
     // Sin archivos nuevos → metadata-only → PATCH (nunca una operación de transferencia vacía).

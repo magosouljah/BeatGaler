@@ -7,7 +7,8 @@
 
 const TAG_MAX = 40;
 const TAGS_MAX = 30;
-const NAME_MAX_BYTES = 64 * 1024;
+// Nombre de beat: máximo 15 caracteres (code points). Se rechaza con detalle; nunca se recorta. Espejo de src/lib/metadataValidation.ts (BEAT_NAME_MAX).
+const NAME_MAX_CHARS = 15;
 const COLOR_MAX = 64;
 
 function normalizeTag(value) { return String(value).trim().toLowerCase().replace(/\s+/g, ' '); }
@@ -58,7 +59,7 @@ function validatePatch(input) {
   if ('name' in input) {
     const v = input.name;
     if (typeof v !== 'string' || !v.trim()) errors.push({ field: 'name', reason: 'name must be a non-empty string' });
-    else if (Buffer.byteLength(v, 'utf8') > NAME_MAX_BYTES) errors.push({ field: 'name', reason: 'name exceeds 64 KiB' });
+    else if (Array.from(v).length > NAME_MAX_CHARS) errors.push({ field: 'name', reason: `name exceeds ${NAME_MAX_CHARS} characters (has ${Array.from(v).length})` });
     else if (hasControl(v)) errors.push({ field: 'name', reason: 'name contains control characters' });
     else set.name = v;
   }
@@ -111,4 +112,4 @@ function validatePatch(input) {
   return { ok: errors.length === 0, set, errors };
 }
 
-module.exports = { TAG_MAX, TAGS_MAX, NAME_MAX_BYTES, COLOR_MAX, PATCH_FIELDS, normalizeTag, validateTag, validateBpm, validateMusicKey, validatePatch };
+module.exports = { TAG_MAX, TAGS_MAX, NAME_MAX_CHARS, COLOR_MAX, PATCH_FIELDS, normalizeTag, validateTag, validateBpm, validateMusicKey, validatePatch };

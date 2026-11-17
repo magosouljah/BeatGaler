@@ -93,3 +93,11 @@ test('la transacción de mutación bloquea la biblioteca y exige era/época; era
   const native = make(fakePool({ lib: LIB, onQuery: (sql) => { if (/FROM catalog_operations WHERE user_id = \$1 AND idempotency_key/.test(sql)) throw Object.assign(new Error('fence'), { code: 'BGN04' }); } }));
   await assert.rejects(native.patchBeat({ userId: 'u1', beatId: 'b1', ...H, expectedVersion: '1', patch: { name: 'x' } }), (e) => e.code === 'CATALOG_NATIVE_RULE' && e.status === 409);
 });
+
+test('nombre > 15 caracteres: patch y bulk rechazados antes de la transacción con INPUT_INVALID/name; exactamente 15 pasa la validación', async () => {
+  const pool = fakePool({ lib: LIB });
+  const c = make(pool);
+  const tooLong = (e) => e.code === 'INPUT_INVALID' && e.detail.errors.some((x) => x.field === 'name' && /exceeds 15 characters/.test(x.reason));
+  await assert.rejects(c.patchBeat({ userId: 'u1', beatId: 'b1', ...H, expectedVersion: '1', patch: { name: 'Dieciséis chars!' } }), tooLong);
+  await assert.rejects(c.patchBeat({ userId: 'u1', beatId: 'b1', ...H, expectedVersion: '1', patch: { name: 'x'.repeat(70000) } }), (e) => e.code === 'PAYLOAD_TOO_LARGE' || tooLong(e));
+});
