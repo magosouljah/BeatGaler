@@ -161,7 +161,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={incompleteWarnings} onIncompleteWarningsChanged={setIncompleteWarnings} customCursorEnabled onCustomCursorChanged={() => {}}
           telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.handleDisconnectTelegramAccount}
-          onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} trashSource={trashSource} onBeatRestored={() => { void scope.reloadLibrary(); }} />
+          onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} hideCustomCursor trashSource={trashSource} onBeatRestored={() => { void scope.reloadLibrary(); }} />
       )}
       {drawer && (
         <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }} onSaved={scope.updateBeat}

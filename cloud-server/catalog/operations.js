@@ -21,6 +21,7 @@ const codec = require('./legacy-codec');
 const rules = require('./metadata-rules');
 const { STATEMENT_TIMEOUT_MS } = require('./queries');
 const facets = require('./facets');
+const { nameKey, assertNameFree } = require('./name-uniqueness');
 
 const RESERVATION_TTL_MS = 15 * 60_000;
 const RESERVATION_MAX_MS = 24 * 60 * 60_000;
@@ -201,6 +202,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       let beatId = v.beatId;
       if (v.kind === 'IMPORT') {
         await assertQuota(client, uid, ctx);
+        await assertNameFree(client, uid, gen, v.metadata.name); // pronto: antes de reservar y de subir bytes (el commit lo revalida bajo el lock)
         beatId = `b-${randomUUID()}`; // servidor, dentro de ^[A-Za-z0-9._:@+-]{1,192}$ (NATIVO §7)
         const tomb = await client.query('SELECT 1 FROM catalog_tombstones WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
         if (tomb.rows.length) throw new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'generated id collides with a tombstone; retry', { reason: 'ID_COLLISION' });
@@ -211,6 +213,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
         if (tomb.rows.length || b.state === 'PURGING') throw new CatalogQueryError('PURGE_PENDING', 409, 'beat is being purged or has a tombstone', { state: b.state });
         if (b.state !== 'ACTIVE') throw new CatalogQueryError('BEAT_NOT_ACTIVE', 409, 'only ACTIVE beats can be replaced', { state: b.state });
         if (b.version !== v.expectedVersion) throw new CatalogQueryError('VERSION_CONFLICT', 409, 'beat version does not match', { current_version: b.version, expected_version: v.expectedVersion });
+        if (v.metadata && typeof v.metadata.name === 'string') await assertNameFree(client, uid, gen, v.metadata.name, beatId);
       }
       const { senderId, chatId } = await senderFor(client, uid, ctx);
       const operationId = `top-${randomUUID()}`;
@@ -385,6 +388,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       }
       let beatVersion; let facetsBefore = []; let tagsChanged = false;
       if (o.kind === 'IMPORT') {
+        await assertNameFree(client, uid, gen, intent.metadata.name); // carrera entre importaciones simultáneas: la segunda en confirmar recibe NAME_TAKEN
         const doc = nativeBeatDocument(o.beat_id, intent.metadata);
         const p = codec.projectBeat(doc); const json = JSON.stringify(doc);
         const rank = (await client.query("SELECT coalesce(min(manual_rank), 1000)::text AS r FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE'", [uid, gen])).rows[0].r;
@@ -404,6 +408,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
           throw Object.assign(new CatalogQueryError('VERSION_CONFLICT', 409, 'beat version changed since the operation was created', { current_version: b.version, expected_version: o.expected_version }), { commit: true });
         }
         if (intent.metadata) {
+          if (typeof intent.metadata.name === 'string') await assertNameFree(client, uid, gen, intent.metadata.name, o.beat_id);
           const before = JSON.parse((await client.query('SELECT legacy_json FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, o.beat_id])).rows[0].legacy_json);
           const after = { ...before };
           for (const [k, val] of Object.entries(intent.metadata)) after[k === 'crop' ? 'image_crop' : k] = val;

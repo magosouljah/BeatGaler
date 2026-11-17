@@ -1,7 +1,7 @@
-// PROJECT sobre un beat existente: MISMA lógica que el flujo web anterior (`commitWebBeatEdit`).
+// PROJECT sobre un beat existente (flujo web anterior `commitWebBeatEdit`, con la regla de fusión aprobada por el propietario).
 //  - Un .zip soltado reemplaza el PROJECT completo (sin fusionar).
-//  - Un archivo de DAW (.flp, .als, …) se FUSIONA con el ZIP actual: se descarga el PROJECT vigente, se quitan SOLO las entradas de DAW y las
-//    carpetas Backup/Backups, se conservan samples y demás archivos, y se añade el nuevo archivo; el ZIP resultante se llama «<beat>.zip».
+//  - Un archivo de DAW (.flp, .als, …) se FUSIONA con el ZIP actual: se descarga el PROJECT vigente y se reemplazan ÚNICAMENTE las entradas de DAW
+//    del MISMO tipo (un .flp reemplaza los .flp; los .als, samples, backups y demás archivos se conservan); el ZIP resultante se llama «<beat>.zip».
 //  - Si el PROJECT actual no se puede cargar, se ABORTA sin subir nada («actualización segura»); jamás se sustituye a ciegas.
 //  - Sin PROJECT previo, el archivo de DAW se empaqueta solo.
 // En PostgreSQL la subida es una operación REPLACE: la versión anterior del PROJECT no se retira hasta que la operación se confirma,
@@ -19,5 +19,5 @@ export async function prepareProjectForBeat({ beatName, incoming, hasProject, lo
     try { existing = await loadExisting(); } catch { existing = null; }
     if (!existing) throw new Error(PROJECT_LOAD_FAILED);
   }
-  return (await prepareBrowserProjectArchive(beatName, incoming, existing)).file;
+  return (await prepareBrowserProjectArchive(beatName, incoming, existing, { sameTypeOnly: true })).file;
 }

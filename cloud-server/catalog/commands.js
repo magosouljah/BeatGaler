@@ -18,6 +18,7 @@ const codec = require('./legacy-codec');
 const rules = require('./metadata-rules');
 const { TUPLES, SORTS, STATEMENT_TIMEOUT_MS } = require('./queries');
 const facets = require('./facets');
+const { nameKey, assertNameFree } = require('./name-uniqueness');
 
 const BATCH_MAX = 50;
 const BODY_METADATA_BYTES = 64 * 1024;
@@ -205,6 +206,8 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
       if (row.version !== expected) throw new CatalogQueryError('VERSION_CONFLICT', 409, 'beat version does not match', { current_version: row.version, expected_version: expected });
       const before = JSON.parse(row.legacy_json);
       const after = applyPatchToDoc(before, v.set);
+      // Renombrar: el nuevo nombre no puede coincidir (trim + minúsculas) con otro beat ACTIVO; bajo el lock de la biblioteca.
+      if (typeof v.set.name === 'string' && nameKey(v.set.name) !== nameKey(before.name)) await assertNameFree(client, uid, gen, v.set.name, beatId);
       let result;
       if (!docChanged(before, after)) {
         result = { noop: true, beat: await beatDto(client, uid, gen, beatId), revision: ctx.revision };
@@ -258,6 +261,8 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     return r.rows[0].version;
   }
   async function restoreOne(client, uid, gen, row) {
+    // Restaurar no puede crear un duplicado de un beat ACTIVO: se rechaza con NAME_TAKEN (renombra el beat activo o el de la papelera antes).
+    await assertNameFree(client, uid, gen, JSON.parse(row.legacy_json).name, row.beat_id);
     const tomb = await client.query('SELECT 1 FROM catalog_tombstones WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, row.beat_id]);
     if (tomb.rows.length) throw new CatalogQueryError('PURGE_PENDING', 409, 'beat has a tombstone', { beatId: row.beat_id });
     const maxRank = (await client.query("SELECT coalesce(max(manual_rank), 0)::text AS r FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE'", [uid, gen])).rows[0].r;

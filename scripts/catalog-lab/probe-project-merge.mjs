@@ -45,6 +45,7 @@ try {
   const dlg = await ex(() => /Replace project\?/.test(document.body.innerText)); await press('Replace');
   await waitFor(async () => /Proyecto reemplazado/.test(await notice()) || null, { timeout: 60000, msg: 'merge' });
   const merged = await apiBeat(name); const entries2 = await downloadedEntries(cardSel); const fileAfter = await projectFileId(merged.id);
+  // regla aprobada: un .flp reemplaza SOLO los .flp (cancion.flp y Backup/cancion-old.flp); samples, notas y demás archivos se conservan
   const expected = ['Samples/kick.wav', 'Samples/snare.wav', 'nuevo.flp', 'notas.txt'].sort();
   rec('PM-2-DAW-MERGES', dlg && JSON.stringify(entries2) === JSON.stringify(expected) && fileAfter !== fileBefore && merged.id === base.id && merged.master === base.master && merged.bpm === base.bpm && merged.key === base.key && JSON.stringify(merged.tags) === JSON.stringify(base.tags) ? 'PASS' : 'FAIL', { dlg, entries: entries2, expected, fileChanged: fileAfter !== fileBefore, metaIntact: merged.master === base.master });
 

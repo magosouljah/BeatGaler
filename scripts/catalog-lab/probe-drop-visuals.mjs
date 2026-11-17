@@ -117,7 +117,9 @@ try {
   const afterM = await apiBeat(NAME);
   rec('FUN-AUDIO-mp3', okM && afterM.id === before.id && afterM.master !== prev.master && afterM.art === prev.art && JSON.stringify(afterM.tags) === JSON.stringify(before.tags) && (await total()) === count0 ? 'PASS' : 'FAIL', { before: prev, afterM });
   await sleep(500);
-  await enter('Fuera de tarjeta nuevo.mp3', 'mp3', null); await release();
+  await enter(`Fuera de tarjeta ${Date.now() % 100000}.mp3`, 'mp3', null); await release();
+  await waitFor(async () => (await ex(() => /Review beat 1 of 1/.test(document.body.innerText))) || null, { timeout: 30000, msg: 'review' }); await sleep(500);
+  await ex(() => { [...document.querySelectorAll('button')].find((x) => /^Save/.test(x.textContent.trim()) && !x.disabled)?.click(); });
   const okN = await waitFor(async () => /importado\./.test(await notice()) || null, { timeout: 60000, msg: 'import' }).catch(() => false);
   rec('FUN-AUDIO-fuera-importa', okN && (await total()) === count0 + 1 ? 'PASS' : 'FAIL', { total: await total(), expected: count0 + 1 });
   rec('VIS-LOGS', 'INFO', { severe: (await browser.getLogs('browser').catch(() => [])).filter((l) => l.level === 'SEVERE').map((l) => String(l.message).slice(0, 200)) });

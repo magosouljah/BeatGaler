@@ -36,7 +36,8 @@ export const IMPORT_NO_FILE_NOTICE = "No se encontró el archivo del beat a impo
 /** Mensaje al usuario cuando una importación falla: sin transporte configurado se dice claramente, no con texto técnico del servidor. */
 /** Mensaje claro de un fallo de importación (cuota del plan, transporte no disponible, tamaño de PROJECT…); el resto conserva su texto. */
 export function importFailureMessage(error: unknown): string {
-  const e = error as { code?: unknown; detail?: { max?: unknown; used?: unknown; max_bytes?: unknown }; message?: unknown } | null;
+  const e = error as { code?: unknown; detail?: { max?: unknown; used?: unknown; max_bytes?: unknown; name?: unknown }; message?: unknown } | null;
+  if (e?.code === "NAME_TAKEN") return `Ya existe un beat llamado «${String(e.detail?.name ?? "")}». Cambia el nombre para continuar.`;
   if (e?.code === "QUOTA_EXCEEDED") return `Tu plan alcanzó el límite de beats${e.detail?.max != null ? ` (${String(e.detail.used ?? "?")} de ${String(e.detail.max)})` : ""}. Revisa Settings → Plan para ampliarlo.`;
   if (e?.code === "TRANSFER_UNAVAILABLE") return "El servicio de almacenamiento de archivos no está disponible en este entorno. El beat no se guardó.";
   if (e?.code === "PROJECT_TOO_LARGE") return "El PROJECT supera el tamaño máximo de tu plan.";
@@ -235,7 +236,8 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
       ? await mutations.replaceBeat({ beatId: dto.id, expectedVersion: dto.version, original, updated, files: { artwork: dataUrlToFile(String(updated.image_base64), updated.name) } })
       : await mutations.patchBeat({ beatId: dto.id, expectedVersion: dto.version, patch: metadataPatch(original, updated) });
     if (outcome.status === "conflict") throw new Error("Este beat cambió en otro dispositivo. Tus cambios siguen aquí: revisa y vuelve a guardar.");
-    if (outcome.status === "error") throw outcome.error;
+    if (outcome.status === "error") throw new Error(importFailureMessage(outcome.error));
+    if ((outcome as { error?: { code?: string } | null }).error?.code === "NAME_TAKEN") throw new Error(importFailureMessage((outcome as { error?: unknown }).error));
     if (outcome.status === "blocked" || outcome.status === "failed" || outcome.status === "canceled" || outcome.status === "timeout" || outcome.status === "uncertain") throw new Error(`La operación quedó en estado ${outcome.status}; el servidor conserva el resultado.`);
     refreshAfterMutation();
   }, [mutations, refreshAfterMutation]);
@@ -335,7 +337,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     // Espera la conversión WAV→MP3 y la hidratación; `updated` es la versión editada por el usuario (no se re-añaden tags quitados).
     const plan = await resolveImportPlan({ beat: updated, hydrated: r.hydrated ? r.hydrated.then(() => updated) : null, slotFiles: () => platform.importer.slotFilesForBeat(r.beat.id), originalFile: original });
     const outcome = await mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress }).catch((e) => { throw new Error(importFailureMessage(e)); });
-    if (outcome.status !== "committed") throw new Error(`La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
+    if (outcome.status !== "committed") throw new Error(outcome.status !== "uncertain" && (outcome as { error?: unknown }).error ? importFailureMessage((outcome as { error?: unknown }).error) : `La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
     platform.importer.releaseBeat(r.beat.id); setReview(null);
     setNotice(`«${updated.name}» importado.`); refreshAfterMutation();
   }, [review, mutations, refreshAfterMutation]);

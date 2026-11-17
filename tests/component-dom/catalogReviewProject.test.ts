@@ -18,10 +18,10 @@ describe("prepareProjectForBeat (fusión anterior)", () => {
     const out = await prepareProjectForBeat({ beatName: "Beat", incoming, hasProject: true, loadExisting });
     expect(out).toBe(incoming); expect(loadExisting).not.toHaveBeenCalled();
   });
-  it("un archivo de DAW se fusiona: se quitan DAW viejos y Backup(s); samples y notas se conservan; entra el nuevo; el ZIP se llama «<beat>.zip»", async () => {
-    const existing = await zipFile({ "viejo.flp": "d", "viejo.als": "d2", "Samples/kick.wav": "k", "Backup/x.flp": "b", "Backups/y.txt": "b2", "notas.txt": "n" });
+  it("un archivo de DAW reemplaza SOLO las entradas del mismo tipo: los .als, samples, backups y notas se conservan; el ZIP se llama «<beat>.zip»", async () => {
+    const existing = await zipFile({ "viejo.flp": "d", "otro/viejo2.FLP": "d3", "viejo.als": "d2", "Samples/kick.wav": "k", "Backup/x.flp": "b", "Backups/y.txt": "b2", "notas.txt": "n" });
     const out = await prepareProjectForBeat({ beatName: "Mi: beat?", incoming: f("nuevo.flp", "nuevo"), hasProject: true, loadExisting: async () => existing });
-    expect(await names(out)).toEqual(["Samples/kick.wav", "nuevo.flp", "notas.txt"].sort()); expect(out.name).toBe("Mi_ beat_.zip"); expect(out.type).toBe("application/zip");
+    expect(await names(out)).toEqual(["Samples/kick.wav", "viejo.als", "Backups/y.txt", "nuevo.flp", "notas.txt"].sort()); expect(out.name).toBe("Mi_ beat_.zip"); expect(out.type).toBe("application/zip");
   });
   it("sin PROJECT previo el archivo de DAW se empaqueta solo y no se descarga nada", async () => {
     const loadExisting = vi.fn();
@@ -63,5 +63,14 @@ describe("resolveImportPlan con PROJECT y mensajes", () => {
     expect(importFailureMessage({ code: "QUOTA_EXCEEDED", detail: { used: 20, max: 20 } })).toMatch(/límite de beats \(20 de 20\).*Settings → Plan/);
     expect(importFailureMessage({ code: "TRANSFER_UNAVAILABLE" })).toMatch(/no se guardó/); expect(importFailureMessage({ code: "PROJECT_TOO_LARGE" })).toMatch(/tamaño máximo/);
     expect(importFailureMessage(new Error("otra cosa"))).toBe("otra cosa");
+  });
+});
+
+describe("Nombres duplicados: mensajes comprensibles", () => {
+  it("NAME_TAKEN en importación/edición y en restaurar", async () => {
+    expect(importFailureMessage({ code: "NAME_TAKEN", detail: { name: "Mi beat" } })).toBe("Ya existe un beat llamado «Mi beat». Cambia el nombre para continuar.");
+    const { createCatalogTrashSource } = await import("../../src/features/library/catalog/catalogTrashSource");
+    const src = createCatalogTrashSource({ api: { listBeats: async () => ({ items: [{ id: "b1", name: "Repetido", version: "2" }] }) } as never, mutations: { restoreBeats: async () => ({ status: "CONFLICT", conflict: { error: { code: "NAME_TAKEN" } } }), purgeTrash: vi.fn(), purgeState: vi.fn() } as never, sleep: async () => {} });
+    await src.listBeats(); await expect(src.restoreBeat("b1")).rejects.toThrow(/No se puede restaurar «Repetido».*nombre/);
   });
 });

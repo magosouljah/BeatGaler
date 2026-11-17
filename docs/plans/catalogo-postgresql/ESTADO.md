@@ -4,6 +4,8 @@
 
 **Prueba manual G3 del propietario (2026-11-17, [E53](EVIDENCIA.md)):** nombres ≤ 50 caracteres; banda superior de la Tag Bar a todo el ancho (contenido en su posición aprobada; la captura citada no llegó, supuesto a confirmar); «Add beat» verificado de punta a punta en el LAB FAKE (guardado en PostgreSQL, renombrado, reproducción) y aviso claro si falta el transporte. CI `44001769841` PASS sobre `d5b42ba`. G2 NOT_PROVEN.
 
+**Cierre de decisiones G3 (2026-11-17, [E60](EVIDENCIA.md)):** cursor del navegador, nombres únicos con lock de biblioteca (probado con concurrencia real), PROJECT por tipo, procedimiento de prueba integrada preparado ([G3-PRUEBA-INTEGRADA](G3-PRUEBA-INTEGRADA-TELEGRAM-20261117.md)); sin credenciales usadas. G2 NOT_PROVEN, G3 sin dictamen.
+
 **Decisiones tras E58 (2026-11-17, [E59](EVIDENCIA.md)):** revisión previa a importar restaurada, PROJECT con fusión anterior, WAV verificado en LAB, cuentas/billing revisados. Pendiente de decisión: cursor personalizado.
 
 **Auditoría funcional (2026-11-17, [E58](EVIDENCIA.md)):** recuperados Download, importación con ID3/WAV, preparación de archivos, PROJECT por arrastre, papelera nativa y acciones de estado vacío. Pendiente de decisión de producto: revisión posterior a «Add beat».

@@ -1214,6 +1214,17 @@
           "network": "deny"
         },
         {
+          "id": "t16-name-uniqueness",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-name-uniqueness.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
           "id": "t16-add-beat-rename",
           "cmd": [
             "node",

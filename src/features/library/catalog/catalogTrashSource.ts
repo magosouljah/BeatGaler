@@ -29,7 +29,10 @@ export function createCatalogTrashSource({ api, mutations, sleep = (ms: number) 
     async restoreBeat(id) {
       const dto = known.get(id); if (!dto) throw new Error("Este beat ya no está en la papelera; recarga la lista.");
       const r = await mutations.restoreBeats([{ beatId: id, expectedVersion: dto.version }]);
-      if (r.status !== "COMPLETED") throw new Error(r.status === "CONFLICT" ? "El beat cambió en otro dispositivo; recarga la papelera." : "No se pudo restaurar el beat.");
+      if (r.status !== "COMPLETED") {
+        const code = (r.conflict?.error as { code?: string } | undefined)?.code;
+        throw new Error(code === "NAME_TAKEN" ? `No se puede restaurar «${dto.name}»: ya existe un beat activo con ese nombre. Renombra uno de los dos primero.` : r.status === "CONFLICT" ? "El beat cambió en otro dispositivo; recarga la papelera." : "No se pudo restaurar el beat.");
+      }
       known.delete(id); return beatFromCatalogDetail(dto, null);
     },
     async purgeBeats() {

@@ -289,7 +289,7 @@ export function createCatalogTransfer(options: CatalogTransferOptions) {
       op = r.body;
       const t = terminal(op, null); if (t) return t;
     } catch (error) {
-      if (!(error instanceof CatalogApiError) || !["VERSION_CONFLICT", "OPERATION_TRANSITION_INVALID", "RESERVATION_EXPIRED", "RESERVATION_INVALID", "QUOTA_EXCEEDED"].includes(error.code)) throw error;
+      if (!(error instanceof CatalogApiError) || !["VERSION_CONFLICT", "OPERATION_TRANSITION_INVALID", "RESERVATION_EXPIRED", "RESERVATION_INVALID", "QUOTA_EXCEEDED", "NAME_TAKEN"].includes(error.code)) throw error;
       const current = await getOperation(operationId, signal);
       return terminal(current, error) ?? { status: current.status === "READY" ? "FAILED" : "RECONCILE", operation: current, error };
     }

@@ -21,32 +21,36 @@ const clickByText = (text, sel = 'button') => ex((t, s) => { const b = [...docum
 const notice = () => ex(() => document.querySelector('.bg-catalog-notice')?.textContent || '');
 const apiBeats = (q) => ex(async (query) => { const r = await fetch(`/beatgaler-api/catalog/v1/beats?limit=50&q=${encodeURIComponent(query)}`, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); return { status: r.status, body: await r.json().catch(() => null) }; }, q);
 const LONG = 'Un nombre de archivo soltado que supera con holgura los cincuenta caracteres.mp3';
-const EDITED = 'Soltado y renombrado';
-const SHORT = 'Beat soltado corto';
+const SUF = String(Date.now() % 100000); const EDITED = `Soltado y renombrado ${SUF}`;
+const SHORT = `Beat soltado corto ${SUF}`;
 try {
   await login(POSTGRES, cfg.account);
   await waitFor(async () => (await galleryState()).cards > 0, { timeout: 90000, msg: 'catalog cards' });
   await installAudioCapture();
   const b64 = silentMp3Base64();
-  // A) nombre válido: drop → se importa sin pasos extra
+  // A) drop fuera de tarjeta → pantalla de revisión (Drawer review) con el nombre del archivo → Save → importado
+  const reviewOpen = () => ex(() => /Review beat 1 of 1/.test(document.body.innerText));
+  const setName = (v) => ex((x) => { const i = [...document.querySelectorAll('input')].find((e) => e.offsetParent !== null && !/file|checkbox|search/.test(e.type) && !/Add tag/.test(e.placeholder)); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, x); i.dispatchEvent(new Event('input', { bubbles: true })); }, v);
+  const save = () => ex(() => { const b = [...document.querySelectorAll('button')].find((x) => /^Save/.test(x.textContent.trim()) && !x.disabled); b?.click(); return Boolean(b); });
   const a = await drop(`${SHORT}.mp3`, b64);
+  await waitFor(async () => (await reviewOpen()) || null, { timeout: 30000, msg: 'review A' }); await sleep(600); await shot('d1-review');
+  const beforeA = JSON.stringify((await apiBeats(SHORT)).body).includes(SHORT);
+  await save();
   const okA = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import A' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
-  await shot('d1-dropped');
   const inA = JSON.stringify((await apiBeats(SHORT)).body).includes(SHORT);
-  rec('DROP-A-SHORT-NAME', a.overlay && a.prevented && /importado\./.test(String(okA)) && inA ? 'PASS' : 'FAIL', { ...a, notice: okA, inPostgres: inA });
-  // B) nombre largo: drop → renombrar → guardar con el nombre editado
-  await sleep(500);
+  rec('DROP-A-REVIEW-SAVE', a.overlay && a.prevented && !beforeA && /importado\./.test(String(okA)) && inA ? 'PASS' : 'FAIL', { ...a, earlyListed: beforeA, notice: okA, inPostgres: inA });
+  // B) nombre largo: la revisión muestra el nombre del archivo; Save lo rechaza (>50) y no sube; editado se guarda
+  await sleep(500); await ex(() => document.querySelector('.bg-catalog-notice button')?.click());
   await drop(LONG, b64);
-  await waitFor(() => ex(() => Boolean(document.querySelector('#add-beat-name'))), { timeout: 10000, msg: 'rename dialog' });
-  const dlg = await ex(() => ({ original: document.querySelector('[data-testid="add-beat-original-file"]')?.textContent, disabled: document.querySelector('[data-testid="add-beat-confirm"]')?.disabled, count: document.querySelector('[data-testid="add-beat-name-count"]')?.textContent }));
-  await shot('d2-rename');
+  await waitFor(async () => (await reviewOpen()) || null, { timeout: 30000, msg: 'review B' }); await sleep(600);
+  await save(); await sleep(1200);
+  const tooLong = await ex(() => /Máximo 50 caracteres/.test(document.body.innerText));
   const early = JSON.stringify((await apiBeats('Un nombre de archivo soltado')).body).includes('Un nombre de archivo soltado');
-  await ex((v) => { const i = document.querySelector('#add-beat-name'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, v); i.dispatchEvent(new Event('input', { bubbles: true })); }, EDITED);
-  await sleep(200); await clickByText('Add beat', '[data-testid="add-beat-confirm"]');
+  await setName(EDITED); await sleep(300); await save();
   const okB = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import B' }).catch(async (e) => `ERR ${e.message} :: ${await notice()}`);
   const inB = JSON.stringify((await apiBeats(EDITED)).body).includes(EDITED);
   const orig = JSON.stringify((await apiBeats('Un nombre de archivo soltado')).body).includes('Un nombre de archivo soltado');
-  rec('DROP-B-LONG-NAME', dlg.original === LONG && dlg.disabled === true && !early && /importado\./.test(String(okB)) && inB && !orig ? 'PASS' : 'FAIL', { dialog: dlg, earlyListed: early, notice: okB, savedEdited: inB, savedUnderFileName: orig });
+  rec('DROP-B-LONG-NAME', tooLong && !early && /importado\./.test(String(okB)) && inB && !orig ? 'PASS' : 'FAIL', { tooLong, earlyListed: early, notice: okB, savedEdited: inB, savedUnderFileName: orig });
   // C) reproducción del beat soltado (proveedor FAKE)
   await typeSearch(EDITED); await sleep(800);
   const card = await waitFor(async () => (await ex(() => document.querySelector('[data-card]')?.getAttribute('data-card') ?? null)), { timeout: 20000, msg: 'card' }).catch(() => null);
@@ -82,7 +86,8 @@ try {
   await shot('d4-card-replaced');
   // H) fuera de una tarjeta sigue importando un beat nuevo (la tarjeta no captura todo)
   await typeSearch(''); await sleep(800);
-  await drop('Nuevo fuera de tarjeta.mp3', b64);
+  await ex(() => document.querySelector('.bg-catalog-notice button')?.click()); await drop(`Nuevo fuera ${SUF}.mp3`, b64);
+  await waitFor(async () => (await reviewOpen()) || null, { timeout: 30000, msg: 'review H' }); await sleep(500); await save();
   const okH = await waitFor(async () => /importado\./.test(await notice()) ? await notice() : null, { timeout: 60000, msg: 'import outside card' }).catch(async (er) => `ERR ${er.message} :: ${await notice()}`);
   rec('DROP-H-OUTSIDE-IMPORTS-NEW', /importado\./.test(String(okH)) && (await total()) === count0 + 1 ? 'PASS' : 'FAIL', { notice: okH, total: await total(), expected: count0 + 1 });
   // D) archivos no soportados / varios: aviso y no se importa nada; arrastre que no es de archivos se ignora
