@@ -32,6 +32,11 @@ interface Props {
     updated: Beat,
     options: { syncMetadata: boolean; reason: string },
   ) => Promise<void>;
+  /**
+   * Catálogo PostgreSQL (Gallery POSTGRES): guarda metadatos, portada y archivos pendientes (MASTER/WAV/PROJECT) en UNA mutación del catálogo.
+   * Si se pasa, sustituye a la ruta heredada (INDEX/Desktop). Si falla, el Drawer sigue abierto con los cambios y archivos pendientes.
+   */
+  onCatalogSave?: (input: { original: Beat; updated: Beat; files: PlatformBeatEditFiles; artworkRemoved: boolean; onProgress?: (progress: PlatformCloudCommitProgress) => void }) => Promise<void>;
 }
 
 type PendingFiles = {
@@ -66,7 +71,7 @@ const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] 
   OTHER: { name: "Any file", extensions: ["mp3", "wav", "zip", "flp", "als", "mid", "midi", "txt", "pdf", "png", "jpg", "jpeg"] },
 };
 
-export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, maxNameChars }: Props) {
+export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, onCatalogSave, maxNameChars }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
@@ -312,6 +317,15 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         }
         return;
       }
+      // §6.1-1/2/3: en el catálogo todo cambio (metadatos, archivos elegidos, portada nueva o quitada) va a una sola mutación SQL; antes los
+      // archivos de esta sección se ignoraban y un beat sin MASTER se «guardaba» sin enviar nada.
+      if (onCatalogSave && !reviewInfo && !isBulk) {
+        await onCatalogSave({ original: beat, updated: validatedData, files: pendingWebEdit, artworkRemoved: Boolean(beat.image_base64) && !validatedData.image_base64, onProgress: progress => setSaveProgress(progress) });
+        setPendingWebEdit({});
+        await onSaved(validatedData);
+        if (closeAfterSave) onClose();
+        return;
+      }
       if (platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk && !onCloudMutationCommit) {
         const committed = await platform.editor.commit(
           beat,
@@ -506,7 +520,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setSaving(false);
       setSaveProgress(null);
     }
-  }, [beat, data, pending, pendingCloud, pendingWebEdit, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit]);
+  }, [beat, data, pending, pendingCloud, pendingWebEdit, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit, onCatalogSave]);
 
   useEffect(() => {
     if (!isEdit && !isBulk) return;

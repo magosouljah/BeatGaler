@@ -191,8 +191,10 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   async function patchBeat({ userId, beatId, era, epoch, idempotencyKey, expectedVersion, ifMatch = null, patch } = {}) {
     if (typeof beatId !== 'string' || !beatId) throw inputInvalid('BEAT_ID');
     if (Buffer.byteLength(JSON.stringify(patch ?? null), 'utf8') > BODY_METADATA_BYTES) throw new CatalogQueryError('PAYLOAD_TOO_LARGE', 413, 'patch exceeds 64 KiB', { max_bytes: BODY_METADATA_BYTES });
-    const v = rules.validatePatch(patch);
+    const v = rules.validatePatch(patch, { allowArtworkRemoval: true });
     if (!v.ok) throw inputInvalid('PATCH', { errors: v.errors });
+    const removeArtwork = 'artwork' in v.set;
+    const docSet = { ...v.set }; delete docSet.artwork;
     const expected = parseVersion(expectedVersion, ifMatch);
     const payload = { kind: 'PATCH', target: beatId, patch: v.set, expectedVersion: expected };
     const hash = sha256Hex(canonicalJson(payload));
@@ -205,22 +207,34 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
       if (row.state !== 'ACTIVE') throw new CatalogQueryError('BEAT_NOT_ACTIVE', 409, 'only ACTIVE beats can be edited', { state: row.state });
       if (row.version !== expected) throw new CatalogQueryError('VERSION_CONFLICT', 409, 'beat version does not match', { current_version: row.version, expected_version: expected });
       const before = JSON.parse(row.legacy_json);
-      const after = applyPatchToDoc(before, v.set);
+      const after = applyPatchToDoc(before, docSet);
+      // Quitar portada = DESVINCULAR: el slot ARTWORK deja de existir y su versión de archivo pasa a RETIRED (misma retención que un
+      // reemplazo). El objeto de Telegram, sus ubicaciones y partes no se tocan: ninguna llamada externa ni borrado físico.
+      const artworkSlot = removeArtwork ? (await client.query("SELECT file_id FROM catalog_current_files WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 AND slot_key = 'ARTWORK'", [uid, gen, beatId])).rows[0] || null : null;
+      if (artworkSlot && after.image_crop != null) after.image_crop = null; // el recorte pertenecía a la portada desvinculada
       // Renombrar: el nuevo nombre no puede coincidir (trim + minúsculas) con otro beat ACTIVO; bajo el lock de la biblioteca.
       if (typeof v.set.name === 'string' && nameKey(v.set.name) !== nameKey(before.name)) await assertNameFree(client, uid, gen, v.set.name, beatId);
       let result;
-      if (!docChanged(before, after)) {
+      const changedDoc = docChanged(before, after);
+      if (!changedDoc && !artworkSlot) {
         result = { noop: true, beat: await beatDto(client, uid, gen, beatId), revision: ctx.revision };
       } else {
-        const tagsChanged = !tagsEqual(before.tags, after.tags);
+        const tagsChanged = changedDoc && !tagsEqual(before.tags, after.tags);
         const facetsBefore = tagsChanged ? await facets.snapshotGroups(client, uid, gen, [beatId]) : [];
-        const { version } = await writeBeatDoc(client, uid, gen, beatId, after, { tagsChanged });
+        let version;
+        if (changedDoc) ({ version } = await writeBeatDoc(client, uid, gen, beatId, after, { tagsChanged }));
+        if (artworkSlot) {
+          await client.query("UPDATE catalog_file_versions SET status = 'RETIRED', retained_until = now() + interval '35 days' WHERE user_id = $1 AND generation_id = $2 AND file_id = $3", [uid, gen, artworkSlot.file_id]);
+          await client.query("DELETE FROM catalog_current_files WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 AND slot_key = 'ARTWORK'", [uid, gen, beatId]);
+          const r = await client.query(`UPDATE catalog_beats SET has_artwork = false, updated_at = now()${changedDoc ? '' : ', version = version + 1'} WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 RETURNING version::text AS version`, [uid, gen, beatId]);
+          version = r.rows[0].version;
+        }
         const revision = await bumpRevision(client, uid);
         if (tagsChanged) {
           await facets.insertGroups(client, uid, gen, [beatId]);
           await facets.applyFacetDelta(client, uid, gen, facetsBefore, await facets.snapshotGroups(client, uid, gen, [beatId]), revision);
         }
-        const eventSeq = await emitEvent(client, uid, gen, revision, 'BEAT_PATCHED', { beatId, version, payload: { fields: Object.keys(v.set) } });
+        const eventSeq = await emitEvent(client, uid, gen, revision, 'BEAT_PATCHED', { beatId, version, payload: { fields: Object.keys(v.set), ...(artworkSlot ? { artworkUnlinked: artworkSlot.file_id } : {}) } });
         result = { noop: false, beat: await beatDto(client, uid, gen, beatId), revision, eventSeq };
       }
       const operationId = await recordOperation(client, uid, ctx, { kind: 'PATCH', key: idempotencyKey, hash, payload, result });

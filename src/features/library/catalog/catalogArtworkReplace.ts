@@ -51,6 +51,7 @@ export async function replaceBeatArtwork({ mutations, beatId, file }: { mutation
     const outcome = await mutations.replaceBeat({ beatId, expectedVersion: detail.version, original, updated: original, files: { artwork: file } });
     if (outcome.status === "committed") return { status: "committed", beatId };
     if (outcome.status === "conflict") return { status: "failed", message: "Este beat cambió en otro dispositivo; la portada no se cambió. Vuelve a intentarlo." };
+    if (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout") return { status: "failed", message: "El cambio sigue confirmándose en el servidor; no lo repitas. La portada se actualizará si se recibió." };
     return { status: "failed", message: `La operación quedó en estado ${outcome.status}; el beat conserva su portada actual.` };
   } catch (e) { return { status: "failed", message: String((e as { message?: unknown })?.message ?? e) }; }
 }

@@ -33,7 +33,7 @@ export type TransferOutcome =
   | { status: "committed"; operationId: string; beatId: string; version: string; revision: string; operation: TransferOperationDto }
   | { status: "uncertain"; operationId: string; beatId: string; parts: string[]; operation: TransferOperationDto | null }
   | { status: "conflict" | "blocked" | "failed" | "canceled" | "timeout"; operationId: string; beatId: string; operation: TransferOperationDto | null; retained: boolean; error: CatalogApiError | null };
-export interface OperationRef { operationId: string; kind: "IMPORT" | "REPLACE" | "BULK_TRASH" | "BULK_RESTORE" | "BULK_PATCH" | "TAG_RENAME" | "PURGE"; beatId: string | null; createdAt: number; label: string }
+export interface OperationRef { operationId: string; kind: "IMPORT" | "REPLACE" | "BULK_TRASH" | "BULK_RESTORE" | "BULK_PATCH" | "TAG_RENAME" | "PURGE"; beatId: string | null; createdAt: number; label: string; /** IMPORT: nombre normalizado (trim + minúsculas), para no duplicar la subida del mismo beat. */ nameKey?: string }
 export interface OperationRefStore { load(accountId: string): OperationRef[]; save(accountId: string, refs: OperationRef[]): void }
 
 export interface CatalogMutationsOptions {
@@ -95,6 +95,10 @@ const dataUrlToFile = (dataUrl: string, name: string): File | null => {
   } catch { return null; }
 };
 const INFLIGHT = new Set(["PREPARED", "TRANSFERRING", "VERIFYING", "READY"]);
+/** Estados en los que una transferencia AÚN puede confirmarse en el servidor (RECONCILE vuelve a READY al reconciliar): no se reenvía. */
+const UNRESOLVED = new Set([...INFLIGHT, "RECONCILE"]);
+const importNameKey = (name: string) => name.trim().toLowerCase() || "untitled";
+export const OPERATION_PENDING_MESSAGE = "Una subida anterior de este beat todavía se está confirmando en el servidor. No se vuelve a enviar para no duplicarla: espera a que termine (el beat aparecerá si se recibió).";
 
 export function createCatalogMutations(options: CatalogMutationsOptions) {
   const { commands, transfer } = options;
@@ -115,7 +119,8 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
   async function resolvePendingTransfers(): Promise<Array<{ ref: OperationRef; operation: TransferOperationDto | null; terminal: boolean }>> {
     const out = [];
     for (const ref of pendingOperations().filter((r) => r.kind === "IMPORT" || r.kind === "REPLACE")) {
-      try { const op = await transfer.getOperation(ref.operationId); const terminal = !INFLIGHT.has(op.status); if (terminal && op.status === "COMMITTED") forgetOperation(ref.operationId); out.push({ ref, operation: op, terminal }); } catch (error) {
+      // RECONCILE no es terminal (puede volver a READY y confirmarse).
+      try { const op = await transfer.getOperation(ref.operationId); const terminal = !UNRESOLVED.has(op.status); if (terminal && op.status === "COMMITTED") forgetOperation(ref.operationId); out.push({ ref, operation: op, terminal }); } catch (error) {
         if (error instanceof CatalogApiError && error.status === 404) { forgetOperation(ref.operationId); continue; }
         out.push({ ref, operation: null, terminal: false });
       }
@@ -178,6 +183,20 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     return { status, operation: op };
   }
 
+  // §6.1-7: antes de crear una transferencia nueva, una anterior del MISMO beat (REPLACE: mismo beatId; IMPORT: mismo nombre) que aún pueda
+  // confirmarse (en curso, RECONCILE o sin respuesta) bloquea el reenvío; las terminadas sin efecto (FAILED/CANCELED/CONFLICT) o confirmadas se olvidan.
+  async function assertNoUnresolvedTransfer(match: (r: OperationRef) => boolean): Promise<void> {
+    for (const ref of pendingOperations().filter((r) => (r.kind === "IMPORT" || r.kind === "REPLACE") && match(r))) {
+      let status: string | null = null;
+      try { status = (await transfer.getOperation(ref.operationId)).status; } catch (error) {
+        if (error instanceof CatalogApiError && error.status === 404) { forgetOperation(ref.operationId); continue; }
+        status = null; // sin respuesta → no se puede demostrar que terminó: fail-closed
+      }
+      if (status !== null && !UNRESOLVED.has(status)) { forgetOperation(ref.operationId); continue; }
+      throw new CatalogApiError(409, "OPERATION_PENDING", OPERATION_PENDING_MESSAGE, { operationId: ref.operationId, status, label: ref.label });
+    }
+  }
+
   // ---- import / reemplazo por operaciones C7 ----
   function partSpecs(prepared: PreparedTransferFiles): Array<{ spec: Promise<TransferPartSpec>; file: File; stage: MutationStage; role: TransferRole }> {
     const out: Array<{ spec: Promise<TransferPartSpec>; file: File; stage: MutationStage; role: TransferRole }> = [];
@@ -198,7 +217,8 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     onProgress?.({ stage: "preparing", uploadedBytes: 0, totalBytes });
     const op = await transfer.createOperation(intent, { idempotencyKey: newKey(), signal: options.signal });
     const beatId = knownBeatId ?? op.beatId;
-    rememberOperation({ operationId: op.operationId, kind, beatId, label });
+    const name = typeof intent.metadata?.name === "string" ? intent.metadata.name : null;
+    rememberOperation({ operationId: op.operationId, kind, beatId, label, ...(kind === "IMPORT" && name ? { nameKey: importNameKey(name) } : {}) });
     let uploaded = 0; const uncertain: string[] = [];
     for (const p of parts) {
       onProgress?.({ stage: p.stage, uploadedBytes: uploaded, totalBytes });
@@ -219,6 +239,7 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
   async function importBeat({ beat, files, onProgress }: { beat: Pick<Beat, "name" | "bpm" | "key" | "tags" | "rating" | "color" | "color2" | "image_base64">; files: TransferFiles; onProgress?: (p: MutationProgress) => void }): Promise<TransferOutcome> {
     if (!files.master) throw new CatalogApiError(400, "INPUT_INVALID", "Add a MASTER MP3 before saving this beat.", { reason: "IMPORT_REQUIRES_MASTER" });
     assertBeatNameWithinLimit(beat.name.trim()); // antes de leer/subir nada: el nombre nunca se recorta ni se toca el archivo original
+    const key = importNameKey(beat.name); await assertNoUnresolvedTransfer((r) => r.kind === "IMPORT" && r.nameKey === key);
     const prepared = await prepareFiles({ ...files, artwork: files.artwork ?? (beat.image_base64 ? dataUrlToFile(beat.image_base64, beat.name) : null) }, beat.name);
     const specs = partSpecs(prepared); const resolved = await Promise.all(specs.map(async (s) => ({ ...s, spec: await s.spec })));
     const metadata: Record<string, unknown> = { name: beat.name.trim(), bpm: beat.bpm, key: beat.key, tags: [...beat.tags], rating: beat.rating };
@@ -232,6 +253,7 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     const specs = partSpecs(prepared);
     // Sin archivos nuevos → metadata-only → PATCH (nunca una operación de transferencia vacía).
     if (specs.length === 0) return patchBeat({ beatId, expectedVersion, patch });
+    await assertNoUnresolvedTransfer((r) => r.kind === "REPLACE" && r.beatId === beatId);
     const resolved = await Promise.all(specs.map(async (s) => ({ ...s, spec: await s.spec })));
     return runTransfer({ kind: "REPLACE", beatId, expectedVersion, parts: resolved.map((r) => r.spec), metadata: Object.keys(patch).length ? patch : null }, prepared, resolved, { onProgress, kind: "REPLACE", beatId, label: `Reemplazar archivos de «${updated.name || original.name}»` });
   }

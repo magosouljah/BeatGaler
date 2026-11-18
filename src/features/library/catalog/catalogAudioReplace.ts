@@ -63,6 +63,7 @@ export async function replaceBeatAudio({ mutations, confirm, beatId, file, onPro
     });
     if (outcome.status === "committed") return { status: "committed", kind, beatId, replacedExisting: replacing };
     if (outcome.status === "conflict") return { status: "failed", message: "Este beat cambió en otro dispositivo; no se reemplazó nada. Vuelve a intentarlo." };
+    if (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout") return { status: "failed", message: "El reemplazo sigue confirmándose en el servidor; no lo repitas. El archivo se actualizará si se recibió." };
     return { status: "failed", message: `La operación quedó en estado ${outcome.status}; el beat conserva su archivo actual.` };
   } catch (e) {
     return { status: "failed", message: String((e as { message?: unknown })?.message ?? e) };

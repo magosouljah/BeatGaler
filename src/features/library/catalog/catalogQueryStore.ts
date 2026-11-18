@@ -59,6 +59,8 @@ export interface CatalogStoreSnapshot {
   staleReset: boolean;             // la última recarga fue por CURSOR_STALE (aviso UI)
   resumeCursor: string | null;     // cursor inclusivo del primer bloque residente (bgAnchor)
   legacy: { requestedOffset: number; resolution: "exact" | "last" | "empty"; resolvedOffset: number } | null;
+  /** Bloque sembrado desde la copia local (catalogFirstBlockCache) y aún NO revalidado con PostgreSQL: la UI no debe permitir interacción. */
+  provisional: boolean;
   metrics: CatalogStoreMetrics;
 }
 
@@ -71,6 +73,18 @@ export interface CatalogQueryStoreOptions {
   maxBlocks?: number;
   maxBytes?: number;
   onIntegrity?: (detail: Record<string, unknown>) => void;
+  /** Primer bloque (ordinal 0) recibido de PostgreSQL para la consulta vigente: permite guardar la copia local de arranque. */
+  onFirstPage?: (page: CatalogPage, query: { filters: CatalogQueryFilters; sort: CatalogSort; queryKey: string }) => void;
+}
+
+/** Copia local del primer bloque ya validada contra la identidad (cuenta/vault/era/época/generación) y la consulta. */
+export interface CatalogSeed {
+  filters: CatalogQueryFilters;
+  sort: CatalogSort;
+  revision: string;
+  totalMatched: number | null;
+  totalLibrary: number;
+  page: Pick<CatalogPage, "items" | "startOrdinal" | "nextCursor" | "previousCursor" | "resumeCursor">;
 }
 
 const bytesOf = (items: readonly CatalogBeatDto[]): number => new TextEncoder().encode(JSON.stringify(items)).length;
@@ -94,7 +108,7 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
 
   const base = (filters: CatalogQueryFilters, sort: CatalogSort): CatalogStoreSnapshot => ({
     status: "idle", accountId, context: null, filters, sort, queryKey: filtersKey(filters, sort), queryGeneration: generation, revision: null, totalMatched: null, totalLibrary: null,
-    blocks: [], firstOrdinal: 0, endOrdinal: 0, hasBefore: false, hasAfter: false, loadingForward: false, loadingBackward: false, edgeError: null, staleReset: false, resumeCursor: null, legacy: null,
+    blocks: [], firstOrdinal: 0, endOrdinal: 0, hasBefore: false, hasAfter: false, loadingForward: false, loadingBackward: false, edgeError: null, staleReset: false, resumeCursor: null, legacy: null, provisional: false,
     metrics: { ...metrics },
   });
   let snapshot: CatalogStoreSnapshot = base(options.initialFilters ?? DEFAULT_FILTERS, options.initialSort ?? "rating");
@@ -128,7 +142,8 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
   function validatePage(page: CatalogPage, expectStart: number | null, direction: "forward" | "backward" | "first"): CatalogEdgeError | null {
     const ctx = snapshot.context;
     if (ctx && (page.authorityEra !== ctx.authority_era || page.epoch !== ctx.authority_epoch || page.generationId !== ctx.generation_id)) return { code: "CONTEXT_MISMATCH", status: null, message: "page belongs to another era/epoch/generation", direction };
-    if (snapshot.revision !== null && page.revision !== snapshot.revision && snapshot.blocks.length > 0) return { code: "CURSOR_STALE", status: 409, message: "revision changed between blocks", direction };
+    // Un bloque provisional (copia local) no fija revisión: la primera página de PostgreSQL lo sustituye aunque la revisión haya cambiado.
+    if (!snapshot.provisional && snapshot.revision !== null && page.revision !== snapshot.revision && snapshot.blocks.length > 0) return { code: "CURSOR_STALE", status: 409, message: "revision changed between blocks", direction };
     if (expectStart !== null && page.startOrdinal !== expectStart) return { code: "ORDINAL_GAP", status: null, message: `expected ordinal ${expectStart}, got ${page.startOrdinal}`, direction };
     if (page.items.length > blockSize) return { code: "BLOCK_TOO_LARGE", status: null, message: "server returned more than a block", direction };
     const ids = new Set<string>();
@@ -206,15 +221,16 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
     staleRecoveredInGeneration = true;
     metrics.staleRecoveries++;
     controller?.abort(); controller = null; inflight = {};
-    publish({ blocks: [], revision: null, totalMatched: null, staleReset: true, edgeError: null, status: "loading" });
+    publish({ blocks: [], revision: null, totalMatched: null, staleReset: true, edgeError: null, status: "loading", provisional: false });
     await loadFirst({ keepGeneration: true });
   }
-  function applyFirst(page: CatalogPage, legacy: CatalogStoreSnapshot["legacy"] = null): void {
+  function applyFirst(page: CatalogPage, legacy: CatalogStoreSnapshot["legacy"] = null, cacheable = false): void {
     const err = validatePage(page, null, "first");
     if (err) { if (err.code === "CURSOR_STALE") { void recoverFromStale(generation); return; } integrityStop({ message: err.message, code: err.code }); return; }
     const block = toBlock(page);
     const status: CatalogStoreStatus = page.items.length === 0 ? (page.totalLibrary === 0 ? "empty" : "no-results") : "ready";
-    publish({ status, blocks: [block], revision: page.revision, totalMatched: page.totalMatched, totalLibrary: page.totalLibrary, edgeError: null, legacy });
+    publish({ status, blocks: [block], revision: page.revision, totalMatched: page.totalMatched, totalLibrary: page.totalLibrary, edgeError: null, legacy, provisional: false });
+    if (cacheable && page.startOrdinal === 0) { try { options.onFirstPage?.(page, { filters: snapshot.filters, sort: snapshot.sort, queryKey: snapshot.queryKey }); } catch { /* la copia local nunca rompe la Gallery */ } }
   }
   function listRequest(extra: { cursor?: string | null; edge?: "last" | null; includeTotal?: boolean }) {
     return { ...snapshot.filters, sort: snapshot.sort, limit: blockSize, includeTotal: extra.includeTotal ?? true, cursor: extra.cursor ?? null, edge: extra.edge ?? null };
@@ -233,8 +249,34 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
   async function loadFirst(opts: { keepGeneration?: boolean } = {}): Promise<void> {
     if (!opts.keepGeneration) newGeneration();
     const gen = generation;
-    publish({ status: snapshot.context ? "loading" : snapshot.status, blocks: [], revision: null, totalMatched: null, legacy: null });
-    return run("first", gen, (signal) => api.listBeats(listRequest({}), signal), (page) => applyFirst(page));
+    publish({ status: snapshot.context ? "loading" : snapshot.status, blocks: [], revision: null, totalMatched: null, legacy: null, provisional: false });
+    return run("first", gen, (signal) => api.listBeats(listRequest({}), signal), (page) => applyFirst(page, null, true));
+  }
+  // Siembra la copia local (solo con el store recién creado y vacío). Queda `provisional` hasta `revalidate()`.
+  function seedFirst(seed: CatalogSeed): boolean {
+    if (destroyed || snapshot.blocks.length || (snapshot.status !== "idle" && snapshot.status !== "loading") || seed.page.startOrdinal !== 0 || seed.page.items.length === 0 || seed.page.items.length > blockSize) return false;
+    const block: CatalogBlock = { startOrdinal: 0, items: Object.freeze(seed.page.items.slice()), nextCursor: seed.page.nextCursor, previousCursor: seed.page.previousCursor, resumeCursor: seed.page.resumeCursor, bytes: bytesOf(seed.page.items) };
+    publish({ status: "ready", filters: seed.filters, sort: seed.sort, queryKey: filtersKey(seed.filters, seed.sort), blocks: [block], revision: seed.revision, totalMatched: seed.totalMatched, totalLibrary: seed.totalLibrary, edgeError: null, legacy: null, provisional: true });
+    return true;
+  }
+  // Revalida el bloque provisional con PostgreSQL SIN vaciar la Gallery: éxito → bloque vigente (cambie o no); error → se retira la copia y
+  // se muestra el estado normal de error (nunca se presentan datos no confirmados como vigentes).
+  // Idempotente: la composición la lanza al sembrar (en paralelo al primer render) y la Gallery la vuelve a pedir al montar → misma promesa.
+  let seededRevalidation: Promise<void> | null = null;
+  function revalidate(): Promise<void> {
+    if (seededRevalidation) return seededRevalidation;
+    if (!snapshot.provisional) return loadFirst();
+    seededRevalidation = revalidateSeed();
+    return seededRevalidation;
+  }
+  async function revalidateSeed(): Promise<void> {
+    newGeneration();
+    const gen = generation;
+    await run("first", gen, (signal) => api.listBeats(listRequest({}), signal), (page) => applyFirst(page, null, true));
+    if (!destroyed && gen === generation && snapshot.provisional) {
+      const e = snapshot.edgeError;
+      publish({ blocks: [], revision: null, totalMatched: null, totalLibrary: null, provisional: false, status: snapshot.status === "unauthenticated" || snapshot.status === "integrity" ? snapshot.status : e?.code === "OFFLINE" ? "offline" : e?.status === 503 ? "unavailable" : "error" });
+    }
   }
   async function loadLast(): Promise<void> {
     newGeneration();
@@ -298,7 +340,7 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
   function observeViewport(input: { firstOrdinal: number; lastOrdinal: number; perViewport: number; prefetchViewports?: number }): void {
     const pv = Math.min(PREFETCH_VIEWPORTS_MAX, Math.max(PREFETCH_VIEWPORTS_MIN, input.prefetchViewports ?? PREFETCH_VIEWPORTS_DEFAULT));
     protectedRange = { start: input.firstOrdinal, end: input.lastOrdinal + 1 };
-    if (snapshot.status !== "ready") return;
+    if (snapshot.status !== "ready" || snapshot.provisional) return; // sin prefetch con cursores de la copia local
     const lead = pv * Math.max(1, input.perViewport);
     if (snapshot.hasAfter && input.lastOrdinal + lead >= snapshot.endOrdinal) void loadNext();
     if (snapshot.hasBefore && input.firstOrdinal - lead < snapshot.firstOrdinal) void loadPrevious();
@@ -332,8 +374,10 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
   return Object.freeze({
     subscribe(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getSnapshot: () => snapshot,
+    /** true si el store arrancó desde la copia local (su revalidación sustituye a la carga inicial). */
+    startedFromSeed: () => seededRevalidation !== null || snapshot.provisional,
     itemAt,
-    resolve, loadFirst, loadLast, loadResume, loadLegacy, loadNext, loadPrevious, retry, observeViewport, setQuery, setSort, notifyLibraryChanged, teardown,
+    resolve, loadFirst, seedFirst, revalidate, loadLast, loadResume, loadLegacy, loadNext, loadPrevious, retry, observeViewport, setQuery, setSort, notifyLibraryChanged, teardown,
     limits: Object.freeze({ blockSize, maxBlocks, maxBytes, maxInflight: MAX_INFLIGHT }),
   });
 }

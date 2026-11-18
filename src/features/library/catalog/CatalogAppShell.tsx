@@ -54,7 +54,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   // imagen sobre cualquier zona de una BeatCard → portada; MP3/WAV sobre una BeatCard → reemplazo de audio con confirmación; MP3/WAV fuera → beat nuevo (AddBeatModal con `initialFile`).
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const { active: dropActive, targetId: dropTargetId } = useCatalogFileDrop({
-    enabled: !droppedFile && !scope.showAdd && !drawer && !scope.review,
+    enabled: !droppedFile && !scope.showAdd && !drawer && !scope.review && !snapshot.provisional,
     onDrop: (event) => {
       const action = routeDrop(event);
       if (action.type === "alert") { void appAlert({ title: action.title, message: action.message }); return; }
@@ -93,7 +93,9 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
     );
   };
   return (
+    // Copia local aún no revalidada con PostgreSQL: misma presentación, pero sin interacción (inert) hasta que llegue el primer bloque vigente.
     <div className="bg-design lab-gallery-page bg-product-gallery" data-catalog-mode="postgres" data-account={accountId}
+      data-catalog-provisional={snapshot.provisional ? "true" : undefined} aria-busy={snapshot.provisional || undefined} {...(snapshot.provisional ? { inert: "" } : {})}
       style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0c0c0c", overflow: "hidden" }}>
       {scope.connectionState === "offline" && (
         <div style={{ position: "fixed", top: 62, left: "50%", transform: "translateX(-50%)", zIndex: 20200, maxWidth: "min(620px, calc(100vw - 36px))", padding: "10px 14px", borderRadius: 10, border: "1px solid #7a6525", background: "#302913", color: "#f0d77d", boxShadow: "0 12px 34px rgba(0,0,0,.4)", fontSize: 11.5, lineHeight: 1.4, textAlign: "center" }}>
@@ -184,7 +186,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
         <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }} onSaved={scope.updateBeat}
           onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) scope.releaseFile(); }}
           selectedBeats={scope.selectedBeats.length > 1 ? scope.selectedBeats : undefined} onBulkSaved={scope.applyBulkUpdate}
-          mutationAllowed={scope.connectionState === "online"} onCloudMutationCommit={scope.commitDrawerCloudMutation} />
+          mutationAllowed={scope.connectionState === "online"} onCloudMutationCommit={scope.commitDrawerCloudMutation} onCatalogSave={scope.saveDrawerToCatalog} />
       )}
       {currentBeat && (
         <Player beat={currentBeat} playing={audio.isPlaying} progress={audio.progress} duration={audio.duration} volume={audio.volume} queue={scope.queuedBeats} currentIndex={-1}

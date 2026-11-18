@@ -25,7 +25,7 @@ export interface CatalogBeatDetail extends CatalogBeatDto {
   revision: string;
   generationId: string;
 }
-export type CatalogMetadataPatch = Partial<{ name: string; bpm: string; key: string; tags: string[]; rating: number; color: string | null; color2: string | null; crop: { x: number; y: number; w: number; h: number; unit: "ratio" } | null }>;
+export type CatalogMetadataPatch = Partial<{ name: string; bpm: string; key: string; tags: string[]; rating: number; color: string | null; color2: string | null; crop: { x: number; y: number; w: number; h: number; unit: "ratio" } | null; /** Solo PATCH individual: `null` desvincula la portada (el archivo de Telegram no se toca). */ artwork: null }>;
 /** Bulk add/remove de tags sobre BULK_PATCH (C12-V-INTERACTION, "bulk desde Drawer con reporte por lote"); nunca reemplaza el set. */
 export type CatalogBulkTagsOp = { op: "add" | "remove"; tags: string[] };
 export interface CatalogPatchResult { noop: boolean; beat: CatalogBeatDto | null; revision: string; eventSeq?: string; operationId: string; replay: boolean }

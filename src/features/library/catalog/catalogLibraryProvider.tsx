@@ -5,7 +5,9 @@
 // invalida y remonta: todos los servicios tienen teardown por cuenta.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
-import { CatalogApiError, createCatalogApi, type CatalogApi } from "./catalogApi";
+import { CatalogApiError, createCatalogApi, filtersKey, type CatalogApi, type CatalogContext } from "./catalogApi";
+import { browserFirstBlockCache, identityOf, type FirstBlockCache } from "./catalogFirstBlockCache";
+import { parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
 import { playbackSetKey, resolveReadyQuerySet } from "./catalogPlaybackSets";
 import { chooseLibraryComposition, isCatalogClientEnabled, type LibraryComposition } from "./catalogComposition";
 import { createCatalogCommandsApi } from "./catalogCommandsApi";
@@ -25,6 +27,8 @@ export interface CatalogServices {
   playback: CatalogPlaybackSession;
   media: CatalogMediaClient;
   mutations: CatalogMutations;
+  /** Copia local del primer bloque (E66), si está disponible: para invalidar beats concretos tras mutaciones que cambian lo que se ve. */
+  firstBlockCache?: FirstBlockCache | null;
   teardown(): Promise<void>;
 }
 export interface UseLibraryCompositionOptions {
@@ -35,14 +39,29 @@ export interface UseLibraryCompositionOptions {
   baseUrl?: () => string;
   token?: () => string | null;
   csrf?: () => string | null;
+  /** Copia local del primer bloque (por defecto IndexedDB del navegador). */
+  firstBlockCache?: FirstBlockCache;
+  /** `location.search` de arranque (pruebas); por defecto window.location.search. */
+  initialSearch?: () => string;
+}
+
+const STARTUP_CACHE_GRACE_MS = 40;
+
+// Consulta de arranque cacheable: solo la del primer bloque (sin bgPage legacy ni bgAnchor de reapertura).
+function startupQuery(search: string) {
+  if (parseLegacyBgPage(search).kind !== "none") return null;
+  const nav = readNavigationState(search);
+  return nav.anchor ? null : { filters: nav.filters, sort: nav.sort };
 }
 
 /** Servicios POSTGRES para una cuenta: creados una vez por (cuenta, época) y liberados juntos. */
-export function createCatalogServices({ api, accountId, context, fetchImpl, baseUrl, token, csrf }: { api: CatalogApi; accountId: string; context: { authority_era: string; authority_epoch: string }; fetchImpl?: typeof fetch; baseUrl?: () => string; token?: () => string | null; csrf?: () => string | null }): CatalogServices {
+export function createCatalogServices({ api, accountId, context, fetchImpl, baseUrl, token, csrf, firstBlockCache }: { api: CatalogApi; accountId: string; context: { authority_era: string; authority_epoch: string } & Partial<CatalogContext>; fetchImpl?: typeof fetch; baseUrl?: () => string; token?: () => string | null; csrf?: () => string | null; firstBlockCache?: FirstBlockCache }): CatalogServices {
   const common = { fetchImpl, baseUrl, token, csrf, headers: () => ({ era: context.authority_era, epoch: context.authority_epoch }) };
   const commands = createCatalogCommandsApi(common);
   const transfer = createCatalogTransfer(common);
-  const store = createCatalogQueryStore({ api, accountId });
+  // Cada primer bloque confirmado por PostgreSQL renueva la copia local de arranque de su identidad exacta (cuenta/vault/era/época/generación).
+  const identity = firstBlockCache?.available && context.user_id && context.vault_id && context.generation_id ? identityOf(accountId, context as CatalogContext) : null;
+  const store = createCatalogQueryStore({ api, accountId, onFirstPage: identity && firstBlockCache ? (page, q) => { if (page.authorityEra === identity.era && page.epoch === identity.epoch && page.generationId === identity.generationId) void firstBlockCache.write(identity, q.queryKey, page); } : undefined });
   const interaction = createCatalogInteractionStore({ commands, api, accountId: () => accountId });
   const media = createCatalogMediaClient({ ...common, accountId: () => accountId });
   const mutations = createCatalogMutations({ commands, transfer, accountId: () => accountId, prepareFiles: prepareCatalogFiles });
@@ -80,7 +99,7 @@ export function createCatalogServices({ api, accountId, context, fetchImpl, base
     accountId: () => accountId,
   });
   return Object.freeze({
-    api, store, interaction, playback, media, mutations,
+    api, store, interaction, playback, media, mutations, firstBlockCache: firstBlockCache ?? null,
     async teardown() { await playback.teardown(); await interaction.teardown(); media.teardown(); store.teardown?.(); sets.clear(); },
   });
 }
@@ -97,6 +116,9 @@ export function useLibraryComposition(options: UseLibraryCompositionOptions): { 
     if (!enabled) { setState({ status: "resolved", composition: { mode: "legacy", reason: "flag-off" }, key: "legacy" }); return () => {}; }
     setState({ status: "resolving" });
     void (async () => {
+      const cache = options.firstBlockCache ?? browserFirstBlockCache();
+      // Copias locales de esta cuenta leídas en paralelo a /context (no se usan ni muestran hasta que la autoridad responda `ready`).
+      const localCandidates = options.accountId && cache.available ? cache.candidates(options.accountId) : null;
       let composition: LibraryComposition;
       try { composition = await chooseLibraryComposition({ enabled: true, api, signal: controller.signal }); } catch (error) {
         composition = { mode: "blocked", resolution: { status: "offline", error: error instanceof Error ? error : new Error(String(error)) } };
@@ -106,10 +128,27 @@ export function useLibraryComposition(options: UseLibraryCompositionOptions): { 
       const prev = servicesRef.current; servicesRef.current = null; if (prev) void prev.teardown();
       if (composition.mode === "catalog" && options.accountId) {
         const ctx = composition.resolution.context;
-        const next = createCatalogServices({ api, accountId: options.accountId, context: ctx, fetchImpl: options.fetchImpl, baseUrl: options.baseUrl, token: options.token, csrf: options.csrf });
+        const next = createCatalogServices({ api, accountId: options.accountId, context: ctx, fetchImpl: options.fetchImpl, baseUrl: options.baseUrl, token: options.token, csrf: options.csrf, firstBlockCache: cache });
+        // Arranque rápido: SOLO tras /context `ready` y con identidad segura (cuenta confirmada por el Cloud = user_id del contexto). Las
+        // copias de otra era/época/generación/vault de esta cuenta se borran; la que coincide se siembra como provisional y se revalida.
+        const identity = identityOf(options.accountId, ctx);
+        if (!identity) void cache.invalidateAccount(options.accountId);
+        else if (cache.available) {
+          void cache.invalidateAccount(options.accountId, identity);
+          const q = startupQuery(options.initialSearch ? options.initialSearch() : typeof window !== "undefined" ? window.location.search : "");
+          // Si la lectura local aún no terminó cuando la autoridad ya respondió (p. ej. primera visita: IndexedDB se está creando), se espera
+          // como mucho STARTUP_CACHE_GRACE_MS y se arranca sin copia: la caché nunca puede hacer más lento el arranque normal.
+          const entry = q && localCandidates ? await Promise.race([cache.pick(localCandidates, identity, filtersKey(q.filters, q.sort)).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), STARTUP_CACHE_GRACE_MS))]) : null;
+          if (cancelled) { void next.teardown(); return; }
+          // La revalidación arranca ya (en paralelo al primer render de la copia), no después del montaje.
+          if (entry && q && entry.revision && next.store.seedFirst({ filters: q.filters, sort: q.sort, revision: entry.revision, totalMatched: entry.totalMatched, totalLibrary: entry.totalLibrary, page: entry.page })) void next.store.revalidate();
+        }
         servicesRef.current = next; setServices(next);
         setState({ status: "resolved", composition, key: `catalog:${options.accountId}:${ctx.authority_era}:${ctx.authority_epoch}` });
-      } else { setServices(null); setState({ status: "resolved", composition, key: composition.mode === "legacy" ? "legacy" : `blocked:${options.accountId ?? "anon"}` }); }
+      } else {
+        // Biblioteca bloqueada por la autoridad (reinicio/cuarentena): ninguna copia local de esa cuenta sigue siendo utilizable.
+        if (composition.mode === "blocked" && options.accountId && (composition.resolution.status === "reset_required" || composition.resolution.status === "quarantined")) void cache.invalidateAccount(options.accountId);
+        setServices(null); setState({ status: "resolved", composition, key: composition.mode === "legacy" ? "legacy" : `blocked:${options.accountId ?? "anon"}` }); }
     })();
     return () => { cancelled = true; controller.abort(); const prev = servicesRef.current; servicesRef.current = null; if (prev) void prev.teardown(); setServices(null); };
   }, [enabled, api, options.accountId]);

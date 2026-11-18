@@ -50,12 +50,18 @@ const hasControl = (s) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(
 // Valida un patch (solo campos presentes, C5: "transmite únicamente campos modificados"). Devuelve {ok, set, errors[]}.
 // `set` contiene los valores normalizados que se escriben; los tags deben venir ya en su forma normalizada (el cliente
 // normaliza antes de enviar; el servidor no corrige en silencio).
-function validatePatch(input) {
+// `allowArtworkRemoval` (solo PATCH individual de un beat, decisión del propietario 2026-11-17): admite `artwork: null` = desvincular la
+// portada actual. BULK_PATCH y la metadata de IMPORT/REPLACE siguen rechazando `artwork` (no lo aplicarían).
+function validatePatch(input, { allowArtworkRemoval = false } = {}) {
   const errors = [];
   const set = {};
   if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, set, errors: [{ field: '$', reason: 'patch must be an object' }] };
-  const unknown = Object.keys(input).filter((k) => !PATCH_FIELDS.includes(k));
+  const unknown = Object.keys(input).filter((k) => !PATCH_FIELDS.includes(k) && !(allowArtworkRemoval && k === 'artwork'));
   for (const k of unknown) errors.push({ field: k, reason: 'field is not patchable' });
+  if (allowArtworkRemoval && 'artwork' in input) {
+    if (input.artwork !== null) errors.push({ field: 'artwork', reason: 'artwork can only be null (remove); new artwork goes through a REPLACE operation' });
+    else set.artwork = null;
+  }
   if ('name' in input) {
     const v = input.name;
     if (typeof v !== 'string' || !v.trim()) errors.push({ field: 'name', reason: 'name must be a non-empty string' });

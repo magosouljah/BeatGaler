@@ -336,7 +336,7 @@
         "X-Catalog-Epoch",
         "If-Match (opcional, debe coincidir con expectedVersion)"
       ],
-      "body": "{expectedVersion, patch:{name?,bpm?,key?,tags?,rating?,color?,color2?,crop?}}; If-Match opcional (W/\"<len>-<version>\", debe coincidir)",
+      "body": "{expectedVersion, patch:{name?,bpm?,key?,tags?,rating?,color?,color2?,crop?,artwork?:null}}; artwork:null desvincula la portada (slot ARTWORK eliminado, versión RETIRED; el objeto de Telegram no se toca); solo PATCH individual; If-Match opcional (W/\"<len>-<version>\", debe coincidir)",
       "response": "{noop, beat, revision, eventSeq?, operationId, replay}",
       "errors": [
         "400 INPUT_INVALID (errors[] por campo)",

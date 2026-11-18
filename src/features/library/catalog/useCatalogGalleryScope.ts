@@ -16,6 +16,7 @@ import { useCatalogInteraction, type InteractionQuery } from "./catalogInteracti
 import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { beatFromCatalogDetail, metadataPatch } from "./catalogMutations";
 import { replaceBeatAudio } from "./catalogAudioReplace";
+import { enqueueReview, nextReview, pendingTransferNotice, saveDrawerChanges, summarizePendingTransfers, type DrawerSaveInput, type ReviewEntry } from "./catalogDrawerSave";
 import { resolveImportPlan } from "./catalogImportPlan";
 import { appAlert } from "../../../lib/dialog";
 import { cleanTags } from "../../../lib/metadataValidation";
@@ -111,6 +112,8 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const navInit = useRef(false);
   useEffect(() => {
     if (navInit.current) return; navInit.current = true;
+    // Bloque sembrado desde la copia local (misma consulta que la URL): se revalida sin vaciar la Gallery.
+    if (store.startedFromSeed()) { void store.revalidate(); return; }
     const search = typeof window !== "undefined" ? window.location.search : "";
     const legacy = parseLegacyBgPage(search);
     if (legacy.kind === "offset") { void store.loadLegacy(legacy.offset); return; }
@@ -160,14 +163,14 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   // ---- facetas globales (T06) → Tag Bar ----
   const [facets, setFacets] = useState<{ revision: string; tags: string[]; freq: Map<string, number> }>({ revision: "", tags: [], freq: new Map() });
   useEffect(() => {
-    if (!snapshot.revision || !["ready", "empty", "no-results"].includes(snapshot.status)) return;
+    if (!snapshot.revision || snapshot.provisional || !["ready", "empty", "no-results"].includes(snapshot.status)) return;
     let cancelled = false;
     void interactionStore.loadFacets({ scope: "ACTIVE", q: "", revision: snapshot.revision, limit: 240 }).then((page) => {
       if (cancelled) return;
       setFacets({ revision: snapshot.revision!, tags: page.items.map((f) => f.label || f.key), freq: new Map(page.items.map((f) => [f.label || f.key, f.count])) });
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [snapshot.revision, snapshot.status, interactionStore]);
+  }, [snapshot.revision, snapshot.status, snapshot.provisional, interactionStore]);
 
   // ---- selección global (servidor) ----
   const [selectMode, setSelectMode] = useState(false);
@@ -291,6 +294,27 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     const { blob } = await media.downloadFile(p.fileId);
     return new File([blob], p.filename || "project.zip", { type: "application/zip" });
   }, [mutations, media]);
+  // §6.1-1/2/3: guardado del Drawer en el catálogo: metadatos + portada nueva + archivos elegidos (MASTER/WAV/PROJECT) en UNA mutación (REPLACE o,
+  // sin archivos, PATCH). Cualquier resultado que no sea un commit lanza un error: el Drawer conserva los cambios y archivos pendientes.
+  // Portada quitada y confirmada: se olvidan la concesión/blob del beat (media), su URL en la Gallery y las copias locales de arranque
+  // (E66) que lo contienen, para que la portada desvinculada no reaparezca; luego el bloque vigente se vuelve a pedir a PostgreSQL.
+  const forgetArtworkOf = useCallback((beatId: string) => {
+    const old = dtoById.current.get(beatId)?.artwork?.fileId;
+    media.invalidate(beatId);
+    if (old) setArtworkUrls((prev) => { if (!(old in prev)) return prev; const next = { ...prev }; delete next[old]; return next; });
+    void services.firstBlockCache?.dropBeat(accountId, beatId);
+  }, [media, services.firstBlockCache, accountId]);
+  const saveDrawerToCatalog = useCallback(async (input: DrawerSaveInput) => {
+    try {
+      const r = await saveDrawerChanges({ mutations, knownDto: (id) => dtoById.current.get(id), loadProject, dataUrlToFile, errorMessage: importFailureMessage }, input);
+      if (r.artworkRemoved) forgetArtworkOf(input.updated.id);
+    } catch (e) {
+      if ((e as { partial?: boolean }).partial) forgetArtworkOf(input.updated.id);
+      if ((e as { pending?: boolean; partial?: boolean }).pending || (e as { partial?: boolean }).partial) refreshAfterMutation();
+      throw e;
+    }
+    refreshAfterMutation();
+  }, [mutations, refreshAfterMutation, loadProject, forgetArtworkOf]);
 
   // ---- reemplazo de audio por arrastre sobre una BeatCard (MP3 → MASTER, WAV → añadir/reemplazar WAV HQ), con confirmación ----
   const replaceAudioByDrop = useCallback(async (beatId: string, file: File) => {
@@ -320,16 +344,30 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   // «Add beat» → pantalla de revisión (el Drawer en modo edición con `reviewInfo`, como el flujo anterior): nombre, BPM, key, tags, rating, portada y
   // archivos (MASTER/WAV/PROJECT) se editan ANTES de importar. Cancelar/omitir libera el archivo y no importa ni modifica nada.
   const [review, setReview] = useState<{ beat: Beat; hydrated: Promise<Beat> | null } | null>(null);
-  const addBeatsAndReview = useCallback((beats: Beat[], hydrated?: Array<Promise<Beat>>) => {
-    const beat = beats[0]; if (!beat) return;
-    const h = hydrated?.[0] ?? null;
-    if (!platform.importer.fileForBeat(beat.id)) { setNotice(IMPORT_NO_FILE_NOTICE); return; }
-    setReview({ beat, hydrated: h });
+  // §6.1-6: una sola revisión visible; las demás (otra importación o un fallo en segundo plano) esperan en cola y se abren al cerrar la actual.
+  // Antes un fallo en segundo plano sustituía la revisión abierta: sus ediciones se perdían y su archivo quedaba retenido sin interfaz.
+  const reviewQueue = useRef<ReviewEntry[]>([]);
+  const showReview = useCallback((entry: ReviewEntry) => {
+    setReview((r) => { const q = enqueueReview(r, reviewQueue.current, entry); reviewQueue.current = q.queue; return q.current; });
     // Metadatos ID3 / WAV→MP3 se hidratan en segundo plano (como antes): la revisión se abre al instante y se completa al terminar.
-    void h?.then((hb) => setReview((r) => (r && r.beat.id === beat.id ? { ...r, beat: { ...hb, tags: cleanTags(hb.tags || []).tags } } : r))).catch((error) => {
-      if (platform.importer.fileForBeat(beat.id)) void appAlert({ title: "Import failed", message: String(error), danger: true });
+    void entry.hydrated?.then((hb) => {
+      const next = { ...hb, tags: cleanTags(hb.tags || []).tags };
+      reviewQueue.current = reviewQueue.current.map((x) => (x.beat.id === entry.beat.id ? { beat: next, hydrated: null } : x));
+      setReview((r) => (r && r.beat.id === entry.beat.id ? { ...r, beat: next } : r));
+    }).catch((error) => {
+      if (platform.importer.fileForBeat(entry.beat.id)) void appAlert({ title: "Import failed", message: String(error), danger: true });
     });
   }, []);
+  useEffect(() => {
+    if (review || !reviewQueue.current.length) return;
+    const q = nextReview(reviewQueue.current, (id) => Boolean(platform.importer.fileForBeat(id)));
+    reviewQueue.current = q.queue; if (q.next) setReview(q.next);
+  }, [review]);
+  const addBeatsAndReview = useCallback((beats: Beat[], hydrated?: Array<Promise<Beat>>) => {
+    const beat = beats[0]; if (!beat) return;
+    if (!platform.importer.fileForBeat(beat.id)) { setNotice(IMPORT_NO_FILE_NOTICE); return; }
+    showReview({ beat, hydrated: hydrated?.[0] ?? null });
+  }, [showReview]);
   const cancelReview = useCallback(() => { setReview((r) => { if (r) platform.importer.releaseBeat(r.beat.id); return null; }); }, []);
   // «Save and finish» (comportamiento del BeatGaler anterior: «Save/next stays immediate; the extracted cloud queue owns upload work»):
   // la revisión se cierra en cuanto el servidor aceptó la operación (nombre libre, cuota, tamaño) y el beat aparece YA en la Gallery como tarjeta
@@ -352,7 +390,11 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
       const res = await job;
       if (res.error) throw new Error(importFailureMessage(res.error));
       const outcome = res.outcome!;
-      if (outcome.status !== "committed") throw new Error(outcome.status !== "uncertain" && (outcome as { error?: unknown }).error ? importFailureMessage((outcome as { error?: unknown }).error) : outcome.status === "uncertain" ? uncertainNotice(updated.name) : `La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
+      if (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout") { // retenida: puede confirmarse más tarde → nunca se reenvía
+        platform.importer.releaseBeat(r.beat.id); setReview(null); setNotice(outcome.status === "uncertain" ? uncertainNotice(updated.name) : pendingTransferNotice(updated.name)); refreshAfterMutation();
+        return;
+      }
+      if (outcome.status !== "committed") throw new Error((outcome as { error?: unknown }).error ? importFailureMessage((outcome as { error?: unknown }).error) : `La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
       platform.importer.releaseBeat(r.beat.id); setReview(null);
       setNotice(`«${updated.name}» importado.`); refreshAfterMutation();
       return;
@@ -369,12 +411,28 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
         return;
       }
       setBeatCloudUpdateBusy(pendingId, false, false); dropPending(0);
-      if (outcome && outcome.status === "uncertain") { platform.importer.releaseBeat(r.beat.id); setNotice(uncertainNotice(updated.name)); refreshAfterMutation(); return; }
+      // §6.1-7: RECONCILE («blocked») y tiempo agotado también pueden confirmarse después: como «uncertain», sin reabrir para reenviar.
+      if (outcome && (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout")) { platform.importer.releaseBeat(r.beat.id); setNotice(outcome.status === "uncertain" ? uncertainNotice(updated.name) : pendingTransferNotice(updated.name)); refreshAfterMutation(); return; }
       const reason = error ? importFailureMessage(error) : (outcome as { error?: unknown } | null)?.error ? importFailureMessage((outcome as { error?: unknown }).error) : `quedó en estado ${outcome ? outcome.status : "desconocido"}`;
       setNotice(`No se pudo importar «${updated.name}»: ${reason.replace(/[.s]+$/, "")}. Tus cambios siguen en la revisión.`);
-      if (platform.importer.fileForBeat(r.beat.id)) setReview({ beat: updated, hydrated: null }); // reabre con lo editado (el archivo no se liberó)
+      if (platform.importer.fileForBeat(r.beat.id)) showReview({ beat: updated, hydrated: null }); // reabre con lo editado (o en cola si hay otra revisión abierta)
     });
-  }, [review, mutations, refreshAfterMutation]);
+  }, [review, mutations, refreshAfterMutation, showReview]);
+
+  // §6.1-5: al arrancar se consulta el resultado de las subidas que quedaron a medias (p. ej. al recargar la página). Las confirmadas aparecen
+  // en la Gallery; las terminadas sin efecto se informan una vez; las que siguen abiertas se informan sin reenviar nada (los archivos no se
+  // conservan tras recargar). Solo lectura: no cancela ni reintenta.
+  const pendingChecked = useRef(false);
+  useEffect(() => {
+    if (pendingChecked.current || snapshot.provisional) return;
+    pendingChecked.current = true;
+    void mutations.resolvePendingTransfers().then((list) => {
+      const r = summarizePendingTransfers(list);
+      for (const id of r.forget) mutations.forgetOperation(id);
+      if (r.notice) setNotice(r.notice);
+      if (r.refresh) refreshAfterMutation();
+    }).catch(() => {});
+  }, [snapshot.provisional, mutations, refreshAfterMutation]);
 
   // ---- sesión / ajustes ----
   const [showSettings, setShowSettings] = useState(false);
@@ -417,7 +475,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     selectMode, selectedCount: interaction.selection.count, selectionStatus: interaction.selection.status, selectedBeats, toggleSelection, toggleSelectAll, finishSelection, clearSelection,
     handlePlay, handleWarm, addToQueue, handleNext, handlePrev, toggleShuffle, cycleRepeat, showQueue, toggleQueue, closeQueue, playQueueIndex, queuedBeats, currentBeat,
     shuffleEnabled: playback.shuffle, repeatMode: playback.repeat, togglePause, seek, setVolume, releaseFile,
-    drawer, setDrawer, updateBeat, commitDrawerCloudMutation, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
+    drawer, setDrawer, updateBeat, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
     showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, pendingImports, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
