@@ -5,7 +5,6 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const mig = require('../../postgres-migrations.js');
-const { createCatalogRepository } = require('../../catalog/repository.js');
 const contract = require('../../catalog/contract.js');
 
 const all = mig.listMigrations();
@@ -46,32 +45,6 @@ test('el guard rechaza desviaciones del contrato del catálogo', () => {
   assert.throws(() => mig.assertInitialSchemaContract(withCore(`${core.sql}\nCREATE TABLE beats (id text);`)), /Forbidden authority/, 'beats sigue prohibido');
 });
 
-test('el repositorio exige tenant y generación', async () => {
-  const pool = { async connect() { return { async query() { return { rows: [{}] }; }, release() {} }; } };
-  const repo = createCatalogRepository({ pool });
-  await repo.withTransaction(async (t) => {
-    await assert.rejects(t.getBeat({ userId: 'u' }, 'b'), { code: 'CATALOG_GENERATION_REQUIRED' });
-    await assert.rejects(t.getBeat({ generationId: 'g1' }, 'b'), { code: 'CATALOG_TENANT_REQUIRED' });
-    await assert.rejects(t.insertBeat(null, {}), { code: 'CATALOG_TENANT_REQUIRED' });
-    await assert.rejects(t.getLibrary(''), { code: 'CATALOG_TENANT_REQUIRED' });
-    await assert.rejects(t.createGeneration({ userId: 'u', generationId: 'bad id' }, { snapshotId: 's' }), { code: 'CATALOG_GENERATION_REQUIRED' });
-  });
-  assert.throws(() => createCatalogRepository({}), { code: 'CATALOG_POOL_REQUIRED' });
-});
-
-test('withTransaction usa un único cliente y lo libera también ante error', async () => {
-  const log = []; let connects = 0; let releases = 0;
-  const pool = { async connect() { connects++; const id = connects; return { async query(t) { log.push([id, t]); if (t === 'BOOM') throw new Error('boom'); return { rows: [] }; }, release() { releases++; } }; } };
-  const repo = createCatalogRepository({ pool });
-  await repo.withTransaction(async (t) => { await t.query('SELECT 1'); await t.query('SELECT 2'); });
-  await assert.rejects(repo.withTransaction(async (t) => { await t.query('BOOM'); }), /boom/);
-  await assert.rejects(repo.withTransaction(async () => { throw new Error('app'); }), /app/);
-  assert.equal(connects, 3); assert.equal(releases, 3);
-  assert.deepEqual(log.filter(([id]) => id === 1).map(([, t]) => t), ['BEGIN ISOLATION LEVEL READ COMMITTED', 'SELECT 1', 'SELECT 2', 'COMMIT']);
-  assert.deepEqual(log.filter(([id]) => id === 2).map(([, t]) => t), ['BEGIN ISOLATION LEVEL READ COMMITTED', 'BOOM', 'ROLLBACK']);
-  await assert.rejects(repo.withTransaction(async () => {}, { isolation: 'READ UNCOMMITTED; DROP' }), { code: 'CATALOG_ISOLATION_INVALID' });
-});
-
 test('catalog/ no importa transporte ni red', () => {
   const dir = path.join(__dirname, '..', '..', 'catalog');
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) {
@@ -79,7 +52,7 @@ test('catalog/ no importa transporte ni red', () => {
     const reqs = [...src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
     // T05-N: ./authority es módulo interno del catálogo (solo SQL + crypto); sigue prohibido importar transporte o red.
     // T06: ./cursor y ./queries son módulos internos (SQL + HMAC); routes.js es el único que requiere express (servidor HTTP, no cliente de red).
-    const allowed = ['crypto', './contract', './legacy-codec', './migration', './authority', './cursor', './queries', './metadata-rules', './commands', './facets', './name-uniqueness'];
+    const allowed = ['crypto', './contract', './beat-projection', './authority', './cursor', './queries', './metadata-rules', './commands', './facets', './name-uniqueness'];
     if (f === 'worker.js') allowed.length = 1; // worker.js: solo crypto; transporte inyectado, nunca importado
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
     if (f === 'prefix-packs.js') allowed.push('./transport-gateway'); // E75: solo el marcador del paquete; verificador inyectado; sin fs, SDK ni red

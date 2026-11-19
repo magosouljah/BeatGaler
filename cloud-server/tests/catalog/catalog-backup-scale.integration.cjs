@@ -23,8 +23,8 @@ const mediaMod = require('../../catalog/media.js');
 const purgeMod = require('../../catalog/purge.js');
 const backupMod = require('../../catalog/backup.js');
 const journalMod = require('../../catalog-deletion-journal.js');
-const codec = require('../../catalog/legacy-codec.js');
-const { rebuildDerivedProjections } = require('../../catalog/staging.js');
+const codec = require('../../catalog/beat-projection.js');
+const { rebuildDerivedProjections } = require('../../catalog/facets.js');
 
 const { createFakeTelegramServer } = require('../helpers/catalog-fake-mtproto.cjs');
 

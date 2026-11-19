@@ -13,7 +13,7 @@ const crypto = require('crypto');
 const { requireUserId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError, createCursorSigner, keysFromEnv } = require('./cursor');
-const { SEARCH_TEXT_SEP } = require('./legacy-codec');
+const { SEARCH_TEXT_SEP } = require('./beat-projection');
 
 const LIMIT_DEFAULT = 100;
 const LIMIT_MAX = 240;

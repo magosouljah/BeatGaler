@@ -2,7 +2,7 @@
 // T20 — Generador sintético de catálogo (semilla fija) para medir capacidad/latencia/contención sobre PostgreSQL.
 //  - Determinista: misma semilla + mismo índice de beat => mismos valores, sin estado de RNG compartido (cada fila deriva
 //    su entropía de sha256(seed:index), así que es seguro repartir el rango de índices entre varios clientes/shards).
-//  - Reutiliza el código real del catálogo donde importa para la corrección (legacy-codec.projectBeat para las proyecciones
+//  - Reutiliza el código real del catálogo donde importa para la corrección (beat-projection.projectBeat para las proyecciones
 //    derivadas, catalog/authority.provisionLibrary para nacer la biblioteca nativa) en vez de inventar su propio esquema.
 //  - Nunca usa INSERT fila a fila para los beats/tags/papelera: construye INSERT multi-fila por lotes (BEAT_BATCH_ROWS).
 //    No hay COPY disponible (pg-copy-streams no está instalado en cloud-server/node_modules); ver informe T20.
@@ -12,9 +12,9 @@
 const crypto = require('crypto');
 const path = require('path');
 
-const codec = require(path.join(__dirname, '..', '..', 'cloud-server', 'catalog', 'legacy-codec.js'));
+const codec = require(path.join(__dirname, '..', '..', 'cloud-server', 'catalog', 'beat-projection.js'));
 const authorityMod = require(path.join(__dirname, '..', '..', 'cloud-server', 'catalog', 'authority.js'));
-const staging = require(path.join(__dirname, '..', '..', 'cloud-server', 'catalog', 'staging.js'));
+const { rebuildDerivedProjections } = require(path.join(__dirname, '..', '..', 'cloud-server', 'catalog', 'facets.js'));
 
 const TAG_VOCAB_SIZE = 500;
 const NAME_WORDS = [
@@ -159,7 +159,7 @@ async function ensureNativeLibrary(pool, { userId, seed }) {
 // Genera `n` beats deterministas (semilla `seed`) en la biblioteca nativa de `userId`, repartidos en `concurrency`
 // clientes concurrentes por rango de índice disjunto. Confirma por lotes de `commitEvery` filas (cada lote es varios
 // INSERT multi-fila de `batchRows` filas, nunca fila a fila). Al final reconstruye proyecciones derivadas (grupos/
-// facetas) con el código real de staging.js y actualiza los contadores de catalog_libraries.
+// facetas) con el código real de facets.rebuildDerivedProjections y actualiza los contadores de catalog_libraries.
 async function generateLibrary({
   pool, userId, n, seed = 777, tagVocabSize = TAG_VOCAB_SIZE, trashFraction = 0.10, tagPrefix = 'tag',
   batchRows = 500, commitEvery = 2000, concurrency = 1, onProgress = null, analyzeEachCommit = null, analyzeAll = null,
@@ -220,7 +220,7 @@ async function generateLibrary({
   const projClient = await pool.connect();
   try {
     await projClient.query('BEGIN');
-    await staging.rebuildDerivedProjections(projClient, { userId, generationId });
+    await rebuildDerivedProjections(projClient, { userId, generationId });
     await projClient.query(
       `UPDATE catalog_libraries SET
          active_count = (SELECT count(*) FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE'),
@@ -245,7 +245,7 @@ async function generateLibrary({
 // Variante multi-tenant: `count` bibliotecas pequenas ademas de la grande, cada una con un vocabulario de tags propio (prefijo distinto:
 // `t<k>x<i>`), de modo que catalog_beat_tags.label tenga muchas etiquetas distintas en total (count x vocabSize) y las estadisticas
 // globales de label dejen de describir el vocabulario de la biblioteca grande. Determinista por (seed, k). Cada biblioteca usa el
-// mismo camino real de provision (authority.provisionLibrary) y proyecciones (staging.rebuildDerivedProjections) que generateLibrary.
+// mismo camino real de provision (authority.provisionLibrary) y proyecciones (facets.rebuildDerivedProjections) que generateLibrary.
 async function generateTenants({ pool, count, beatsPerLibrary = 500, vocabSize = 10, seed = 777, concurrency = 1, trashFraction = 0.10 } = {}) {
   let beats = 0;
   for (let k = 0; k < count; k++) {

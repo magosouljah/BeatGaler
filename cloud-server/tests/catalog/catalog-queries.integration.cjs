@@ -11,8 +11,8 @@ const db = require('../helpers/catalog-test-db.cjs');
 const mig = require('../../postgres-migrations.js');
 const authority = require('../../catalog/authority.js');
 const queries = require('../../catalog/queries.js');
-const codec = require('../../catalog/legacy-codec.js');
-const { rebuildDerivedProjections } = require('../../catalog/staging.js');
+const codec = require('../../catalog/beat-projection.js');
+const { rebuildDerivedProjections } = require('../../catalog/facets.js');
 
 const { Pool } = require(path.join(__dirname, '..', '..', 'node_modules', 'pg'));
 db.validateAdminTarget();

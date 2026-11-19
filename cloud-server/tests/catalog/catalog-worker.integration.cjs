@@ -13,8 +13,8 @@ const authority = require('../../catalog/authority.js');
 const operations = require('../../catalog/operations.js');
 const queries = require('../../catalog/queries.js');
 const commands = require('../../catalog/commands.js');
-const codec = require('../../catalog/legacy-codec.js');
-const { rebuildDerivedProjections } = require('../../catalog/staging.js');
+const codec = require('../../catalog/beat-projection.js');
+const { rebuildDerivedProjections } = require('../../catalog/facets.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
 
 const { Pool } = require(path.join(__dirname, '..', '..', 'node_modules', 'pg'));

@@ -78,5 +78,4 @@ function respondLegacyFence(res, error) {
 
 module.exports = {
   FENCE_CODE, FENCE_STATUS, CatalogLegacyFenceError, createLegacyFence, isLegacyFenceError, respondLegacyFence,
-  __sql: Object.freeze({ USER_SQL, CHAT_SQL }),
 };

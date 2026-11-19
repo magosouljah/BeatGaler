@@ -7,7 +7,6 @@ const crypto = require('crypto');
 const path = require('path');
 const db = require('../helpers/catalog-test-db.cjs');
 const mig = require('../../postgres-migrations.js');
-const { createCatalogRepository } = require('../../catalog/repository.js');
 
 const { Pool } = require(path.join(__dirname, '..', '..', 'node_modules', 'pg'));
 db.validateAdminTarget(); // sin destino aprobado el archivo falla, no se salta
@@ -92,8 +91,7 @@ test('upgrade 0001-0025 → 0026 conserva datos legacy y no importa nada', () =>
 
 test('restricciones de biblioteca, generación y autoridad', () => withDb(async (pool) => {
   await mig.applyMigrations(pool); await seedUsers(pool);
-  const repo = createCatalogRepository({ pool });
-  const lib = await repo.withTransaction((t) => t.createLibrary({ userId: 'u1', vaultId: 'v1' }));
+  const lib = (await pool.query("INSERT INTO catalog_libraries(user_id, vault_id) VALUES ('u1', 'v1') RETURNING authority, migration_state, cleanup_enabled, restore_hold, revision::text AS revision")).rows[0];
   assert.deepEqual([lib.authority, lib.migration_state, lib.cleanup_enabled, lib.restore_hold, lib.revision], ['LEGACY', 'IDLE', false, true, '1']);
   assert.equal(await one(pool, "INSERT INTO catalog_libraries(user_id, vault_id) VALUES ('u2','v1')"), '23505', 'vault ya asignado');
   assert.equal(await one(pool, "INSERT INTO catalog_libraries(user_id, vault_id) VALUES ('u2','vX')"), '23503', 'vault inexistente/ajeno');
@@ -106,15 +104,16 @@ test('restricciones de biblioteca, generación y autoridad', () => withDb(async 
   assert.equal(await one(pool, "UPDATE catalog_libraries SET trash_count = -1 WHERE user_id='u1'"), '23514');
 
   const s1 = { userId: 'u1', generationId: 'g1' };
-  await repo.withTransaction((t) => t.createGeneration(s1, { snapshotId: 'snap-1', rawIndex: Buffer.from('{"schema":"beatgaler.telegram.library"}') }));
-  await repo.withTransaction((t) => t.createGeneration({ userId: 'u2', generationId: 'g9' }, { snapshotId: 'snap-9' }));
+  const raw = Buffer.from('{"schema":"beatgaler.telegram.library"}');
+  await pool.query('INSERT INTO catalog_generations(user_id, generation_id, snapshot_id, raw_index, raw_index_sha256) VALUES ($1, $2, $3, $4, $5)', [s1.userId, s1.generationId, 'snap-1', raw, crypto.createHash('sha256').update(raw).digest('hex')]);
+  await pool.query("INSERT INTO catalog_generations(user_id, generation_id, snapshot_id) VALUES ('u2', 'g9', 'snap-9')");
   assert.equal(await one(pool, "INSERT INTO catalog_generations(user_id, generation_id, snapshot_id, raw_index, raw_index_sha256) VALUES ('u1','g2','s', '\\x00'::bytea, $1)", [H]), '23514', 'hash raw no coincide');
   assert.equal(await one(pool, "UPDATE catalog_generations SET raw_index = '\\x01'::bytea, raw_index_sha256 = encode(sha256('\\x01'::bytea),'hex') WHERE generation_id='g1'"), '23514', 'raw inmutable');
   assert.equal(await one(pool, "UPDATE catalog_libraries SET active_generation_id='g1' WHERE user_id='u1'"), '23503', 'generación STAGING como activa');
   assert.equal(await one(pool, "UPDATE catalog_libraries SET active_generation_id='g9' WHERE user_id='u1'"), '23503', 'generación de otro usuario');
   assert.equal(await one(pool, "UPDATE catalog_generations SET status='ACTIVE' WHERE generation_id='g1'"), '23514', 'STAGING→ACTIVE');
   assert.equal(await one(pool, "UPDATE catalog_generations SET status='VALIDATED' WHERE generation_id='g1'"), '23514', 'VALIDATED sin source_hash');
-  await repo.withTransaction((t) => t.setGenerationStatus(s1, { status: 'VALIDATED', sourceHash: H }));
+  await pool.query("UPDATE catalog_generations SET status = 'VALIDATED', source_hash = $3, validated_at = now() WHERE user_id = $1 AND generation_id = $2", [s1.userId, s1.generationId, H]);
   assert.equal(await tx(pool, async (c) => {
     await c.query("UPDATE catalog_generations SET status='ACTIVE' WHERE user_id='u1' AND generation_id='g1'");
     await c.query("UPDATE catalog_libraries SET active_generation_id='g1', authority='POSTGRES' WHERE user_id='u1'");
@@ -220,25 +219,6 @@ test('restricciones de beats, tags, papelera, tombstones, archivos y conjuntos',
   assert.equal(await one(pool, "UPDATE catalog_query_sets SET status='FAILED' WHERE set_id='s1'"), '23514', 'READY→FAILED');
   assert.equal(await one(pool, "INSERT INTO catalog_query_set_leases VALUES ('u1','s1','c1','SHUFFLE', now() + interval '30 minutes')"), 'OK');
   assert.equal(await one(pool, "DELETE FROM catalog_beats WHERE beat_id='b2'"), '23503', 'beat miembro no se borra físicamente');
-}));
-
-test('repositorio sobre PostgreSQL: rollback y release medidos', () => withDb(async (pool) => {
-  await mig.applyMigrations(pool); await seedUsers(pool);
-  const ip = db.instrumentPool(pool);
-  const repo = createCatalogRepository({ pool: ip.pool });
-  await repo.withTransaction((t) => t.createLibrary({ userId: 'u1', vaultId: 'v1' }));
-  await repo.withTransaction((t) => t.createGeneration({ userId: 'u1', generationId: 'g1' }, { snapshotId: 's1' }));
-  await assert.rejects(repo.withTransaction(async (t) => {
-    await t.insertBeat({ userId: 'u1', generationId: 'g1' }, { beatId: 'b1', manualRank: 1, legacyJson: '{"id":"b1"}' });
-    await t.insertBeat({ userId: 'u1', generationId: 'g1' }, { beatId: ' bad', manualRank: 2, legacyJson: '{}' });
-  }), (e) => e.code === '23514');
-  const b = await repo.withTransaction((t) => t.getBeat({ userId: 'u1', generationId: 'g1' }, 'b1'));
-  assert.equal(b, null, 'rollback completo');
-  const ins = await repo.withTransaction((t) => t.insertBeat({ userId: 'u1', generationId: 'g1' }, { beatId: 'b1', manualRank: 1, legacyJson: '{"id":"b1","x":"\\u0000"}' }));
-  assert.equal(ins.version, '1');
-  const s = ip.stats();
-  assert.equal(s.open, 0); assert.equal(s.acquired, 5);
-  assert.deepEqual([s.begin, s.commit, s.rollback], [5, 4, 1]);
 }));
 
 // T20-N 0040: parámetros de autovacuum por tabla (aditivo; sin cambios de columnas/índices).

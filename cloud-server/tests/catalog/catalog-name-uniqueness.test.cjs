@@ -5,8 +5,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { nameKey, findNameOwner, assertNameFree } = require('../../catalog/name-uniqueness');
 
-test('nameKey: misma normalización que legacy-codec (trim + minúsculas; vacío → untitled)', () => {
-  const codec = require('../../catalog/legacy-codec');
+test('nameKey: misma normalización que beat-projection (trim + minúsculas; vacío → untitled)', () => {
+  const codec = require('../../catalog/beat-projection.js');
   for (const n of ['  Mi Beat  ', 'ÁRBOL', 'x', '   ', '']) assert.equal(nameKey(n), codec.projectBeat({ id: 'b', name: n, tags: [] }).nameSearch.toLowerCase());
   assert.equal(nameKey('  Mi Beat '), nameKey('mi beat')); assert.notEqual(nameKey('mi beat'), nameKey('mi  beat'));
   assert.equal(nameKey(undefined), 'untitled');

@@ -143,4 +143,19 @@ async function rebuildFacets(client, uid, gen, normKeys, revision) {
     FROM cnt c JOIN rep r USING (state, norm_key, projection_version)`, params);
 }
 
-module.exports = { snapshotGroups, insertGroups, applyFacetDelta, facetsOracleDiff, groupsOracleDiff, rebuildFacets };
+// Reconstrucción completa de TODAS las proyecciones derivadas de una generación (texto de búsqueda 0037, grupos por tag y facetas):
+// para cargas masivas (benchmark T20, siembras de prueba) y reparación; nunca en caminos de mutación en línea.
+async function rebuildDerivedProjections(client, { userId, generationId }) {
+  await client.query(`UPDATE catalog_beats b SET search_text = b.name_search || chr(31) || b.key_search || chr(31) || b.bpm_display
+      || coalesce((SELECT chr(31) || string_agg(t.search_key, chr(31) ORDER BY t.position) FROM catalog_beat_tags t
+                   WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id), '')
+    WHERE b.user_id = $1 AND b.generation_id = $2`, [userId, generationId]);
+  await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2', [userId, generationId]);
+  await client.query(`INSERT INTO catalog_beat_tag_groups(user_id, generation_id, beat_id, norm_key, projection_version, state, manual_rank, first_position, label_at_first_position)
+    SELECT DISTINCT ON (t.beat_id, t.norm_key) t.user_id, t.generation_id, t.beat_id, t.norm_key, t.projection_version, b.state, b.manual_rank, t.position, t.label
+    FROM catalog_beat_tags t JOIN catalog_beats b USING (user_id, generation_id, beat_id)
+    WHERE t.user_id = $1 AND t.generation_id = $2 ORDER BY t.beat_id, t.norm_key, t.position`, [userId, generationId]);
+  await rebuildFacets(client, userId, generationId, null, '1');
+}
+
+module.exports = { snapshotGroups, insertGroups, applyFacetDelta, facetsOracleDiff, groupsOracleDiff, rebuildFacets, rebuildDerivedProjections };

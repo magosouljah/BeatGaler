@@ -119,7 +119,7 @@ test('PASS produce summary.json, summary.txt y log por comando con totales', () 
 test('suite real del repo: manifiesto válido, T03..T17 y T19 activas, T20..T21/perf pendientes', () => {
   const real = JSON.parse(fs.readFileSync(path.join(REPO, 'scripts', 'catalog-suites.json'), 'utf8'));
   for (const k of ['unit', 'integration', 'faults', 'web', 'all-local', 'perf']) assert.ok(real.suites[k], k);
-  for (const t of ['T03', 'T04', 'T05', 'T06', 'T07', 'T08', 'T09', 'T10', 'T11']) assert.equal(real.suites[t].status, 'active');
+  for (const t of ['T03', 'T05', 'T06', 'T07', 'T08', 'T09', 'T10', 'T11']) assert.equal(real.suites[t].status, 'active');
   assert.equal(real.suites.T19.status, 'active');
   for (let i = 20; i <= 21; i++) assert.equal(real.suites[`T${String(i).padStart(2, "0")}`].status, "pending");
   const r = spawnSync(process.execPath, [RUNNER, 'T20', '--out', path.join(tmp, 'real-t20')], { cwd: REPO, encoding: 'utf8', env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot } });

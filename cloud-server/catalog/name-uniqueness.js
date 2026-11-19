@@ -1,6 +1,6 @@
 'use strict';
 // Unicidad de nombres de beats ACTIVOS por biblioteca (paridad con el sistema anterior: `name.trim().toLowerCase()` entre los beats de la biblioteca).
-// Normalización = la del contrato existente (`legacy-codec.projectBeat().nameSearch`: trim + toLowerCase; vacío → «untitled»).
+// Normalización = la del contrato existente (`beat-projection.projectBeat().nameSearch`: trim + toLowerCase; vacío → «untitled»).
 // Concurrencia: toda mutación (PATCH, restore, commit de IMPORT/REPLACE) toma `catalog_libraries FOR UPDATE` antes de llamar aquí, así que la
 // comprobación + la escritura son atómicas por biblioteca: dos operaciones simultáneas con el mismo nombre se serializan y la segunda recibe NAME_TAKEN (409).
 // Solo cuentan beats ACTIVE (papelera/purga no reservan nombre). No toca datos existentes: duplicados históricos no bloquean ediciones que no cambian el nombre.
