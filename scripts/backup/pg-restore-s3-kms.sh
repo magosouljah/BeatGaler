@@ -27,7 +27,7 @@ PY
 )
 [[ "$(sha256sum "$WORK/$ID.dump" | cut -d' ' -f1)" == "$EXPECT_SHA" ]] || { echo "STOP: backup hash mismatch"; exit 3; }
 pg_restore --list "$WORK/$ID.dump" >/dev/null
-if psql -X -qAt -d postgres -v name="$RESTORE_DB" -c "SELECT 1 FROM pg_database WHERE datname = :'name'" | grep -qx 1; then
+if psql -X -qAt -d postgres -c "SELECT 1 FROM pg_database WHERE datname = '$RESTORE_DB'" | grep -qx 1; then
  echo "STOP: restore database already exists" >&2
  exit 4
 fi
