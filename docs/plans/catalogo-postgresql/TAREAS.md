@@ -351,6 +351,8 @@ Desplegar versión compatible con flags apagados; confirmar runtime/DB sin confi
 
 Aplicar freeze, drenar, snapshot final, validar, cercar clientes/procesos, corte SQL atómico y smoke. Mantener cleanup apagado. Probar lectura, metadata, import, replace y trash/restore con medios de prueba aprobados en esa biblioteca. Medir y observar 48 h propuestas, con cero alertas de integridad; incidentes detienen ampliación, no resetean métricas para lograr verde.
 
+**Condición previa obligatoria (E77, decisión del propietario 2026-11-18):** antes de activar, inventariar las rutas legacy que aún transportan bytes de archivos por el Cloud —`POST /transport/project/upload` y `POST /transport/index/publish`— y sus dependientes (composición LEGACY por defecto con `VITE_CATALOG_API_ENABLED` apagado, `src/features/cloud/webTransportSession.ts`, escritorio). El catálogo nativo ya no las usa (todo archivo va navegador ↔ Telegram por Direct B); su eliminación es requisito de cierre en T25 y no puede omitirse.
+
 **PASS:** evidencia de una sola autoridad, comportamiento completo y capacidad de volver mediante export actual. **STOP:** cualquier requisito MIGRACION incumplido; ejecutar solo contención autorizada, no rollback automático a snapshot viejo.
 
 ## T24 — Cohortes y habilitación controlada de limpieza
@@ -368,7 +370,8 @@ Listas explícitas, máximo inicial 5 bibliotecas por cohorte; cada una repite s
 1. Verificar 0 rutas de runtime POSTGRES usando INDEX en inventario y telemetría; proteger rutas legacy todavía necesarias para excepciones sin marcarlas migradas.
 2. Conservar snapshots, codecs y journals durante la retención acordada. No dropear tablas/proyecciones ni borrar INDEX/medios históricos en esta tarea sin subplan específico de eliminación.
 3. Dejar cliente antiguo bloqueado, documentación operacional actualizada, rollback binario solo a versiones compatibles, backup/restore recurrente y ownership de alertas.
-4. Solo después retirar cota reversible para biblioteca cuyo cierre esté registrado. La aplicación queda protegida por backups/restore, no por “volver al JSON anterior”.
+4. **Eliminar las rutas legacy de transporte de archivos por el Cloud (obligatorio, E77):** `POST /transport/project/upload` (con `project-upload-route.js`, `project-upload-admission.js`, `project-upload-authority.js` y la publicación de PROJECT por MASTER) y `POST /transport/index/publish` (con su límite JSON de 24 MiB), sus pruebas y los clientes que las llaman. La migración NO puede darse por finalizada mientras el Cloud conserve una sola ruta que reciba o sirva bytes de archivos: comprobarlo con el test de contrato «E77: sin rutas ni métodos de transporte de bytes» ampliado a `server-core.js`.
+5. Solo después retirar cota reversible para biblioteca cuyo cierre esté registrado. La aplicación queda protegida por backups/restore, no por “volver al JSON anterior”.
 
 **PASS final:** todos los requisitos funcionales, de integridad y operación demostrados; ninguna tarea pendiente ocultada. Si existen bibliotecas REVIEW, informar entrega parcial y no declararlas migradas.
 
