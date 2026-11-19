@@ -19,7 +19,7 @@ if not pid.isdigit() or pid == "0":
     raise SystemExit("STOP: BeatGaler Cloud not running; PostgreSQL credentials unavailable")
 
 raw = pathlib.Path("/proc") / pid / "environ"
-pairs = (part.split(b"=", 1) for part in raw.read_bytes().split(b"\\0") if b"=" in part)
+pairs = (part.split(b"=", 1) for part in raw.read_bytes().split(b"\0") if b"=" in part)
 remote = dict(pairs)
 uri = remote.get(b"DATABASE_URL", b"").decode()
 if not uri:
