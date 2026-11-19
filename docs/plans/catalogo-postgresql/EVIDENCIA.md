@@ -1195,6 +1195,6 @@ LAB (`scripts/catalog-lab/probe-e80.mjs`, subida acotada por CDP a 4 MiB/s): MP3
 
 **Legacy que permanece (obligatorio retirarlo en T25 §4):** composición LEGACY por defecto (`VITE_CATALOG_API_ENABLED` apagado; `WebLegacyWorkspace.tsx`, `src/features/cloud/*`) y rutas del Cloud `POST /transport/project/upload`, `POST /transport/index/publish` con sus módulos: producción (beatgaler.com) aún las usa.
 
-**Pruebas:** Vitest 642/642, `tsc` limpio, unitarias del catálogo 33/33; LAB PostgreSQL (copias generadas): esquema, facetas, search-text, comandos, worker y purga PASS (4 fallos solo de las copias LAB: rutas relativas de fixtures y el test de arnés que exige el descriptor de CI). CI: ver ESTADO.
+**Pruebas:** Vitest 642/642, `tsc` limpio, unitarias del catálogo 33/33; LAB PostgreSQL (copias generadas): esquema, facetas, search-text, comandos, worker y purga PASS (4 fallos solo de las copias LAB: rutas relativas de fixtures y el test de arnés que exige el descriptor de CI). CI `catalog-checks` 44486737793 (`f585e87`): **success** (suites unit, faults, integration, T03, T05–T17, T19 con PostgreSQL efímero, Vitest y tsc).
 
 **Compatibilidad:** verificado en Chrome (LAB, sondas E70–E83) y Chrome real con Telegram de pruebas (E72–E78, subidas reanudables hasta ≈ 2000 MiB por diseño, probado con 12–100 MiB). **No probado:** Firefox, Safari, Edge (manual del propietario, V09), archivos > 100 MiB reales, Telegram real para E79–E83.
