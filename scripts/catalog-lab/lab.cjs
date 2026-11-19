@@ -41,6 +41,9 @@ function killPid(name) {
 
 function cloudEnv(cfg) {
   const env = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, TEMP: process.env.TEMP, TMP: process.env.TMP, USERPROFILE: process.env.USERPROFILE, ...cfg.env, DATABASE_URL: cfg.databaseUrl, LAB_STATE_DIR: L2.STATE_DIR, LAB_SEED_N: String(cfg.seedN), ...(process.env.LAB_SYNTH_AUDIO ? { LAB_SYNTH_AUDIO: process.env.LAB_SYNTH_AUDIO } : {}),
+    // E77: Direct B es el único transporte de archivos también en el LAB FAKE (el navegador usa el doble HTTP del «Telegram» simulado).
+    ...(REAL ? {} : { BEATGALER_CATALOG_DIRECT_ENABLED: 'true', BEATGALER_CATALOG_PREFIX_PACKS_ENABLED: 'true', BEATGALER_CATALOG_DIRECT_PREWARM_BOTS: '0' }),
+    ...(REAL ? Object.fromEntries(['BEATGALER_CATALOG_DIRECT_ENABLED', 'BEATGALER_CATALOG_PREFIX_PACKS_ENABLED', 'BEATGALER_CATALOG_DIRECT_PREWARM_BOTS'].filter((k) => process.env[k]).map((k) => [k, process.env[k]])) : {}),
     ...(REAL ? { LAB_REAL: '1', LAB_REAL_DESCRIPTOR: process.env.LAB_REAL_DESCRIPTOR, BEATGALER_T11_SANDBOX_APPROVAL: process.env.BEATGALER_T11_SANDBOX_APPROVAL, BEATGALER_CATALOG_JOURNAL_DIR: L2.statePath('journal').split(path.sep).join('/') } : {}) };
   if (REAL) fs.mkdirSync(L2.statePath('journal'), { recursive: true });
   return env;
@@ -67,7 +70,7 @@ async function up() {
   const cloudUrl = `http://127.0.0.1:${L2.PORTS.cloud}`;
   const startVite = (name, port, apiFlag) => {
     const lf = fs.openSync(L2.statePath(`web-${port}.log`), 'w');
-    const child = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--mode', 'web', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: L2.ROOT, env: { ...process.env, STAGE1_CLOUD_URL: cloudUrl, VITE_CATALOG_API_ENABLED: apiFlag ? 'true' : 'false' }, stdio: ['ignore', lf, lf], detached: true, windowsHide: true });
+    const child = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--mode', 'web', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { cwd: L2.ROOT, env: { ...process.env, STAGE1_CLOUD_URL: cloudUrl, VITE_CATALOG_API_ENABLED: apiFlag ? 'true' : 'false', ...(REAL ? {} : { VITE_CATALOG_LAB_DIRECT: `http://127.0.0.1:${L2.PORTS.cloud + 5}` }) }, stdio: ['ignore', lf, lf], detached: true, windowsHide: true });
     fs.writeFileSync(pidFile(name), String(child.pid)); child.unref();
     log(`Vite ${name} pid=${child.pid} :${port} catalogApi=${apiFlag}`);
   };
