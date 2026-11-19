@@ -18,7 +18,6 @@ const operations = require('../../catalog/operations.js');
 const queries = require('../../catalog/queries.js');
 const commands = require('../../catalog/commands.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
-const { createCatalogTransport } = require('../../catalog/transport.js');
 const { createLegacyFence } = require('../../catalog/legacy-fence.js');
 const guard = require('../../catalog/session-guard.js');
 const { CATALOG_SESSION_PROTOCOL } = require('../../catalog/authority.js');
@@ -93,17 +92,15 @@ test('capa 2: session/start exige catalog-v1 solo para dueños con catálogo y f
   assert.equal((await off.assertProtocol({ userId: native.userId, protocol: null })).outcome, 'FLAG_OFF');
 }));
 
-test('Telegram caído (gateway nulo): capacidades de subida → 503 TRANSFER_UNAVAILABLE, jobs de verificación en reintento visible, metadata y mutaciones siguen; cuarentena aislada: solo esa biblioteca queda cerrada; reinicio del worker: lease vencido → otro worker termina y el viejo queda fenced', () => withDb(async (pool) => {
+test('Telegram caído (verificador nulo): el Cloud no mueve bytes (E77) y sin verificador los jobs de verificación en reintento visible, metadata y mutaciones siguen; cuarentena aislada: solo esa biblioteca queda cerrada; reinicio del worker: lease vencido → otro worker termina y el viejo queda fenced', () => withDb(async (pool) => {
   const a = authOn(pool); const libA = await user(pool); const libB = await user(pool);
   const ops = operations.createCatalogOperations({ pool, authority: a, resolveAccess: async () => ({ maxBeats: null }) });
   const q = queries.createCatalogQueries({ pool, authority: a, cursorKeys: [{ kid: 'k', secret: crypto.randomBytes(32) }] });
   const cmd = commands.createCatalogCommands({ pool, authority: a });
-  const transport = createCatalogTransport({ pool, authority: a, operations: ops, gateway: null, tempDir: TMP });
   const hdrA = { userId: libA.userId, era: libA.era, epoch: libA.epoch }; const hdrB = { userId: libB.userId, era: libB.era, epoch: libB.epoch };
   // metadata OK sin transporte
   assert.equal((await q.listBeats({ userId: libA.userId, query: {} })).items.length, 0);
   const op = await ops.createOperation({ ...hdrA, idempotencyKey: key(), intent: { kind: 'IMPORT', parts: [{ partKey: 'm0', slotKey: 'MASTER', role: 'MASTER', partIndex: 0, size: 10 }], metadata: { name: 'Offline' } } });
-  await rejects(transport.issueUploadCapability({ ...hdrA, operationId: op.operationId, partKey: 'm0' }), 'TRANSFER_UNAVAILABLE', (e) => e.status === 503 && e.detail.reason === 'NO_GATEWAY');
   // un recibo externo (p. ej. reconciliado) deja un job de verificación que, sin gateway, reintenta de forma visible (nunca se da por verificado)
   await ops.markDispatched({ ...hdrA, operationId: op.operationId, partKey: 'm0' });
   await ops.putReceipt({ ...hdrA, operationId: op.operationId, partKey: 'm0', receipt: { messageId: 5, size: 10 } });

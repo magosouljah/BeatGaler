@@ -105,8 +105,7 @@ function createGatewayRuntime({ pool, clientProvider, sdk, log = null, chatTtlMs
   };
 
   const gateway = Object.freeze({
-    sendPart: call('sendPart', { fresh: true }), verifyMessage: call('verifyMessage'), searchByRandomId: call('searchByRandomId'),
-    downloadPart: call('downloadPart'), deleteMessage: call('deleteMessage', { fresh: true }), probeAbsence: call('probeAbsence'),
+    verifyMessage: call('verifyMessage'), searchByRandomId: call('searchByRandomId'), deleteMessage: call('deleteMessage', { fresh: true }), probeAbsence: call('probeAbsence'),
     metrics, runtime: Object.freeze({ botsOpen: () => bots.size }),
   });
   async function close() {
@@ -145,7 +144,7 @@ function createRealBotClientProvider({ credentialFor, apiCredentials, telegram =
 function gatewayFromEnv({ pool, env = process.env, log = null, credentialFor = null, clientProvider = null, sdk = null } = {}) {
   if (!assertGatewayAllowed(env)) return null;
   if (!pool) throw new Error('STOP-ENV: the catalog gateway requires the PostgreSQL control plane');
-  const sdkReal = sdk || (() => { const { Api } = require('telegram'); const { CustomFile } = require('telegram/client/uploads'); return { Api, bigInt: require('big-integer'), CustomFile }; })();
+  const sdkReal = sdk || (() => { const { Api } = require('telegram'); return { Api, bigInt: require('big-integer') }; })();
   const provider = clientProvider || createRealBotClientProvider({
     credentialFor: credentialFor || ((botId) => require('./direct-transport-control').catalogBotCredential(botId)),
     apiCredentials: () => { const apiId = Number(env.TELEGRAM_API_ID); const apiHash = String(env.TELEGRAM_API_HASH || ''); if (!Number.isInteger(apiId) || apiId <= 0 || !apiHash) throw Object.assign(new Error('Telegram API credentials are missing'), { code: 'API_CREDENTIALS_MISSING', transient: false }); return { apiId, apiHash }; },
@@ -153,17 +152,4 @@ function gatewayFromEnv({ pool, env = process.env, log = null, credentialFor = n
   return createGatewayRuntime({ pool, clientProvider: provider, sdk: sdkReal, log });
 }
 
-// Access para PROJECT (mismo criterio que project-access.js): plan con upload_project y tope de bytes vigente.
-function createProjectAccessResolver({ resolveUserAccess } = {}) {
-  if (typeof resolveUserAccess !== 'function') throw new Error('resolveUserAccess is required');
-  return async (userId) => {
-    const access = await resolveUserAccess({ id: userId });
-    const maxBytes = access && access.quotas ? access.quotas.max_project_zip_bytes : null;
-    if (!access || !access.capabilities || !access.capabilities.upload_project || !Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
-      throw Object.assign(new Error('PROJECT upload is not available on this plan.'), { code: 'PROJECT_UPLOAD_DENIED', status: 403 });
-    }
-    return { maxBytes };
-  };
-}
-
-module.exports = Object.freeze({ GATEWAY_FLAG, G2_FLAG, gatewayEnabled, assertGatewayAllowed, createGatewayRuntime, createRealBotClientProvider, gatewayFromEnv, createProjectAccessResolver });
+module.exports = Object.freeze({ GATEWAY_FLAG, G2_FLAG, gatewayEnabled, assertGatewayAllowed, createGatewayRuntime, createRealBotClientProvider, gatewayFromEnv });

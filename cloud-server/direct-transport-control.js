@@ -394,6 +394,34 @@ async function catalogBotCredential(botId) {
   return { token, telegramUserId: bot.telegram_user_id || null, credentialVersion: botState.credential_version };
 }
 
+// Direct B (catálogo): forma interna de sesión que consume la frontera de autorización temporal (productive-temp-auth-boundary.js).
+// Las credenciales permanentes NUNCA salen del proceso: la frontera las elimina y entrega solo el bloque de vinculación.
+// Sin lease legacy, sin INDEX, sin MASTER: el bot es el asignado a la biblioteca (vaults.transport_bot_id), el mismo del gateway.
+async function catalogDirectSession({ botId, chatId, sessionId = null }) {
+  const cred = await catalogBotCredential(botId);
+  const { apiId, apiHash } = apiCredentials();
+  return {
+    ok: true,
+    mode: 'catalog-v1-direct',
+    // Estable por (bot, chat): el cliente exige que el bootstrap y la vinculación describan el mismo lease; no es un secreto ni un lease legacy.
+    session_id: sessionId || `cdirect-${crypto.createHash('sha256').update(`${botId}|${chatId}`).digest('hex').slice(0, 24)}`,
+    transport_id: String(botId),
+    transport_user_id: cred.telegramUserId || null,
+    transport_username: null,
+    chat_id: String(chatId),
+    bot_token: cred.token,
+    telegram_api_id: apiId,
+    telegram_api_hash: apiHash,
+    resolver_chat_id: null,
+    generation: 1,
+    credential_version: cred.credentialVersion,
+    heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
+    heartbeat_timeout_ms: HEARTBEAT_TIMEOUT_MS,
+    token_rotation_enabled: false,
+    lease_state: 'ACTIVE',
+  };
+}
+
 function cleanupStaleOperationsDurably(pool) {
   return withPoolLock(() => {
     const state = normalizeState(pool);
@@ -2081,6 +2109,7 @@ module.exports = {
   publishProjectFile,
   masterSenderId,
   catalogBotCredential,
+  catalogDirectSession,
   copyLegacyProjectPart,
   copyLegacyProjectPartFromClient,
   directBotAdminRights,

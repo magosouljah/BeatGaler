@@ -17,7 +17,8 @@ const queries = require('../../catalog/queries.js');
 const commands = require('../../catalog/commands.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
 const g = require('../../catalog/transport-gateway.js');
-const { createCatalogTransport } = require('../../catalog/transport.js');
+const telegramOp = require('../../operator/telegram-file-io.js');
+const { createDirectSeeder } = require('../helpers/catalog-direct-seeder.cjs'); // E77: los archivos se siembran como el navegador (Direct B)
 const mediaMod = require('../../catalog/media.js');
 const purgeMod = require('../../catalog/purge.js');
 const backupMod = require('../../catalog/backup.js');
@@ -55,13 +56,13 @@ const peerOf = (chatId) => new Api.InputPeerChannel({ channelId: bigInt(String(c
 function modules(pool, { server = createFakeTelegramServer(), journal = journalMod.createMemoryDeletionJournal(), gatewayWrap = (x) => x } = {}) {
   const a = auth(pool);
   const client = server.session({ selfId: '20' });
-  const gateway = gatewayWrap({ ...g.createTelegramGateway({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client });
+  const gateway = gatewayWrap({ ...telegramOp.createOperatorTelegram({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client });
   const ops = operations.createCatalogOperations({ pool, authority: a, resolveAccess: async () => ({ maxBeats: null }) });
   const q = queries.createCatalogQueries({ pool, authority: a, cursorKeys: [{ kid: 'k', secret: crypto.randomBytes(32) }] });
   const cmd = commands.createCatalogCommands({ pool, authority: a });
-  const transport = createCatalogTransport({ pool, authority: a, operations: ops, gateway, tempDir: TMP });
+  const transport = createDirectSeeder({ pool, authority: a, operations: ops, browser: gateway });
   const purge = purgeMod.createCatalogPurge({ pool, authority: a, gateway, journal });
-  const media = mediaMod.createCatalogMedia({ pool, authority: a, gateway });
+  const media = mediaMod.createCatalogMedia({ pool, authority: a });
   const worker = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport: gateway, purge, owner: 'w', options: { globalConcurrency: 2, renewEveryMs: 100_000, stepsPerClaim: 4 } });
   return { a, pool, ops, q, cmd, gateway, transport, worker, purge, media, server, journal, client };
 }
@@ -158,14 +159,14 @@ test('G4 parcial a 500 beats: backup a archivos → restore vacío → igualdad 
     assert.deepEqual(page.items.map((i) => i.id), srcPage.items.map((i) => i.id), 'misma primera página que el origen');
     assert.equal((await counts(dst, lib.userId)).active, TOTAL);
     // integridad de bytes: sanos
-    const ok = await dbk.verifyBytes({ gateway: m2.gateway, restoreId: 'rs500' });
+    const ok = await dbk.verifyBytes({ reader: m2.gateway, restoreId: 'rs500' });
     assert.equal(ok.mismatches.length + ok.missing.length, 0); assert.ok(ok.checked >= MEDIA, `partes verificadas ${ok.checked}`); assert.equal(ok.ok, ok.checked);
     // alterados / ausentes en el proveedor falso
     const objs = (await dst.query("SELECT chat_id, message_id::text AS mid FROM catalog_media_objects WHERE user_id = $1 AND status = 'PRESENT' ORDER BY object_id", [lib.userId])).rows;
     assert.ok(objs.length >= MEDIA);
     m.server.truncateDocument(objs[0].mid, 5); // lectura corta: mismo anuncio, menos bytes
     await m2.gateway.deleteMessage({ chatId: objs[1].chat_id, messageId: Number(objs[1].mid) });
-    const bad = await dbk.verifyBytes({ gateway: m2.gateway, restoreId: 'rs500' });
+    const bad = await dbk.verifyBytes({ reader: m2.gateway, restoreId: 'rs500' });
     assert.equal(bad.mismatches.length, 1, JSON.stringify(bad.mismatches).slice(0, 200)); assert.equal(bad.missing.length, 1); assert.equal(bad.ok, bad.checked - 2);
     const kinds = (await dst.query("SELECT kind, count(*)::int AS n FROM catalog_restore_findings WHERE restore_id = 'rs500' GROUP BY kind ORDER BY kind")).rows;
     assert.deepEqual(kinds, [{ kind: 'BYTES_MISMATCH', n: 1 }, { kind: 'BYTES_MISSING', n: 1 }], 'hallazgos bloqueantes registrados');

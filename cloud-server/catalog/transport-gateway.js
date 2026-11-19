@@ -17,6 +17,9 @@ const PART_KEY_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const OPERATION_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const CAPTION_PREFIX = 'catalog:v1';
 const CAPTION_RE = /^catalog:v1 op=([A-Za-z0-9_-]{1,80}) part=([A-Za-z0-9._:-]{1,64})$/;
+// E75: marcador del documento MAIN de prefijos. Lo envía el NAVEGADOR por Direct B; el gateway solo lo comprueba (verifyMessage), nunca lo envía.
+const PACK_CAPTION_RE = /^catalog:v1 pack=(pk-[A-Za-z0-9_-]{1,60})$/;
+function packCaptionFor(packId) { const c = `${CAPTION_PREFIX} pack=${packId}`; if (!PACK_CAPTION_RE.test(c)) throw new GatewayError('PACK_ID_INVALID', 'invalid pack id', { transient: false, effectPossible: false, classification: { kind: 'PERMANENT', effectPossible: false } }); return c; }
 
 const SDK_CONTRACT = Object.freeze({
   package: 'telegram',
@@ -65,19 +68,6 @@ function captionFor({ operationId, partKey } = {}) {
 function parseCaption(text) { const m = typeof text === 'string' ? CAPTION_RE.exec(text.trim()) : null; return m ? { operationId: m[1], partKey: m[2] } : null; }
 
 // ---------- Peticiones TL exactas (gramjs 2.26.x) ----------
-function buildSendMedia(sdk, { peer, inputFile, mimeType, fileName, caption, randomId, silent = true } = {}) {
-  const { Api, bigInt } = sdk;
-  if (!peer || !inputFile) throw new GatewayError('SEND_INPUT_INVALID', 'peer and inputFile are required', { transient: false });
-  if (typeof fileName !== 'string' || !fileName) throw new GatewayError('SEND_INPUT_INVALID', 'fileName is required', { transient: false });
-  if (!parseCaption(caption)) throw new GatewayError('CAPTION_INVALID', 'caption must be the catalog:v1 marker', { transient: false });
-  return new Api.messages.SendMedia({
-    peer,
-    media: new Api.InputMediaUploadedDocument({ file: inputFile, mimeType: typeof mimeType === 'string' && mimeType ? mimeType : 'application/octet-stream', attributes: [new Api.DocumentAttributeFilename({ fileName })], forceFile: true }),
-    message: caption,
-    randomId: randomIdToLong(randomId, bigInt),
-    silent: Boolean(silent),
-  });
-}
 function buildSearch(sdk, { peer, fromId, caption, limit = 20, minDate = 0, maxDate = 0 } = {}) {
   const { Api, bigInt } = sdk;
   if (!peer) throw new GatewayError('SEARCH_INPUT_INVALID', 'peer is required', { transient: false });
@@ -160,7 +150,9 @@ function receiptFromUpdates(result, { randomId } = {}) {
   return { messageId: messageId ?? d.messageId, documentId: d ? d.documentId : null, size: d ? d.size : null, randomId, complete: Boolean(d) };
 }
 
-// ---------- Gateway: implementa la interfaz de transporte del worker (T10) ----------
+// ---------- Gateway: interfaz de transporte del worker (T10). E77: SOLO metadatos del proveedor (verificar, reconciliar, borrar en purga,
+// probar ausencia). El Cloud no envía ni descarga bytes de archivos: eso es navegador ↔ Telegram (Direct B); la lectura/envío de bytes para
+// herramientas de operador y dobles de prueba vive en cloud-server/operator/telegram-file-io.js. ----------
 function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePeer, resolveSenderPeer = null, log = null } = {}) {
   if (!client || typeof client.invoke !== 'function') throw new GatewayError('CLIENT_INVALID', 'client.invoke is required', { transient: false });
   if (!sdk || !sdk.Api || typeof sdk.bigInt !== 'function') throw new GatewayError('SDK_INVALID', 'sdk { Api, bigInt } is required', { transient: false });
@@ -170,7 +162,7 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
   // T12: la identidad persistida en SQL para partes Direct es transport_bots.id (p. ej. 'Bot20'); el proveedor reporta el id numérico del bot.
   // Un remitente esperado igual al botId o vacío se compara contra el id numérico propio; cualquier otro (MASTER numérico) se compara literal.
   const expectedOf = (expected) => (expected == null || String(expected) === sid || (botId != null && String(expected) === String(botId)) ? sid : String(expected));
-  const metrics = { sends: 0, uncertain: 0, rejected: 0, permanent: 0, revoked: 0, verifies: 0, searches: 0 };
+  const metrics = { uncertain: 0, rejected: 0, permanent: 0, revoked: 0, verifies: 0, searches: 0 };
 
   function failFromProvider(error, stage) {
     const c = classifyError(error);
@@ -180,30 +172,8 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
     return new GatewayError(code, `${stage}: ${c.code}`, { classification: c, transient: c.transient, retryAfterMs: c.retryAfterMs, status: c.kind === 'PERMANENT' || c.kind === 'REVOKED' ? 403 : undefined, resend: false });
   }
 
-  // Envío C7.3–C7.4: identidad persistida ANTES por el llamador (operations.createOperation/markDispatched); aquí solo se ejecuta.
-  async function sendPart({ operationId, partKey, randomId, chatId, file, mimeType, fileName } = {}) {
-    const caption = captionFor({ operationId, partKey });
-    randomIdToLong(randomId, sdk.bigInt);
-    const { peer } = await resolvePeer(chatId);
-    let inputFile;
-    // T12: el transporte entrega { name, size, path } (temporal acotado); con el SDK real se envuelve en CustomFile sin cargar el archivo en memoria.
-    const upload = sdk.CustomFile && file && typeof file === 'object' && typeof file.path === 'string' && !(file instanceof sdk.CustomFile) ? new sdk.CustomFile(file.name, file.size, file.path) : file;
-    try { inputFile = await client.uploadFile({ file: upload, workers: 1 }); } catch (error) {
-      // La subida de partes no crea mensajes: fallar aquí nunca es incierto respecto al envío.
-      const c = classifyError(error);
-      throw new GatewayError(c.kind === 'REVOKED' ? 'CREDENTIAL_REVOKED' : 'UPLOAD_FAILED', `upload: ${c.code}`, { classification: { ...c, effectPossible: false }, transient: c.kind !== 'REVOKED' && c.kind !== 'PERMANENT', retryAfterMs: c.retryAfterMs, resend: false });
-    }
-    const request = buildSendMedia(sdk, { peer, inputFile, mimeType, fileName, caption, randomId });
-    metrics.sends++;
-    let result;
-    try { result = await client.invoke(request); } catch (error) { throw failFromProvider(error, 'SEND'); }
-    const receipt = receiptFromUpdates(result, { randomId });
-    if (!receipt) { metrics.uncertain++; throw new GatewayError('SEND_UNCERTAIN', 'send response carried no message id for this random_id', { classification: { kind: 'UNCERTAIN', action: 'RECONCILE', code: 'NO_MESSAGE_ID', retryAfterMs: 60_000, effectPossible: true, transient: true, evidence: 'ASSUMED' }, transient: true, retryAfterMs: 60_000, resend: false }); }
-    return { messageId: receipt.messageId, documentId: receipt.documentId, size: receipt.size, senderId: sid, chatId: String(chatId), randomId, complete: receipt.complete };
-  }
-
   // Verificación del proveedor independiente del recibo (C7.4–C7.5). sha256 remoto no se calcula aquí (bytes no descargados).
-  async function verifyMessage({ chatId, messageId, senderId: expectedSenderRaw = sid } = {}) {
+  async function verifyMessage({ chatId, messageId, senderId: expectedSenderRaw = sid, operationId = null, partKey = null, packId = null } = {}) {
     const expectedSender = expectedOf(expectedSenderRaw);
     const { peer, channel } = await resolvePeer(chatId);
     metrics.verifies++;
@@ -213,6 +183,11 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
     const d = (Array.isArray(res && res.messages) ? res.messages : []).map(describeMessage).find((x) => x && x.messageId === id);
     if (!d) throw new GatewayError('PROVIDER_MESSAGE_NOT_FOUND', 'the provider has no document message with that id', { transient: false, status: 404 });
     if (expectedSender != null && d.senderId != null && d.senderId !== String(expectedSender)) throw new GatewayError('PROVIDER_SENDER_MISMATCH', 'the message was not sent by the expected bot', { transient: false, status: 409 });
+    // E70 (Direct B): con identidad de operación, el mensaje DEBE llevar el marcador catalog:v1 de ESA parte. Un recibo del navegador no puede
+    // apuntar a otro mensaje del mismo bot y tamaño (de otra operación o de un duplicado ajeno); sin identidad (uso antiguo) no se exige.
+    if (operationId != null && partKey != null && d.caption.trim() !== captionFor({ operationId, partKey })) throw new GatewayError('PROVIDER_CAPTION_MISMATCH', 'the message does not carry the catalog marker of this operation part', { transient: false, status: 409 });
+    // E75: un MAIN de prefijos publicado por el navegador DEBE llevar el marcador de ESE paquete (solo metadatos; nunca se descargan sus bytes).
+    if (packId != null && d.caption.trim() !== packCaptionFor(packId)) throw new GatewayError('PROVIDER_CAPTION_MISMATCH', 'the message does not carry the catalog marker of this prefix pack', { transient: false, status: 409 });
     return { size: d.size, sha256: null, provider: 'telegram', messageId: d.messageId, documentId: d.documentId, fileName: d.fileName };
   }
 
@@ -230,40 +205,6 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
     return matchCandidates(res && res.messages, { operationId, partKey, senderId: expectedSender, declaredSize: Number.isSafeInteger(size) ? size : undefined }).map((c) => ({ messageId: c.messageId, documentId: c.documentId, size: c.size, sha256: null }));
   }
 
-  // T14 (§8.6): bytes de una parte por rangos. Resuelve el mensaje (sin exponer ids al cliente) y devuelve un iterable de trozos del SDK
-  // (`client.iterDownload`): el servidor los transmite al cliente HTTP sin bufferizar la parte. "No encontrado" no prueba borrado (C9).
-  async function downloadPart({ chatId, messageId, offset = 0, limit = null, requestSize = 512 * 1024 } = {}) {
-    if (typeof client.iterDownload !== 'function') throw new GatewayError('DOWNLOAD_UNSUPPORTED', 'client.iterDownload is required', { transient: false });
-    const { peer, channel } = await resolvePeer(chatId);
-    let res;
-    try { res = await client.invoke(buildGetMessages(sdk, { peer, messageId, channel: Boolean(channel) })); } catch (error) { throw failFromProvider(error, 'DOWNLOAD'); }
-    const id = toInt(messageId);
-    const msg = (Array.isArray(res && res.messages) ? res.messages : []).find((m) => m && toInt(m.id) === id && m.media && m.media.document);
-    if (!msg) throw new GatewayError('PROVIDER_MESSAGE_NOT_FOUND', 'the provider has no document message with that id', { transient: false, status: 404 });
-    metrics.downloads = (metrics.downloads || 0) + 1;
-    // gramjs (iterDownload real): `offset` es un BigInteger y `limit` cuenta TROZOS (peticiones de requestSize), no bytes. Un número crudo
-    // fallaba con "offset.divide is not a function" y el iterador multi-trozo de gramjs 2.26 repetía el primer trozo (la parte 2 salía igual
-    // que el inicio del archivo, hash distinto) — hallazgos de la prueba integrada real, 2026-11-17. Se pide UN trozo alineado por iterador,
-    // se recorta el primero al `offset` solicitado y se detiene al cubrir `limit` bytes.
-    const reqSize = Number(requestSize) > 0 ? Math.floor(Number(requestSize) / 4096) * 4096 || 4096 : 512 * 1024;
-    const startAt = Math.max(0, Math.trunc(Number(offset) || 0));
-    const wanted = limit == null ? Infinity : Math.max(1, Math.trunc(Number(limit)));
-    const toBig = (n) => (typeof sdk.bigInt === 'function' ? sdk.bigInt(String(n)) : n);
-    async function* chunks() {
-      let aligned = Math.floor(startAt / reqSize) * reqSize; let skip = startAt - aligned; let delivered = 0;
-      while (delivered < wanted) {
-        let got = null;
-        for await (const piece of client.iterDownload({ file: msg.media, offset: toBig(aligned), limit: 1, requestSize: reqSize })) { got = piece; break; }
-        if (!got || !got.length) return;
-        const body = skip ? got.subarray(skip) : got; const short = got.length < reqSize;
-        const out = delivered + body.length > wanted ? body.subarray(0, wanted - delivered) : body;
-        if (out.length) { delivered += out.length; yield out; }
-        if (short) return;
-        aligned += reqSize; skip = 0;
-      }
-    }
-    return chunks();
-  }
   // T15 (C9): borrado de un mensaje propio del bot. Nunca se llama sin journal externo persistido (lo garantiza catalog/purge.js).
   async function deleteMessage({ chatId, messageId } = {}) {
     const { peer, channel } = await resolvePeer(chatId);
@@ -287,13 +228,13 @@ function createTelegramGateway({ client, sdk, senderId, botId = null, resolvePee
     const d = describeMessage(entry);
     return { absent: false, evidence: d ? 'DOCUMENT_PRESENT' : 'MESSAGE_PRESENT', size: d ? d.size : null };
   }
-  return Object.freeze({ sendPart, verifyMessage, searchByRandomId, downloadPart, deleteMessage, probeAbsence, metrics, senderId: sid, botId: botId == null ? null : String(botId), SDK_CONTRACT, RESEND_POLICY });
+  return Object.freeze({ verifyMessage, searchByRandomId, deleteMessage, probeAbsence, metrics, senderId: sid, botId: botId == null ? null : String(botId), SDK_CONTRACT, RESEND_POLICY });
 }
 
 module.exports = Object.freeze({
   GatewayError, SDK_CONTRACT, RESEND_POLICY, ERROR_TABLE, CAPTION_PREFIX,
-  newRandomId, randomIdToLong, longToText, toInt, captionFor, parseCaption,
-  buildSendMedia, buildSearch, buildGetMessages, classifyError,
+  newRandomId, randomIdToLong, longToText, toInt, captionFor, parseCaption, packCaptionFor, PACK_CAPTION_RE,
+  buildSearch, buildGetMessages, classifyError,
   describeMessage, matchCandidates, reconcileDecision, receiptFromUpdates,
   createTelegramGateway,
 });

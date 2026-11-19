@@ -61,17 +61,6 @@ test('modelo puro: consume explícito usa el inverso y el mismo swap; un consumi
   assert.deepEqual(rest.sort((a, b) => a - b), [1, 2, 3, 4]);
 });
 
-test('medios: Range RFC 9110 (completo, a-b, a-, -n, inválido/insatisfacible → 416) y token opaco con hash', () => {
-  assert.deepEqual(media.parseRange(null, 10), { start: 0, end: 9, partial: false });
-  assert.deepEqual(media.parseRange('bytes=2-5', 10), { start: 2, end: 5, partial: true });
-  assert.deepEqual(media.parseRange('bytes=7-', 10), { start: 7, end: 9, partial: true });
-  assert.deepEqual(media.parseRange('bytes=-3', 10), { start: 7, end: 9, partial: true });
-  assert.deepEqual(media.parseRange('bytes=0-999', 10), { start: 0, end: 9, partial: true });
-  for (const bad of ['bytes=10-', 'bytes=5-2', 'bytes=-0', 'bytes=', 'chars=1-2', 'bytes=a-b']) assert.throws(() => media.parseRange(bad, 10), (e) => e.code === 'RANGE_NOT_SATISFIABLE' && e.status === 416, bad);
-  const t = media.newToken(); assert.match(t, media.TOKEN_RE); assert.equal(media.tokenHash(t), crypto.createHash('sha256').update(t).digest('hex'));
-  assert.throws(() => media.tokenHash('short'), (e) => e.code === 'MEDIA_GRANT_INVALID');
-});
-
 // ---------- rutas con módulos falsos ----------
 function listen(router) { const app = express(); app.use(express.json()); app.use(router); return new Promise((resolve) => { const server = http.createServer(app); server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port })); }); }
 function raw(port, method, p, { headers = {}, body = null } = {}) {
@@ -82,7 +71,7 @@ function raw(port, method, p, { headers = {}, body = null } = {}) {
 }
 const fakeCmd = () => new Proxy({}, { get: () => async () => ({}) });
 
-test('rutas T14: rondas (start/next/consume/rebuild/release/get) con era/época, vecino de orden, acceso a medios 201 y stream GET/HEAD con Range (206/200/416); 401 sin sesión; 501 sin módulos', async () => {
+test('rutas T14: rondas (start/next/consume/rebuild/release/get) con era/época, vecino de orden, acceso a medios 201 con referencia directa (sin rutas de bytes); 401 sin sesión; 501 sin módulos', async () => {
   const calls = [];
   const playback = {
     async startRound(a) { calls.push(['start', a]); return { roundId: 'rnd-1', status: 'ACTIVE', remaining: 9, sequence: '0', created: true }; },
@@ -93,17 +82,7 @@ test('rutas T14: rondas (start/next/consume/rebuild/release/get) con era/época,
     async getRound(a) { calls.push(['get', a]); return { roundId: a.roundId, status: 'ACTIVE', remaining: 8 }; },
     async neighbor(a) { calls.push(['neighbor', a]); return { setId: a.setId, beatId: a.direction === 'next' ? 'g2' : 'g0', slot: 2 }; },
   };
-  const bytes = Buffer.from('0123456789abcdef');
-  const mediaMod = {
-    async issueAccess(a) { calls.push(['access', a]); return { fileId: a.fileId, parts: [{ partIndex: 0, size: 16, token: 'T'.repeat(43), url: `/catalog/v1/media/${'T'.repeat(43)}` }] }; },
-    async stream({ token, rangeHeader, res, method }) {
-      if (token !== 'T'.repeat(43)) throw new CatalogQueryError('MEDIA_GRANT_INVALID', 403, 'bad', {});
-      const r = media.parseRange(rangeHeader, bytes.length);
-      res.setHeader('Content-Length', String(r.end - r.start + 1)); res.setHeader('Accept-Ranges', 'bytes'); if (r.partial) res.setHeader('Content-Range', `bytes ${r.start}-${r.end}/${bytes.length}`);
-      res.status(r.partial ? 206 : 200); if (method === 'HEAD') return res.end();
-      await new Promise((resolve) => Readable.from([bytes.subarray(r.start, r.end + 1)]).pipe(res).on('finish', resolve));
-    },
-  };
+  const mediaMod = { async issueAccess(a) { calls.push(['access', a]); return { fileId: a.fileId, parts: [{ partIndex: 0, size: 16, direct: { chatId: '-1001', messageId: 7 } }] }; } };
   const router = createCatalogRouter({ authority: {}, queries: {}, commands: fakeCmd(), playback, media: mediaMod, authenticate: (req, res) => { if (req.headers.authorization !== 'Bearer ok') { res.status(401).json({ code: 'UNAUTHENTICATED' }); return null; } return { id: 'u1' }; } });
   const { server, port } = await listen(router);
   try {
@@ -125,18 +104,10 @@ test('rutas T14: rondas (start/next/consume/rebuild/release/get) con era/época,
     assert.deepEqual([r.status, r.body.beatId, calls.at(-1)[1]], [200, 'g2', { userId: 'u1', setId: 'set-1', beatId: 'g1', direction: 'next', sort: 'manual' }]);
     r = await raw(port, 'POST', '/catalog/v1/files/f-1/access', { headers: { authorization: 'Bearer ok', 'x-catalog-epoch': '1' } });
     assert.deepEqual([r.status, r.body.parts[0].size, calls.at(-1)[1]], [201, 16, { userId: 'u1', fileId: 'f-1', epoch: '1' }]);
-    const url = `/catalog/v1/media/${'T'.repeat(43)}`;
-    r = await raw(port, 'GET', url, { headers: { authorization: 'Bearer ok' } });
-    assert.deepEqual([r.status, r.bytes.toString(), r.headers['accept-ranges']], [200, '0123456789abcdef', 'bytes']);
-    r = await raw(port, 'GET', url, { headers: { authorization: 'Bearer ok', range: 'bytes=4-7' } });
-    assert.deepEqual([r.status, r.bytes.toString(), r.headers['content-range'], r.headers['content-length']], [206, '4567', 'bytes 4-7/16', '4']);
-    r = await raw(port, 'HEAD', url, { headers: { authorization: 'Bearer ok', range: 'bytes=-2' } });
-    assert.deepEqual([r.status, r.headers['content-range'], r.bytes.length], [206, 'bytes 14-15/16', 0]);
-    r = await raw(port, 'GET', url, { headers: { authorization: 'Bearer ok', range: 'bytes=99-' } });
-    assert.deepEqual([r.status, r.body.code, r.headers['content-range']], [416, 'RANGE_NOT_SATISFIABLE', 'bytes */16']);
-    r = await raw(port, 'GET', `/catalog/v1/media/${'X'.repeat(43)}`, { headers: { authorization: 'Bearer ok' } });
-    assert.deepEqual([r.status, r.body.code], [403, 'MEDIA_GRANT_INVALID']);
-    assert.equal((await raw(port, 'GET', url, {})).status, 401);
+    assert.deepEqual(r.body.parts[0].direct, { chatId: '-1001', messageId: 7 });
+    // E77: el Cloud no sirve bytes de medios
+    assert.equal((await raw(port, 'GET', `/catalog/v1/media/${'T'.repeat(43)}`, { headers: { authorization: 'Bearer ok' } })).status, 501);
+    assert.equal((await raw(port, 'POST', '/catalog/v1/files/f-1/access', {})).status, 401);
   } finally { server.close(); }
   const bare = createCatalogRouter({ authority: {}, queries: {}, commands: fakeCmd(), authenticate: () => ({ id: 'u1' }) });
   const s2 = await listen(bare);

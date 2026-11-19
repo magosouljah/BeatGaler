@@ -9,8 +9,8 @@
 //  - GET  /catalog/v1/navigation/legacy            resolver bgPage acotado (C12 §5.2) → 200 | 400 LEGACY_OFFSET_INVALID | 409 LEGACY_OFFSET_UNRESOLVABLE
 //  - GET  /catalog/v1/facets, GET /catalog/v1/facets/active?key=…  facetas globales (C12-r4 §6)
 //  - POST /catalog/v1/query-sets, GET /:id, POST /:id/cancel, POST /:id/release   conjuntos (C12-r4 §3); los pasos los programa T10
-//  - T12: POST /operations/:id/parts/:partKey/capability (capacidad opaca de subida), PUT /transfer/upload/:token (bytes de la parte),
-//    PUT /operations/:id/parts/:partKey/project (PROJECT por MASTER), GET /operations/:id/attempts. El cuerpo de los PUT es el stream crudo.
+//  - E77: ninguna ruta recibe ni sirve bytes de archivos. Los archivos (MASTER, WAV, portada, PROJECT, MAIN) viajan navegador ↔ Telegram por
+//    Direct B: send-ticket → envío del navegador → direct-receipt; GET /operations/:id/attempts muestra los intentos. Todos los cuerpos son JSON.
 // Todo error se responde como JSON {error, code, detail}; nunca 200 vacío ante error (C5).
 // Cualquier entrada con cerco legacy (410 LEGACY_CLIENT_UNSUPPORTED) no pasa por aquí: estas rutas son solo nativas.
 
@@ -45,7 +45,7 @@ function eraHeaders(req) {
 }
 const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
-function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, transport = null, playback = null, media = null, purge = null, authenticate, log = () => {} } = {}) {
+function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, direct = null, playback = null, media = null, purge = null, prefixPacks = null, authenticate, log = () => {} } = {}) {
   if (typeof authenticate !== 'function') throw new Error('createCatalogRouter requires authenticate(req, res) → user | null');
   const router = express.Router();
   router.use(CATALOG_PREFIX, (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -70,7 +70,7 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
 
   router.get(`${CATALOG_PREFIX}/context`, handle(async (_req, _res, userId) => {
     const context = await authority.resolveContext({ userId });
-    return { body: { ...context, capabilities: { read: true, provision: false, mutate: false, operations: false }, limits: API_LIMITS } };
+    return { body: { ...context, capabilities: { read: true, provision: false, mutate: false, operations: false, direct: Boolean(direct), prefixPacks: Boolean(prefixPacks) }, limits: API_LIMITS } };
   }));
   router.post(`${CATALOG_PREFIX}/library/provision`, handle(async (_req, _res, userId) => {
     const r = await authority.provisionLibrary({ userId });
@@ -155,23 +155,28 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
       router.post(`${CATALOG_PREFIX}/operations/:id/reservation/readmit`, handle(async (req, _res, userId) => ({ body: await operations.readmitReservation({ userId, ...eraHeaders(req), operationId: req.params.id }) })));
       router.post(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/dispatch`, handle(async (req, _res, userId) => ({ body: await operations.markDispatched({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey }) })));
     }
-    if (operations && transport) {
-      // T12 — transferencias por capacidad (§8.6) y PROJECT por MASTER. Los bytes llegan como stream crudo (nunca JSON); el módulo drena
-      // el cuerpo ante un rechazo temprano. Errores con detail.retry_after_ms llevan Retry-After.
-      router.post(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/capability`, handle(async (req, _res, userId) => ({ status: 201, body: await transport.issueUploadCapability({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey }) })));
-      router.get(`${CATALOG_PREFIX}/operations/:id/attempts`, handle(async (req, _res, userId) => ({ body: await transport.listAttempts({ userId, operationId: req.params.id }) })));
-      router.put(`${CATALOG_PREFIX}/transfer/upload/:token`, handle(async (req, _res, userId) => {
-        const h = eraHeaders(req);
-        return transport.uploadPart({ userId, ...h, token: req.params.token, stream: req, contentLength: req.get('content-length') || null });
-      }));
-      router.put(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/project`, handle(async (req, _res, userId) => {
-        const h = eraHeaders(req);
-        const filename = req.get('x-catalog-filename');
-        return transport.uploadProjectPart({ userId, ...h, operationId: req.params.id, partKey: req.params.partKey, stream: req, contentLength: req.get('content-length') || null, filename: typeof filename === 'string' && filename.length <= 512 ? filename : null });
-      }));
+    if (operations && direct) {
+      // Direct B (E70) — plano de datos navegador↔Telegram. La sesión no entrega credenciales permanentes; el ticket fija random_id y despacho ANTES
+      // del efecto; el recibo del navegador es un candidato que verifica el worker (PROVIDER). E77: único transporte de archivos (PROJECT incluido); el Cloud no recibe bytes.
+      router.get(`${CATALOG_PREFIX}/operations/:id/attempts`, handle(async (req, _res, userId) => ({ body: await direct.listAttempts({ userId, operationId: req.params.id }) })));
+      router.post(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/send-ticket`, handle(async (req, _res, userId) => ({ status: 201, body: await direct.issueSendTicket({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey }) })));
+      router.post(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/send-report`, handle(async (req, _res, userId) => { const b = body(req); return { body: await direct.reportSend({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey, attempt: b.attempt, outcome: b.outcome, code: b.code ?? null, retryAfterMs: b.retryAfterMs ?? null }) }; }));
+      router.put(`${CATALOG_PREFIX}/operations/:id/parts/:partKey/direct-receipt`, handle(async (req, _res, userId) => { const b = body(req); return { body: await direct.submitReceipt({ userId, ...eraHeaders(req), operationId: req.params.id, partKey: req.params.partKey, attempt: b.attempt, receipt: b.receipt }) }; }));
     }
     router.post(`${CATALOG_PREFIX}/operations/:id/resume`, handle(async (req, _res, userId) => ({ body: await commands.resumeOperation({ userId, ...eraHeaders(req), operationId: req.params.id, revision: body(req).revision }) })));
     router.get(`${CATALOG_PREFIX}/changes`, handle(async (req, _res, userId) => ({ body: await commands.listChanges({ userId, query: req.query }) })));
+  }
+  if (prefixPacks) {
+    // E75 — MAIN de prefijos: SOLO metadatos y autorización (el navegador construye y sube el documento por Direct B; el Cloud no ve sus bytes).
+    router.get(`${CATALOG_PREFIX}/prefix-packs/manifest`, handle(async (_req, _res, userId) => ({ body: await prefixPacks.manifest({ userId }) })));
+    router.post(`${CATALOG_PREFIX}/prefix-packs/main`, handle(async (req, _res, userId) => { const b = body(req); return { status: 201, body: await prefixPacks.beginMain({ userId, ...eraHeaders(req), packId: b.packId, baseVersion: b.baseVersion, sizeBytes: b.sizeBytes, sha256: b.sha256, entries: b.entries }) }; }));
+    router.post(`${CATALOG_PREFIX}/prefix-packs/main/:packId/publish`, handle(async (req, _res, userId) => ({ body: await prefixPacks.publishMain({ userId, ...eraHeaders(req), packId: req.params.packId, receipt: body(req).receipt }) })));
+    router.post(`${CATALOG_PREFIX}/prefix-packs/main/:packId/cancel`, handle(async (req, _res, userId) => ({ body: await prefixPacks.cancelMain({ userId, ...eraHeaders(req), packId: req.params.packId, code: body(req).code ?? null }) })));
+  }
+  if (direct) {
+    router.post(`${CATALOG_PREFIX}/direct/session`, handle(async (req, _res, userId) => { const b = body(req); return { body: await direct.startSession({ userId, tempAuthMetadata: b.tempAuthMetadata ?? null }) }; }));
+    // La clave temporal no se puede revocar en el servidor: caduca sola (≤15 min). Parar solo reconoce el cierre; no hay estado durable.
+    router.post(`${CATALOG_PREFIX}/direct/session/stop`, handle(async () => ({ body: { ok: true } })));
   }
   if (playback) {
     // T14 — rondas Shuffle persistidas (r4 §5) y vecinos de orden (I2). El cliente nunca recibe la permutación ni los IDs del conjunto.
@@ -188,17 +193,9 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
     router.post(`${CATALOG_PREFIX}/library/restore-hold/release`, handle(async (req, _res, userId) => ({ body: await purge.releaseRestoreHold({ userId, ...eraHeaders(req) }) })));
   }
   if (media) {
-    // T14 — acceso a medios por referencia SQL (§8.6): concesión opaca por parte; bytes por HTTP con Range desde el gateway.
+    // T14/E77 — acceso a medios por referencia SQL (§8.6): autorización y referencia directa por parte; los bytes los lee el navegador de Telegram.
     router.post(`${CATALOG_PREFIX}/files/:fileId/access`, handle(async (req, _res, userId) => ({ status: 201, body: await media.issueAccess({ userId, fileId: req.params.fileId, epoch: req.get('x-catalog-epoch') || null }) })));
-    const serve = async (req, res) => {
-      const user = authenticate(req, res); if (!user) return;
-      try { await media.stream({ userId: String(user.id), token: req.params.token, rangeHeader: req.get('range') || null, res, method: req.method }); } catch (error) {
-        if (!(error instanceof CatalogAuthorityError) && !(error instanceof CatalogQueryError)) log('[catalog] media stream error', error?.message || error);
-        if (!res.headersSent) { if (error && error.status === 416) res.setHeader('Content-Range', `bytes */${error.detail?.size ?? '*'}`); respondError(res, error); } else res.destroy();
-      }
-    };
-    router.get(`${CATALOG_PREFIX}/media/:token`, serve);
-    router.head(`${CATALOG_PREFIX}/media/:token`, serve);
+    router.post(`${CATALOG_PREFIX}/files/:fileId/parts/:partIndex/bytes`, handle(async (req, _res, userId) => { const b = body(req); return { body: await media.confirmBytes({ userId, fileId: req.params.fileId, partIndex: /^[0-9]{1,6}$/.test(req.params.partIndex) ? Number(req.params.partIndex) : -1, sha256: b.sha256, size: b.size }) }; }));
   }
   // Rutas del contrato aún no implementadas (T15/T16): 501 explícito, nunca un éxito ficticio.
   router.use(CATALOG_PREFIX, (req, res) => res.status(501).json({ error: `${req.method} ${req.originalUrl.split('?')[0]} is not implemented yet`, code: 'NOT_IMPLEMENTED' }));

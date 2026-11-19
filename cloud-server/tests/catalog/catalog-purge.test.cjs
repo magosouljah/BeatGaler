@@ -13,26 +13,33 @@ const { Api } = require(path.join(__dirname, '..', '..', 'node_modules', 'telegr
 const bigInt = require(path.join(__dirname, '..', '..', 'node_modules', 'big-integer'));
 const purge = require('../../catalog/purge.js');
 const g = require('../../catalog/transport-gateway.js');
+const telegramOp = require('../../operator/telegram-file-io.js');
 const journalMod = require('../../catalog-deletion-journal.js');
 const { createCatalogRouter } = require('../../catalog/routes.js');
 const { CatalogQueryError } = require('../../catalog/cursor.js');
 const { createFakeTelegramServer } = require('../helpers/catalog-fake-mtproto.cjs');
 
-test('evaluateObjectBlock: precedencia OPAQUE > SHARED > RETENTION > PENDING_OPERATION > RESTORE_HOLD > CLEANUP_DISABLED; sin motivos → null', () => {
-  assert.equal(purge.evaluateObjectBlock({ opaque: true, otherLiveRefs: 2 }), 'OPAQUE_REFERENCE');
-  assert.equal(purge.evaluateObjectBlock({ otherLiveRefs: 1, retainedUntilFuture: true }), 'SHARED_OBJECT');
-  assert.equal(purge.evaluateObjectBlock({ retainedUntilFuture: true, pendingOperations: 1 }), 'RETENTION_WINDOW');
-  assert.equal(purge.evaluateObjectBlock({ pendingOperations: 1, restoreHold: true }), 'PENDING_OPERATION');
+test('E81 reglas puras: beat (OPAQUE > operación en vuelo → sigue en la papelera) y objeto de limpieza (SHARED > RETENTION = conservado; RESTORE_HOLD > CLEANUP_DISABLED = diferido); sin motivos → null', () => {
+  assert.equal(purge.evaluateBeatBlock({ opaque: true, pendingOperations: 1 }), 'OPAQUE_REFERENCE');
+  assert.equal(purge.evaluateBeatBlock({ pendingOperations: 1 }), 'PENDING_OPERATION');
+  assert.equal(purge.evaluateBeatBlock({}), null);
+  assert.equal(purge.evaluateObjectBlock({ otherLiveRefs: 1, retainedUntilFuture: true, restoreHold: true }), 'SHARED_OBJECT');
+  assert.equal(purge.evaluateObjectBlock({ retainedUntilFuture: true, restoreHold: true }), 'RETENTION_WINDOW');
   assert.equal(purge.evaluateObjectBlock({ restoreHold: true, cleanupEnabled: false }), 'RESTORE_HOLD');
   assert.equal(purge.evaluateObjectBlock({ cleanupEnabled: false }), 'CLEANUP_DISABLED');
   assert.equal(purge.evaluateObjectBlock({ cleanupEnabled: true, restoreHold: false }), null);
-  for (const r of ['OPAQUE_REFERENCE', 'SHARED_OBJECT', 'RETENTION_WINDOW', 'RESTORE_HOLD', 'CLEANUP_DISABLED', 'PENDING_OPERATION']) assert.ok(purge.BLOCK_REASONS.includes(r));
+  assert.deepEqual([...purge.KEPT_REASONS], ['SHARED_OBJECT', 'RETENTION_WINDOW']);
+  for (const r of ['RESTORE_HOLD', 'CLEANUP_DISABLED', 'JOURNAL_UNAVAILABLE', 'TRANSPORT_UNAVAILABLE', 'PENDING_OPERATION']) assert.ok(purge.DEFERRED_REASONS.includes(r));
+  for (const r of ['OPAQUE_REFERENCE', 'PENDING_OPERATION', 'BEAT_STATE']) assert.ok(purge.BLOCK_REASONS.includes(r));
 });
 
-test('classifyProviderError: 403/404/timeout/genérico → UNCERTAIN (nunca "ausente"); permanente/revocado no transitorio', () => {
-  const ge = (code, kind, rpc) => new g.GatewayError(code, code, { classification: { kind, code: rpc }, transient: kind !== 'PERMANENT' });
-  assert.deepEqual(purge.classifyProviderError(ge('DELETE_REJECTED_PERMANENT', 'PERMANENT', 'MESSAGE_DELETE_FORBIDDEN')), { outcome: 'UNCERTAIN', transient: false, reason: 'MESSAGE_DELETE_FORBIDDEN' });
-  assert.deepEqual(purge.classifyProviderError(ge('CREDENTIAL_REVOKED', 'REVOKED', 'AUTH_KEY_UNREGISTERED')), { outcome: 'UNCERTAIN', transient: false, reason: 'REVOKED' });
+test('E81 classifyProviderError: rechazo permanente/credencial → REJECTED; flood (sin efecto posible) → NOT_APPLIED; timeout/genérico/sin prueba → UNCERTAIN (nunca "ausente")', () => {
+  const ge = (code, kind, rpc, extra = {}) => new g.GatewayError(code, code, { classification: { kind, code: rpc, ...extra }, transient: kind !== 'PERMANENT' });
+  assert.deepEqual(purge.classifyProviderError(ge('DELETE_REJECTED_PERMANENT', 'PERMANENT', 'MESSAGE_DELETE_FORBIDDEN')), { outcome: 'REJECTED', transient: false, reason: 'MESSAGE_DELETE_FORBIDDEN' });
+  assert.deepEqual(purge.classifyProviderError(ge('CREDENTIAL_REVOKED', 'REVOKED', 'AUTH_KEY_UNREGISTERED')), { outcome: 'REJECTED', transient: false, reason: 'REVOKED' });
+  assert.deepEqual(purge.classifyProviderError(ge('DELETE_REJECTED', 'REJECTED', 'FLOOD_WAIT_3', { effectPossible: false, retryAfterMs: 3000 })), { outcome: 'NOT_APPLIED', transient: true, reason: 'FLOOD_WAIT_3', retryAfterMs: 3000 });
+  const flood = g.classifyError({ errorMessage: 'FLOOD_WAIT_5' }); // clasificación real del gateway: sin efecto posible
+  assert.equal(purge.classifyProviderError(new g.GatewayError('DELETE_REJECTED', 'x', { classification: flood, transient: true })).outcome, 'NOT_APPLIED');
   assert.deepEqual(purge.classifyProviderError(Object.assign(new Error('t'), { code: 'ETIMEDOUT' })), { outcome: 'UNCERTAIN', transient: true, reason: 'ETIMEDOUT' });
   assert.equal(purge.classifyProviderError(new g.GatewayError('PROBE_UNVERIFIED', 'x', { transient: true })).outcome, 'UNCERTAIN');
 });
@@ -65,7 +72,7 @@ test('gateway deleteMessage/probeAbsence sobre el fake: borrado + MessageEmpty e
   const sdk = { Api, bigInt };
   const client = server.session({ selfId: '20' });
   const channel = () => new Api.InputPeerChannel({ channelId: bigInt('1001'), accessHash: bigInt('7') });
-  const gw = g.createTelegramGateway({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: chatId === 'other' ? new Api.InputPeerChannel({ channelId: bigInt('2002'), accessHash: bigInt('7') }) : channel(), channel: true }) });
+  const gw = telegramOp.createOperatorTelegram({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: chatId === 'other' ? new Api.InputPeerChannel({ channelId: bigInt('2002'), accessHash: bigInt('7') }) : channel(), channel: true }) });
   const sent = await gw.sendPart({ operationId: 'top-1', partKey: 'm0', randomId: g.newRandomId(), chatId: '1001', file: { name: 'a.mp3', buffer: Buffer.alloc(10, 1) }, mimeType: 'audio/mpeg', fileName: 'a.mp3' });
   assert.deepEqual(await gw.probeAbsence({ chatId: '1001', messageId: sent.messageId }), { absent: false, evidence: 'DOCUMENT_PRESENT', size: 10 });
   client.script({ type: 'wrongChat' });

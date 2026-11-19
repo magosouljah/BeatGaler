@@ -57,10 +57,10 @@ const catalogOperations = require("./catalog/operations");
 const catalogPlayback = require("./catalog/playback");
 const catalogMedia = require("./catalog/media");
 const catalogPurge = require("./catalog/purge");
-const catalogTransport = require("./catalog/transport");
+const catalogDirect = require("./catalog/direct");
+const catalogPrefixPacks = require("./catalog/prefix-packs");
 const catalogSessionGuard = require("./catalog/session-guard");
 const catalogGateway = require("./catalog-gateway-runtime");
-const { createMasterProjectAdapter } = require("./catalog-project-master-adapter");
 const { createFileDeletionJournal } = require("./catalog-deletion-journal");
 
 installRuntimeOperability(express);
@@ -109,10 +109,23 @@ async function start() {
   const nativeOperations = catalogOperations.currentCatalogOperations();
   catalogSessionGuard.configureCatalogSessionGuard(nativeAuthority ? { pool, authority: nativeAuthority } : null);
   catalogPlayback.configureCatalogPlayback(nativeAuthority ? { pool, authority: nativeAuthority } : null);
-  catalogMedia.configureCatalogMedia(nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway } : null);
+  const directFlag = String(process.env.BEATGALER_CATALOG_DIRECT_ENABLED || '').trim().toLowerCase() === 'true';
+  catalogMedia.configureCatalogMedia(nativeAuthority ? { pool, authority: nativeAuthority } : null);
   const journalDir = String(process.env.BEATGALER_CATALOG_JOURNAL_DIR || '').trim();
   catalogPurge.configureCatalogPurge(nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, journal: journalDir ? createFileDeletionJournal({ dir: journalDir }) : null } : null);
-  catalogTransport.configureCatalogTransport(nativeAuthority && nativeOperations ? { pool, authority: nativeAuthority, operations: nativeOperations, gateway: mediaGateway, master: mediaGateway ? createMasterProjectAdapter() : null, resolveProjectAccess: mediaGateway ? catalogGateway.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }) : null, tempDir: process.env.BEATGALER_PROJECT_UPLOAD_TEMP_DIR || 'uploads-tmp/' } : null);
+  // Direct B (E70): apagado por defecto. En producción exige el dictamen G2 (misma regla que el gateway); G2 sigue NOT_PROVEN.
+  const directProd = ['production', 'prod'].includes(String(process.env.BEATGALER_DEPLOYMENT_ENV || process.env.NODE_ENV || '').trim().toLowerCase());
+  if (directFlag && directProd && String(process.env.BEATGALER_CATALOG_G2_APPROVED || '').trim().toLowerCase() !== 'true') throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires BEATGALER_CATALOG_G2_APPROVED=true; refusing to start.');
+  // E75: MAIN de prefijos (solo metadatos). El gateway se usa únicamente para COMPROBAR el mensaje publicado por el navegador (sin bytes).
+  catalogPrefixPacks.configurePrefixPacks(String(process.env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, directReads: directFlag, log: console.warn } : null);
+  catalogDirect.configureCatalogDirect(directFlag && nativeAuthority && nativeOperations ? { pool, authority: nativeAuthority, operations: nativeOperations,
+    resolveProjectAccess: catalogDirect.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }),
+    sessionSource: ({ botId, chatId }) => require("./direct-transport-control").catalogDirectSession({ botId, chatId }),
+    bindBuilder: (session, metadata) => require("./productive-temp-auth-boundary").transformSession(session, metadata), log: console.warn } : null);
+  // E73 (C): precalentamiento en segundo plano de los bots con bibliotecas nativas; nunca bloquea el arranque ni /readyz.
+  // BEATGALER_CATALOG_DIRECT_PREWARM_BOTS (por defecto 3, máximo 8; 0 lo apaga).
+  { const d = catalogDirect.currentCatalogDirect(); const raw = process.env.BEATGALER_CATALOG_DIRECT_PREWARM_BOTS; const n = raw === undefined || raw === '' ? 3 : Number(raw);
+    if (d && n > 0) { const t = setTimeout(() => { d.prewarm({ maxBots: n }).catch(() => {}); }, 3000); if (typeof t.unref === 'function') t.unref(); } }
   console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'} gateway=${mediaGateway ? 'bot-router(lazy)' : 'none'} journal=${journalDir ? 'file' : 'none'}`);
   libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
   const indexPinAuthority = cutover.authority === 'postgres'

@@ -14,21 +14,22 @@ const withCore = (sql) => [...all.filter((m) => m !== core), { ...core, sql }];
 
 test('0026 (T03), 0027 (T05-N) y 0028 (T06) son las migraciones del catálogo y el guard reconoce el contrato', () => {
   // T05-N añade 0027_catalog_native.sql; T06 añade 0028_catalog_queries.sql (colación ICU, proyecciones, índices). 0026/0027 intactas: checksum del runner.
-  assert.equal(all.length, 40);
-  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 40 }, (_, i) => String(i + 1).padStart(4, '0')));
-  assert.equal(all.at(-1).name, '0040_catalog_autovacuum.sql');
-  assert.equal(all.at(-2).name, '0039_catalog_search_gram_counts.sql');
-  assert.equal(all.at(-3).name, '0038_catalog_search_indexes.sql');
-  assert.equal(all.at(-4).name, '0037_catalog_search_text.sql');
-  assert.equal(all.at(-5).name, '0036_catalog_beat_tags_label_stats.sql');
-  assert.equal(all.at(-6).name, '0035_catalog_restore.sql');
-  assert.equal(all.at(-7).name, '0034_catalog_native_cli.sql');
-  assert.equal(all.at(-8).name, '0033_catalog_purge.sql');
-  assert.equal(all.at(-9).name, '0032_catalog_playback.sql');
-  assert.equal(all.at(-10).name, '0031_catalog_transfer_capabilities.sql');
-  assert.equal(all.at(-11).name, '0030_catalog_transfer_operations.sql');
-  assert.equal(all.at(-12).name, '0029_catalog_commands.sql');
-  assert.equal(all.at(-13).name, '0028_catalog_queries.sql');
+  assert.equal(all.length, 41);
+  assert.deepEqual(all.map((m) => m.version), Array.from({ length: 41 }, (_, i) => String(i + 1).padStart(4, '0')));
+  assert.equal(all.at(-1).name, '0041_catalog_prefix_packs.sql');
+  assert.equal(all.at(-2).name, '0040_catalog_autovacuum.sql');
+  assert.equal(all.at(-3).name, '0039_catalog_search_gram_counts.sql');
+  assert.equal(all.at(-4).name, '0038_catalog_search_indexes.sql');
+  assert.equal(all.at(-5).name, '0037_catalog_search_text.sql');
+  assert.equal(all.at(-6).name, '0036_catalog_beat_tags_label_stats.sql');
+  assert.equal(all.at(-7).name, '0035_catalog_restore.sql');
+  assert.equal(all.at(-8).name, '0034_catalog_native_cli.sql');
+  assert.equal(all.at(-9).name, '0033_catalog_purge.sql');
+  assert.equal(all.at(-10).name, '0032_catalog_playback.sql');
+  assert.equal(all.at(-11).name, '0031_catalog_transfer_capabilities.sql');
+  assert.equal(all.at(-12).name, '0030_catalog_transfer_operations.sql');
+  assert.equal(all.at(-13).name, '0029_catalog_commands.sql');
+  assert.equal(all.at(-14).name, '0028_catalog_queries.sql');
   mig.assertInitialSchemaContract(all);
 });
 
@@ -81,7 +82,8 @@ test('catalog/ no importa transporte ni red', () => {
     const allowed = ['crypto', './contract', './legacy-codec', './migration', './authority', './cursor', './queries', './metadata-rules', './commands', './facets', './name-uniqueness'];
     if (f === 'worker.js') allowed.length = 1; // worker.js: solo crypto; transporte inyectado, nunca importado
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
-    if (f === 'transport.js') allowed.push('fs', 'path', 'stream', 'stream/promises', './transport-gateway'); // T12: temporal acotado en disco; gateway y MASTER inyectados
+    if (f === 'prefix-packs.js') allowed.push('./transport-gateway'); // E75: solo el marcador del paquete; verificador inyectado; sin fs, SDK ni red
+    if (f === 'direct.js') allowed.push('./transport-gateway'); // E70: Direct B; solo caption/identidad del gateway (sin SDK ni red); sesión y vinculación inyectadas
     if (f === 'session-guard.js') allowed.push('./legacy-fence'); // T16: capa 2 reutiliza el error 410 de la capa 1
     if (f === 'native-cli.js') allowed.push('fs', '../legacy-import-executor'); // T17: manifiestos en disco y el id determinista de vault del importador (R12)
     if (f === 'backup.js') allowed.push('fs', 'path'); // T19-N: almacén de backups en disco local (fake/laboratorio); journal, gateway y proveedor inyectados
@@ -112,4 +114,20 @@ test('partJobId (T16/V09): ids válidos para catalog_jobs con partKeys del clien
   assert.equal(partJobId('verify', 'op1', 'MASTER:0'), 'job-verify-op1-MASTER_0');
   assert.notEqual(partJobId('verify', op, 'FILES:0:0'), partJobId('verify', op, 'FILES:1:0'));
   assert.notEqual(partJobId('verify', op, 'y'.repeat(60)), partJobId('verify', op, 'y'.repeat(59) + 'z'));
+});
+
+// E77 — El Cloud no transporta bytes de archivos: ni rutas, ni métodos del gateway, ni carga del módulo de operador desde el runtime.
+test('E77: sin rutas ni métodos de transporte de bytes en el Cloud; el módulo de operador no se carga desde el servidor', () => {
+  const read = (...p) => fs.readFileSync(path.join(__dirname, '..', '..', ...p), 'utf8');
+  const routes = read('catalog', 'routes.js');
+  for (const gone of ['/transfer/upload', '/media/:token', '/parts/:partKey/project', '/parts/:partKey/capability', 'req, contentLength', 'stream: req']) assert.equal(routes.includes(gone), false, `routes.js conserva ${gone}`);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', '..', 'catalog', 'transport.js')), false, 'catalog/transport.js eliminado');
+  assert.equal(fs.existsSync(path.join(__dirname, '..', '..', 'catalog-project-master-adapter.js')), false, 'adaptador MASTER de PROJECT eliminado');
+  const gateway = require('../../catalog/transport-gateway.js');
+  const g = gateway.createTelegramGateway({ client: { invoke: async () => ({}) }, sdk: { Api: {}, bigInt: () => 0 }, senderId: '20', resolvePeer: async () => ({}) });
+  assert.deepEqual(Object.keys(g).filter((k) => typeof g[k] === 'function').sort(), ['deleteMessage', 'probeAbsence', 'searchByRandomId', 'verifyMessage'], 'el gateway solo expone RPC de metadatos');
+  const runtime = ['server.js', 'server-core.js', 'catalog-worker.js', 'catalog-gateway-runtime.js', ...fs.readdirSync(path.join(__dirname, '..', '..', 'catalog')).filter((f) => f.endsWith('.js')).map((f) => path.join('catalog', f))];
+  for (const f of runtime) assert.equal(read(f).split(/\r?\n/).filter((l) => !l.trim().startsWith('//')).join(' ').includes('telegram-file-io'), false, `${f} no debe cargar el módulo de operador`);
+  const manifest = JSON.parse(read('catalog', 'api-manifest.json'));
+  assert.equal(manifest.endpoints.some((e) => ['/transfer/upload', '/media/', '/capability'].some((x) => e.path.includes(x)) || e.path.endsWith('/project')), false, 'el manifiesto no declara rutas de bytes');
 });

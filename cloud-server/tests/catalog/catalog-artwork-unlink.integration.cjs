@@ -23,7 +23,8 @@ const queries = require('../../catalog/queries.js');
 const commands = require('../../catalog/commands.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
 const g = require('../../catalog/transport-gateway.js');
-const { createCatalogTransport } = require('../../catalog/transport.js');
+const telegramOp = require('../../operator/telegram-file-io.js');
+const { createDirectSeeder } = require('../helpers/catalog-direct-seeder.cjs'); // E77: los archivos se siembran como el navegador (Direct B)
 const purgeMod = require('../../catalog/purge.js');
 const journalMod = require('../../catalog-deletion-journal.js');
 const { createFakeTelegramServer } = require('../helpers/catalog-fake-mtproto.cjs');
@@ -56,11 +57,11 @@ const peerOf = (chatId) => new Api.InputPeerChannel({ channelId: bigInt(String(c
 function modules(pool) {
   const server = createFakeTelegramServer(); const journal = journalMod.createMemoryDeletionJournal();
   const a = auth(pool); const client = server.session({ selfId: '20' });
-  const gateway = { ...g.createTelegramGateway({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client };
+  const gateway = { ...telegramOp.createOperatorTelegram({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client };
   const ops = operations.createCatalogOperations({ pool, authority: a, resolveAccess: async () => ({ maxBeats: null }) });
   const q = queries.createCatalogQueries({ pool, authority: a, cursorKeys: [{ kid: 'k', secret: crypto.randomBytes(32) }] });
   const cmd = commands.createCatalogCommands({ pool, authority: a });
-  const transport = createCatalogTransport({ pool, authority: a, operations: ops, gateway, tempDir: TMP });
+  const transport = createDirectSeeder({ pool, authority: a, operations: ops, browser: gateway });
   const purge = purgeMod.createCatalogPurge({ pool, authority: a, gateway, journal });
   const worker = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport: gateway, purge, owner: 'w', options: { globalConcurrency: 2, renewEveryMs: 100_000, stepsPerClaim: 4 } });
   return { pool, ops, q, cmd, gateway, transport, worker, purge, server, journal };

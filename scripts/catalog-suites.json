@@ -205,17 +205,6 @@
           "network": "deny"
         },
         {
-          "id": "t12-catalog-transport",
-          "cmd": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "cloud-server/tests/catalog/catalog-transport.test.cjs"
-          ],
-          "kind": "node-test",
-          "network": "loopback"
-        },
-        {
           "id": "t14-catalog-playback",
           "cmd": [
             "node",
@@ -847,17 +836,6 @@
       "note": "Transferencias por capacidad (§8.6) y PROJECT por MASTER sobre operaciones C7, con el servidor Telegram FAKE detrás del adaptador real del gateway (T11) y el worker real (T10). Encargo explícito con fakes: etiqueta FAKE, T11 sigue NO PASS y G2 NOT_PROVEN. Requiere node_modules raíz (vitest, typescript) para el cliente.",
       "cases": [
         {
-          "id": "t12-catalog-transport",
-          "cmd": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "cloud-server/tests/catalog/catalog-transport.test.cjs"
-          ],
-          "kind": "node-test",
-          "network": "loopback"
-        },
-        {
           "id": "t09-catalog-operations",
           "cmd": [
             "node",
@@ -932,6 +910,79 @@
           "network": "loopback"
         },
         {
+          "id": "catalog-prefix-packs-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-prefix-packs.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 1500000
+        },
+        {
+          "id": "e71-prefix-streaming-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogPrefixStreaming.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e75-main-pack-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogMainPack.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e78-resumable-upload-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogResumable.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e79-artwork-cache-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogArtworkCache.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e70-catalog-direct-unit",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-direct.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "e70-catalog-direct-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogDirect.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
           "id": "t12-typecheck",
           "cmd": [
             "node",
@@ -949,6 +1000,18 @@
             "--test-reporter=tap",
             "--test-concurrency=1",
             "cloud-server/tests/catalog/catalog-transport.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-direct-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-direct.integration.cjs"
           ],
           "kind": "node-test",
           "timeout_ms": 900000

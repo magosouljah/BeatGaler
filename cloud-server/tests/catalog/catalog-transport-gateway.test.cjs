@@ -7,12 +7,13 @@ const { Api } = require('telegram');
 const bigInt = require('big-integer');
 const { RPCError, FloodWaitError, RPCMessageToError } = require('telegram/errors');
 const g = require('../../catalog/transport-gateway.js');
+const telegramOp = require('../../operator/telegram-file-io.js');
 const { createFakeTelegramServer } = require('../helpers/catalog-fake-mtproto.cjs');
 
 const sdk = { Api, bigInt };
 const channel = () => new Api.InputPeerChannel({ channelId: bigInt('1001'), accessHash: bigInt('7') });
 const inputFile = () => new Api.InputFile({ id: bigInt('1'), parts: 1, name: 'a.wav', md5Checksum: '' });
-const gw = (server, selfId = '20') => g.createTelegramGateway({ client: server.session({ selfId }), sdk, senderId: selfId, resolvePeer: async () => ({ peer: channel(), channel: true }) });
+const gw = (server, selfId = '20') => telegramOp.createOperatorTelegram({ client: server.session({ selfId }), sdk, senderId: selfId, resolvePeer: async () => ({ peer: channel(), channel: true }) });
 const part = (over = {}) => ({ operationId: 'top-1', partKey: 'm0', randomId: g.newRandomId(), chatId: '1001', file: { name: 'a.wav', buffer: Buffer.alloc(1000, 1) }, mimeType: 'audio/wav', fileName: 'a.wav', ...over });
 
 test('random_id: int64 con signo en texto ↔ BigInteger; extremos exactos; fuera de rango y formatos inválidos rechazados; generador uniforme en rango', () => {
@@ -37,7 +38,7 @@ test('caption: marcador no ambiguo op/part, parse estricto, ids inválidos recha
 
 test('peticiones TL del SDK instalado: SendMedia con randomId explícito y forceFile, Search con filtro documento y límite ≤100, GetMessages por tipo de peer; serializan', () => {
   const caption = g.captionFor({ operationId: 'top-1', partKey: 'm0' });
-  const send = g.buildSendMedia(sdk, { peer: channel(), inputFile: inputFile(), mimeType: 'audio/wav', fileName: 'a.wav', caption, randomId: '-5' });
+  const send = telegramOp.buildSendMedia(sdk, { peer: channel(), inputFile: inputFile(), mimeType: 'audio/wav', fileName: 'a.wav', caption, randomId: '-5' });
   assert.equal(send.className, 'messages.SendMedia');
   assert.equal(send.randomId.toString(), '-5');
   assert.equal(send.media.className, 'InputMediaUploadedDocument');
@@ -48,7 +49,7 @@ test('peticiones TL del SDK instalado: SendMedia con randomId explícito y force
   assert.ok(search.getBytes().length > 0);
   assert.equal(g.buildGetMessages(sdk, { peer: channel(), messageId: 7, channel: true }).className, 'channels.GetMessages');
   assert.equal(g.buildGetMessages(sdk, { messageId: 7 }).className, 'messages.GetMessages');
-  assert.throws(() => g.buildSendMedia(sdk, { peer: channel(), inputFile: inputFile(), fileName: 'a.wav', caption: 'hola', randomId: '1' }), (e) => e.code === 'CAPTION_INVALID');
+  assert.throws(() => telegramOp.buildSendMedia(sdk, { peer: channel(), inputFile: inputFile(), fileName: 'a.wav', caption: 'hola', randomId: '1' }), (e) => e.code === 'CAPTION_INVALID');
   assert.throws(() => g.buildGetMessages(sdk, { messageId: 0 }), (e) => e.code === 'MESSAGE_ID_INVALID');
   assert.deepEqual(g.SDK_CONTRACT.requests, ['messages.SendMedia', 'messages.Search', 'messages.GetMessages', 'channels.GetMessages']);
 });
@@ -106,38 +107,38 @@ test('gateway sobre el fake: envío con identidad persistida → recibo con mess
   assert.deepEqual([v.size, v.sha256, v.provider, v.documentId], [1000, null, 'telegram', receipt.documentId]);
   const lost = part({ partKey: 'm1' }); server.session().script; // (sin efecto) documenta que los scripts son por sesión
   const client2 = server.session({ selfId: '20' }); client2.script({ type: 'loseResponse' });
-  const t2 = g.createTelegramGateway({ client: client2, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
+  const t2 = telegramOp.createOperatorTelegram({ client: client2, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
   await assert.rejects(t2.sendPart(lost), (e) => e.code === 'SEND_UNCERTAIN' && e.transient === true && e.resend === false && e.classification.action === 'RECONCILE');
   assert.equal(server.counters().sends, 2, 'no hubo reenvío automático');
   const found = await t2.searchByRandomId({ chatId: '1001', declaredSize: 1000, operationId: 'top-1', partKey: 'm1' });
   assert.equal(g.reconcileDecision(found), 'ADOPT');
   await assert.rejects(t2.searchByRandomId({ chatId: '1001', declaredSize: 1000 }), (e) => e.code === 'RECONCILE_IDENTITY_INCOMPLETE' && e.transient === false);
-  assert.deepEqual([t.metrics.sends, t2.metrics.uncertain, t2.metrics.searches], [1, 1, 1]);
+  assert.deepEqual([t.ioMetrics.sends, t2.ioMetrics.uncertain, t2.metrics.searches], [1, 1, 1]);
 });
 
 test('gateway: FLOOD_WAIT → SEND_REJECTED con retryAfterMs y sin mensaje; permiso → permanente (status 403); revocación → CREDENTIAL_REVOKED; fallo de subida nunca es incierto; verificación de mensaje ausente → 404 no transitorio', async () => {
   const server = createFakeTelegramServer(); const client = server.session({ selfId: '20' });
-  const t = g.createTelegramGateway({ client, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
+  const t = telegramOp.createOperatorTelegram({ client, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
   client.script({ type: 'flood', seconds: 5 });
   await assert.rejects(t.sendPart(part()), (e) => e.code === 'SEND_REJECTED' && e.retryAfterMs === 5000 && e.transient === true);
   assert.equal(server.messages().length, 0);
   client.script({ type: 'forbidden' });
   await assert.rejects(t.sendPart(part()), (e) => e.code === 'SEND_REJECTED_PERMANENT' && e.status === 403 && e.transient === false);
   const failingUpload = { ...client, uploadFile: async () => { throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }); } };
-  const tu = g.createTelegramGateway({ client: failingUpload, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
+  const tu = telegramOp.createOperatorTelegram({ client: failingUpload, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
   await assert.rejects(tu.sendPart(part()), (e) => e.code === 'UPLOAD_FAILED' && e.transient === true && e.classification.effectPossible === false);
   await assert.rejects(t.verifyMessage({ chatId: '1001', messageId: 424242 }), (e) => e.code === 'PROVIDER_MESSAGE_NOT_FOUND' && e.status === 404 && e.transient === false);
   server.revokeBot('20');
   await assert.rejects(t.sendPart(part()), (e) => e.code === 'CREDENTIAL_REVOKED' && e.transient === false && e.classification.kind === 'REVOKED');
   await assert.rejects(t.verifyMessage({ chatId: '1001', messageId: 1 }), (e) => e.code === 'CREDENTIAL_REVOKED');
-  assert.throws(() => g.createTelegramGateway({ client, sdk, senderId: 'Bot20', resolvePeer: async () => ({}) }), (e) => e.code === 'SENDER_INVALID');
+  assert.throws(() => telegramOp.createOperatorTelegram({ client, sdk, senderId: 'Bot20', resolvePeer: async () => ({}) }), (e) => e.code === 'SENDER_INVALID');
 });
 
 test('downloadPart: contrato real de gramjs — offset BigInteger, un trozo alineado por iterador (el multi-trozo de gramjs repetía el primer trozo) y bytes exactos por rango', async () => {
   const server = createFakeTelegramServer(); const client = server.session({ selfId: '20' });
   const calls = []; const orig = client.iterDownload.bind(client);
   client.iterDownload = (opts) => { calls.push({ offset: String(opts.offset), limit: opts.limit }); if (!bigInt.isInstance(opts.offset)) throw new TypeError('offset.divide is not a function'); return orig(opts); };
-  const t = g.createTelegramGateway({ client, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
+  const t = telegramOp.createOperatorTelegram({ client, sdk, senderId: '20', resolvePeer: async () => ({ peer: channel(), channel: true }) });
   const bytes = Buffer.from(Array.from({ length: 1_300_000 }, (_, i) => (i * 31 + (i >> 9)) & 255)); // contenido NO periódico: un trozo repetido o desplazado cambia el hash
   const sent = await t.sendPart(part({ file: { name: 'a.wav', buffer: bytes } }));
   const read = async (offset, limit) => { const out = []; for await (const c of await t.downloadPart({ chatId: '1001', messageId: sent.messageId, offset, limit, requestSize: 512 * 1024 })) out.push(c); return Buffer.concat(out); };

@@ -17,7 +17,8 @@ const queries = require('../../catalog/queries.js');
 const commands = require('../../catalog/commands.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
 const g = require('../../catalog/transport-gateway.js');
-const { createCatalogTransport } = require('../../catalog/transport.js');
+const telegramOp = require('../../operator/telegram-file-io.js');
+const { createDirectSeeder } = require('../helpers/catalog-direct-seeder.cjs'); // E77: los archivos se siembran como el navegador (Direct B)
 const mediaMod = require('../../catalog/media.js');
 const purgeMod = require('../../catalog/purge.js');
 const backupMod = require('../../catalog/backup.js');
@@ -52,13 +53,13 @@ const peerOf = (chatId) => new Api.InputPeerChannel({ channelId: bigInt(String(c
 function modules(pool, { server = createFakeTelegramServer(), journal = journalMod.createMemoryDeletionJournal(), gatewayWrap = (x) => x } = {}) {
   const a = auth(pool);
   const client = server.session({ selfId: '20' });
-  const gateway = gatewayWrap({ ...g.createTelegramGateway({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client });
+  const gateway = gatewayWrap({ ...telegramOp.createOperatorTelegram({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client });
   const ops = operations.createCatalogOperations({ pool, authority: a, resolveAccess: async () => ({ maxBeats: null }) });
   const q = queries.createCatalogQueries({ pool, authority: a, cursorKeys: [{ kid: 'k', secret: crypto.randomBytes(32) }] });
   const cmd = commands.createCatalogCommands({ pool, authority: a });
-  const transport = createCatalogTransport({ pool, authority: a, operations: ops, gateway, tempDir: TMP });
+  const transport = createDirectSeeder({ pool, authority: a, operations: ops, browser: gateway });
   const purge = purgeMod.createCatalogPurge({ pool, authority: a, gateway, journal });
-  const media = mediaMod.createCatalogMedia({ pool, authority: a, gateway });
+  const media = mediaMod.createCatalogMedia({ pool, authority: a });
   const worker = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport: gateway, purge, owner: 'w', options: { globalConcurrency: 2, renewEveryMs: 100_000, stepsPerClaim: 4 } });
   return { a, pool, ops, q, cmd, gateway, transport, worker, purge, media, server, journal, client };
 }
@@ -142,6 +143,7 @@ test('backup en A → purge posterior → restore aislado: estado de A, restore_
     const lib = (await dst.query('SELECT authority_epoch::text AS e, restore_hold FROM catalog_libraries WHERE user_id = $1', [S.lib.userId])).rows[0];
     assert.deepEqual([lib.e, lib.restore_hold], [String(Number(S.lib.epoch) + 1), true]);
     assert.equal((await dst.query("SELECT count(*)::int AS n FROM catalog_transfer_capabilities WHERE status IN ('ISSUED', 'REDEEMED')")).rows[0].n, 0);
+    assert.equal((await dst.query("SELECT count(*)::int AS n FROM catalog_transfer_capabilities WHERE status = 'CONSUMED' AND outcome = 'UNCERTAIN' AND last_error = 'RESTORE'")).rows[0].n, 1, 'el ticket directo en curso queda incierto (sin reenvío)');
     const m2 = modules(dst, { server: S.m.server, journal: S.m.journal });
     await assert.rejects(m2.ops.createOperation({ ...S.hdr, idempotencyKey: key(), intent: { kind: 'IMPORT', parts: [part('x', Buffer.alloc(10, 1))], metadata: { name: 'old-client' } } }), (e) => { assert.match(String(e.code), /EPOCH|STALE|AUTHORITY/, `código inesperado ${e.code}`); return true; });
     await dst.query("INSERT INTO catalog_jobs(job_id, user_id, kind, payload_json) VALUES ('held-job', $1, 'OPERATION_STEP', '{}')", [S.lib.userId]);
@@ -158,7 +160,7 @@ test('reconciliación del journal: B (papelera)=DELETED_CONFIRMED; C (ACTIVE en 
   await withTarget(async (dst) => {
     const dbk = bkOf(dst); await dbk.restoreBackup({ store: S.store, backupId: 'bkA', restoreId: 'rs1' });
     const m2 = modules(dst, { server: S.m.server, journal: S.m.journal });
-    const rec = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway });
+    const rec = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway, reader: m2.gateway });
     const kinds = (await dst.query('SELECT kind FROM catalog_restore_findings WHERE restore_id = $1', ['rs1'])).rows.map((r) => r.kind);
     assert.equal(rec.status, 'BLOCKED');
     assert.ok(kinds.includes('DELETED_CONFIRMED') && kinds.includes('UNRECOVERABLE'), kinds.join(','));
@@ -169,14 +171,14 @@ test('reconciliación del journal: B (papelera)=DELETED_CONFIRMED; C (ACTIVE en 
     await assert.rejects(dbk.releaseRestoreHold({ purge: m2.purge, userId: S.lib.userId }), (e) => e.code === 'RESTORE_NOT_RECONCILED');
     assert.equal((await dst.query('SELECT restore_hold FROM catalog_libraries WHERE user_id = $1', [S.lib.userId])).rows[0].restore_hold, true);
     const cBytes = Buffer.alloc(700, 65); // importBeat(C): 700 bytes de 'A'
-    const wrong = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway, checkBytes: false, recoverBytes: async () => { const s = await m2.gateway.sendPart({ operationId: 'rsbad', partKey: 'p0', randomId: gwRandom(), chatId: S.lib.chatId, file: { name: 'c.bin', buffer: Buffer.alloc(700, 66) }, mimeType: 'application/octet-stream', fileName: 'c.bin' }); return { chatId: S.lib.chatId, messageId: s.messageId }; } });
+    const wrong = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway, reader: m2.gateway, checkBytes: false, recoverBytes: async () => { const s = await m2.gateway.sendPart({ operationId: 'rsbad', partKey: 'p0', randomId: gwRandom(), chatId: S.lib.chatId, file: { name: 'c.bin', buffer: Buffer.alloc(700, 66) }, mimeType: 'application/octet-stream', fileName: 'c.bin' }); return { chatId: S.lib.chatId, messageId: s.messageId }; } });
     assert.equal(wrong.status, 'BLOCKED', 'una copia con hash distinto no se acepta');
     const recoverBytes = async ({ sha256 }) => {
       if (sha(cBytes) !== sha256) return null;
       const s = await m2.gateway.sendPart({ operationId: 'rsrec', partKey: 'p0', randomId: gwRandom(), chatId: S.lib.chatId, file: { name: 'c.bin', buffer: cBytes }, mimeType: 'application/octet-stream', fileName: 'c.bin' });
       return { chatId: S.lib.chatId, messageId: s.messageId };
     };
-    const rec2 = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway, recoverBytes });
+    const rec2 = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway, reader: m2.gateway, recoverBytes });
     assert.equal(rec2.status, 'RECONCILED', JSON.stringify(rec2.blocking));
     assert.deepEqual(await dbk.openRuns(), []);
     await dst.query("INSERT INTO catalog_jobs(job_id, user_id, kind, payload_json) VALUES ('free-job', $1, 'OPERATION_STEP', '{}')", [S.lib.userId]);
@@ -184,11 +186,11 @@ test('reconciliación del journal: B (papelera)=DELETED_CONFIRMED; C (ACTIVE en 
     const era = (await dst.query('SELECT authority_era::text AS e FROM catalog_libraries WHERE user_id = $1', [S.lib.userId])).rows[0].e;
     const rel = await dbk.releaseRestoreHold({ purge: m2.purge, userId: S.lib.userId, era, epoch: String(Number(S.lib.epoch) + 1) }).catch((e) => e);
     assert.ok(rel.restoreHold === false || rel.code === 'RESTORE_HOLD_PENDING', `release: ${rel.code || JSON.stringify(rel)}`);
-    const ok = await dbk.verifyBytes({ gateway: m2.gateway });
+    const ok = await dbk.verifyBytes({ reader: m2.gateway });
     assert.deepEqual([ok.mismatches.length, ok.missing.length], [0, 0]); assert.ok(ok.checked >= 3 && ok.ok === ok.checked);
     S.m.server.truncateDocument(S.m.server.messages().find((x) => x.size === 3000).id, 2900);
     await dst.query("INSERT INTO catalog_restore_runs(restore_id, backup_id, manifest_sha256, source_taken_at, status, libraries_epoch_bumped) VALUES ('rs-bytes', 'bkA', $1, now(), 'HELD', 0)", [sha('x')]);
-    const bad = await dbk.reconcileRestore({ restoreId: 'rs-bytes', journal: S.m.journal, gateway: m2.gateway });
+    const bad = await dbk.reconcileRestore({ restoreId: 'rs-bytes', journal: S.m.journal, gateway: m2.gateway, reader: m2.gateway });
     assert.equal(bad.status, 'BLOCKED'); assert.equal(bad.bytes.mismatches.length, 1);
   });
 }));
@@ -203,8 +205,8 @@ test('proveedor Telegram inaccesible: sin ausencia probada no se concluye nada (
     const r = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: down, checkBytes: false });
     assert.equal(r.status, 'BLOCKED'); assert.ok(r.blocking.length >= 1 && r.blocking.every((b) => b.kind === 'PROVIDER_UNREACHABLE'));
     assert.ok((await objects(dst, S.lib.userId)).every((o) => o.status === 'PRESENT'), 'nada cambia sin pruebas');
-    await assert.rejects(dbk.verifyBytes({ gateway: down }), (e) => e.code === 'PROVIDER_TIMEOUT');
-    const again = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway, checkBytes: false });
+    await assert.rejects(dbk.verifyBytes({ reader: down }), (e) => e.code === 'PROVIDER_TIMEOUT');
+    const again = await dbk.reconcileRestore({ restoreId: 'rs1', journal: S.m.journal, gateway: m2.gateway, reader: m2.gateway, checkBytes: false });
     assert.ok(again.blocking.length >= 1 && again.blocking.every((b) => b.kind === 'UNRECOVERABLE'), 'recuperado el proveedor solo queda C');
   });
 }));

@@ -38,7 +38,8 @@ const { currentCatalogOperations } = require("./catalog/operations");
 const { currentCatalogPlayback } = require("./catalog/playback");
 const { currentCatalogMedia } = require("./catalog/media");
 const { currentCatalogPurge } = require("./catalog/purge");
-const { currentCatalogTransport } = require("./catalog/transport");
+const { currentCatalogDirect } = require("./catalog/direct");
+const { currentPrefixPacks } = require("./catalog/prefix-packs");
 const { assertCatalogSessionProtocolIfConfigured } = require("./catalog/session-guard");
 const { createCatalogRouter } = require("./catalog/routes");
 const { createProjectUploadHandlers } = require('./project-upload-route');
@@ -127,10 +128,12 @@ app.use((req, res, next) => {
 });
 app.use('/transport/index/publish', express.json({ limit: '24mb' }));
 installPolarWebhookRoute(app, express, { currentInbox: webhookRuntime.current });
+// E75: el ticket del MAIN de prefijos lleva una entrada de metadatos por beat (sin bytes de audio): límite propio, acotado.
+app.use('/catalog/v1/prefix-packs/main', express.json({ limit: '6mb' }));
 app.use(express.json({ limit: "256kb" }));
 // T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
 // T16: rondas, medios, purge y transferencias montados; sin gateway real responden 503 TRANSFER_UNAVAILABLE / jobs en reintento (fail-closed).
-app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), transport: currentCatalogTransport(), playback: currentCatalogPlayback(), media: currentCatalogMedia(), purge: currentCatalogPurge(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
+app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), direct: currentCatalogDirect(), prefixPacks: currentPrefixPacks(), playback: currentCatalogPlayback(), media: currentCatalogMedia(), purge: currentCatalogPurge(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
 const upload = multer({
   dest: "uploads-tmp/",
   limits: {

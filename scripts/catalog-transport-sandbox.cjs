@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const ROOT = path.resolve(__dirname, '..');
 const CLOUD = path.join(ROOT, 'cloud-server');
 const gateway = require(path.join(CLOUD, 'catalog', 'transport-gateway.js'));
+const telegramOp = require(path.join(CLOUD, 'operator', 'telegram-file-io.js'));
 
 class SandboxStop extends Error { constructor(code, message, exitCode = 3) { super(message); this.name = 'SandboxStop'; this.code = code; this.exitCode = exitCode; } }
 const TOKEN_RE = /\d{6,12}:[A-Za-z0-9_-]{30,}/;
@@ -94,8 +95,8 @@ async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], r
   const sdk = deps.sdk;
 
   const botA = await deps.openBot('A'); // sesión MTProto A (auth key propia)
-  const gwBot = (client) => gateway.createTelegramGateway({ client, sdk, senderId: botId, botId: d.bot.id, resolvePeer: (c) => deps.resolvePeer(client, c) });
-  const gwMaster = gateway.createTelegramGateway({ client: deps.master.client, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(deps.master.client, c), resolveSenderPeer: (s) => deps.master.senderPeer(s) });
+  const gwBot = (client) => telegramOp.createOperatorTelegram({ client, sdk, senderId: botId, botId: d.bot.id, resolvePeer: (c) => deps.resolvePeer(client, c) });
+  const gwMaster = telegramOp.createOperatorTelegram({ client: deps.master.client, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(deps.master.client, c), resolveSenderPeer: (s) => deps.master.senderPeer(s) });
   const file = (name, size, tag) => deps.makeFile(name, size, `${runId}:${tag}`);
   const send = async (gw, who, opName, partKey, f, randomId = gateway.newRandomId()) => {
     const r = await gw.sendPart({ operationId: op(opName), partKey, randomId, chatId, file: f, mimeType: 'audio/wav', fileName: f.name });
@@ -170,7 +171,7 @@ async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], r
   // E2 — envío aceptado con respuesta perdida (descartada en la frontera del cliente DESPUÉS del efecto real) → reconciliación.
   for (const [who, gwFor, client] of [['bot', gwBot, botA.client], ['master', () => gwMaster, deps.master.client]]) {
     const lossy = deps.dropResponses(client);
-    const gw = who === 'bot' ? gateway.createTelegramGateway({ client: lossy, sdk, senderId: botId, botId: d.bot.id, resolvePeer: (c) => deps.resolvePeer(client, c) }) : gateway.createTelegramGateway({ client: lossy, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(client, c), resolveSenderPeer: (s) => deps.master.senderPeer(s) });
+    const gw = who === 'bot' ? telegramOp.createOperatorTelegram({ client: lossy, sdk, senderId: botId, botId: d.bot.id, resolvePeer: (c) => deps.resolvePeer(client, c) }) : telegramOp.createOperatorTelegram({ client: lossy, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(client, c), resolveSenderPeer: (s) => deps.master.senderPeer(s) });
     const f = file(`e2-${who}.wav`, 3000, `e2-${who}`);
     const rid = gateway.newRandomId();
     const s = await attempt(() => gw.sendPart({ operationId: op(`e2${who}`), partKey: 'm0', randomId: rid, chatId, file: f, mimeType: 'audio/wav', fileName: f.name }));
@@ -216,7 +217,7 @@ async function runSandbox(d, deps, { outDir, dedupDelaysMs = [0, 5000, 65000], r
         let client2 = null;
         if (who === 'bot') client2 = variant === 'same-session' ? botA.client : variant === 'reconnect' ? await deps.restoreBot(botA.saveSession()) : (await deps.openBot(`E4-${name}`)).client;
         else client2 = variant === 'same-session' ? deps.master.client : await deps.master.reconnect();
-        const gw2 = who === 'bot' ? gwBot(client2) : gateway.createTelegramGateway({ client: client2, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(client2, c) });
+        const gw2 = who === 'bot' ? gwBot(client2) : telegramOp.createOperatorTelegram({ client: client2, sdk, senderId: masterId, resolvePeer: (c) => deps.resolvePeer(client2, c) });
         const second = await attempt(() => gw2.sendPart({ operationId: op(name), partKey: 'm0', randomId: rid, chatId, file: file('e4.wav', 2000, `${name}-2`), mimeType: 'audio/wav', fileName: 'e4.wav' }));
         const truth = await groundTruth(name, 'm0'); recordTruth(truth);
         const outcome = !second.ok ? (second.error.rpc === 'RANDOM_ID_DUPLICATE' ? 'RANDOM_ID_DUPLICATE' : `ERROR:${second.error.rpc || second.error.code}`) : second.value.messageId === first.messageId ? 'SAME_MESSAGE' : 'NEW_MESSAGE';

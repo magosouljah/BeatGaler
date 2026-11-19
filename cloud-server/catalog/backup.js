@@ -8,7 +8,8 @@
 //                     restore_hold=true y época+1 en TODAS las bibliotecas, capacidades/concesiones revocadas, leases soltados y una corrida
 //                     HELD que impide a los workers reclamar jobs hasta reconciliar (operations.claimJobs).
 //   reconcileRestore  journal externo posterior al backup contra SQL y proveedor: nunca marca presente por restaurar una fila.
-//   verifyBytes       hash de bytes de cada parte vía gateway.downloadPart.
+//   verifyBytes       hash de bytes de cada parte con un LECTOR de operador (cloud-server/operator/telegram-file-io). E77: herramienta
+//                     local, independiente del Cloud (que no descarga archivos): scripts/backup/verify-bytes.cjs.
 //   releaseRestoreHold solo con la corrida RECONCILED (delegando en purge.releaseRestoreHold, que además exige cleanup aprobado).
 const crypto = require('crypto');
 const fs = require('fs');
@@ -149,7 +150,10 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
   // hasta reconciliar contra el journal externo y el proveedor. Sin esto una base restaurada con pg_restore sería utilizable con datos posteriores al backup.
   async function applyRestorePosture(q, { restoreId, backupId, manifestSha256, takenAt }) {
     const bumped = (await q('UPDATE catalog_libraries SET restore_hold = true, authority_epoch = authority_epoch + 1, updated_at = now()')).rowCount;
-    await q("UPDATE catalog_transfer_capabilities SET status = 'REVOKED', resolved_at = now(), last_error = 'RESTORE' WHERE status IN ('ISSUED', 'REDEEMED')");
+    await q("UPDATE catalog_transfer_capabilities SET status = 'REVOKED', resolved_at = now(), last_error = 'RESTORE' WHERE status = 'ISSUED'");
+    // E77: un ticket de envío directo en curso al tomar el backup (REDEEMED) tiene efecto desconocido: queda INCIERTO (nunca se reenvía, C7.8).
+    // (REVOKED no es un estado válido para una fila ya redimida: el CHECK de 0031 lo rechazaba y abortaba el restore.)
+    await q("UPDATE catalog_transfer_capabilities SET status = 'CONSUMED', outcome = 'UNCERTAIN', resolved_at = now(), last_error = 'RESTORE' WHERE status = 'REDEEMED'");
     await q("UPDATE catalog_media_grants SET status = 'REVOKED' WHERE status = 'ACTIVE'");
     await q("UPDATE catalog_jobs SET state = 'QUEUED', lease_owner = NULL, lease_until = NULL, next_attempt_at = now() WHERE state = 'LEASED'");
     await q(`INSERT INTO catalog_restore_runs(restore_id, backup_id, manifest_sha256, source_taken_at, status, libraries_epoch_bumped) VALUES ($1, $2, $3, $4, 'HELD', $5)`, [restoreId, backupId, manifestSha256, takenAt, bumped]);
@@ -216,9 +220,9 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
   }
 
   // ---------- bytes ----------
-  async function hashPart(gateway, loc) {
+  async function hashPart(reader, loc) {
     const h = crypto.createHash('sha256'); let size = 0;
-    const it = await gateway.downloadPart({ chatId: loc.chat_id, messageId: loc.message_id });
+    const it = await reader.downloadPart({ chatId: loc.chat_id, messageId: loc.message_id });
     for await (const c of it) { h.update(c); size += c.length; }
     return { size, sha256: h.digest('hex') };
   }
@@ -229,8 +233,8 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
       WHERE catalog_restore_findings.kind <> ALL($6::text[]) OR EXCLUDED.kind = ANY($6::text[]) AND catalog_restore_findings.kind IN ('BYTES_MISSING', 'BYTES_MISMATCH')`, [restoreId, userId, objectId, kind, detail && String(detail).slice(0, 900), ['UNRECOVERABLE', 'PROVIDER_UNREACHABLE']]);
   }
   // Verifica por hash los bytes de cada parte PRIMARY conocida cuyo objeto SQL siga PRESENT. Un faltante o discrepancia es un hallazgo bloqueante.
-  async function verifyBytes({ gateway, restoreId = null, userId = null } = {}) {
-    if (!gateway || typeof gateway.downloadPart !== 'function') throw new BackupError('BYTES_GATEWAY_REQUIRED', 'a gateway with downloadPart is required to verify bytes');
+  async function verifyBytes({ reader, restoreId = null, userId = null } = {}) {
+    if (!reader || typeof reader.downloadPart !== 'function') throw new BackupError('BYTES_READER_REQUIRED', 'an operator byte reader with downloadPart is required to verify bytes');
     const parts = (await pool.query(`SELECT l.user_id, l.file_id, l.part_index, l.object_id, o.chat_id, o.message_id::text AS message_id,
         coalesce(p.verified_sha256, p.declared_sha256) AS want_sha, p.size_bytes::text AS want_size
       FROM catalog_part_locations l
@@ -244,7 +248,7 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
       report.checked++;
       const ref = { userId: p.user_id, fileId: p.file_id, partIndex: p.part_index, objectId: p.object_id };
       try {
-        const got = await hashPart(gateway, p);
+        const got = await hashPart(reader, p);
         metrics.bytesVerified += got.size;
         if (!p.want_sha || got.sha256 !== p.want_sha || (p.want_size != null && String(got.size) !== p.want_size)) {
           report.mismatches.push({ ...ref, expected: p.want_sha, actual: got.sha256 });
@@ -261,7 +265,7 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
   }
 
   // ---------- reconciliación del journal externo ----------
-  async function reconcileJournal({ restoreId, journal, gateway, recoverBytes = null } = {}) {
+  async function reconcileJournal({ restoreId, journal, gateway, reader = null, recoverBytes = null } = {}) {
     if (!journal || typeof journal.list !== 'function') throw new BackupError('JOURNAL_UNAVAILABLE', 'the external deletion journal is required to reconcile a restore');
     const run = (await pool.query('SELECT status FROM catalog_restore_runs WHERE restore_id = $1', [restoreId])).rows[0];
     if (!run) throw new BackupError('RESTORE_RUN_UNKNOWN', 'unknown restore run', { restoreId });
@@ -296,7 +300,7 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
             WHERE l.user_id = $1 AND l.object_id = $2 LIMIT 1`, [uid, e.objectId])).rows[0];
           const copy = await recoverBytes({ userId: uid, objectId: e.objectId, fileId: src.file_id, partIndex: src.part_index, sha256: src.want, journalEntry: e }).catch((err) => { log('recoverBytes failed', err && err.code, err && err.message); return null; });
           if (copy && copy.chatId && copy.messageId) {
-            const got = await hashPart(gateway, { chat_id: String(copy.chatId), message_id: String(copy.messageId) }).catch((err) => { log('copy download failed', err && err.code, err && err.message); return null; });
+            const got = await hashPart(reader, { chat_id: String(copy.chatId), message_id: String(copy.messageId) }).catch((err) => { log('copy download failed', err && err.code, err && err.message); return null; });
             if (got && got.sha256 === src.want) {
               await q("UPDATE catalog_media_objects SET chat_id = $3, message_id = $4, status = 'PRESENT', verified_at = now() WHERE user_id = $1 AND object_id = $2", [uid, e.objectId, String(copy.chatId), String(copy.messageId)]);
               restored = true;
@@ -319,10 +323,11 @@ function createCatalogBackup({ pool, clock = () => new Date(), randomUUID = () =
     return { restoreId, status: 'RECONCILED', blocking: [] };
   }
   // Reconcilia journal → verifica bytes → dictamina. Re-ejecutable: un BLOCKED vuelve a evaluarse (los hallazgos se reemplazan por objeto).
-  async function reconcileRestore({ restoreId, journal, gateway, recoverBytes = null, checkBytes = true } = {}) {
+  // `gateway`: metadatos del proveedor (probar ausencia). `reader`: lector de bytes del operador (solo para verifyBytes y copias recuperadas).
+  async function reconcileRestore({ restoreId, journal, gateway, reader = null, recoverBytes = null, checkBytes = true } = {}) {
     await pool.query("DELETE FROM catalog_restore_findings WHERE restore_id = $1 AND kind IN ('PROVIDER_UNREACHABLE', 'BYTES_MISSING', 'BYTES_MISMATCH')", [restoreId]);
-    const j = await reconcileJournal({ restoreId, journal, gateway, recoverBytes });
-    const b = checkBytes ? await verifyBytes({ gateway, restoreId }) : null;
+    const j = await reconcileJournal({ restoreId, journal, gateway, reader, recoverBytes });
+    const b = checkBytes ? await verifyBytes({ reader, restoreId }) : null;
     return { journal: j, bytes: b, ...(await finalizeRestore({ restoreId })) };
   }
 

@@ -21,7 +21,8 @@ const codec = require('../../catalog/legacy-codec.js');
 const { rebuildDerivedProjections } = require('../../catalog/staging.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
 const g = require('../../catalog/transport-gateway.js');
-const { createCatalogTransport } = require('../../catalog/transport.js');
+const telegramOp = require('../../operator/telegram-file-io.js');
+const { createDirectSeeder } = require('../helpers/catalog-direct-seeder.cjs'); // E77: los archivos se siembran como el navegador (Direct B)
 const pb = require('../../catalog/playback.js');
 const mediaMod = require('../../catalog/media.js');
 const { createFakeTelegramServer } = require('../helpers/catalog-fake-mtproto.cjs');
@@ -55,14 +56,14 @@ const peerOf = (chatId) => new Api.InputPeerChannel({ channelId: bigInt(String(c
 function modules(pool, { server = createFakeTelegramServer(), rng = crypto.randomBytes, grantTtlMs = 600_000 } = {}) {
   const a = auth(pool);
   const client = server.session({ selfId: '20' });
-  const gateway = { ...g.createTelegramGateway({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client };
+  const gateway = { ...telegramOp.createOperatorTelegram({ client, sdk, senderId: '20', botId: 'Bot20', resolvePeer: async (chatId) => ({ peer: peerOf(chatId), channel: true }) }), client };
   const ops = operations.createCatalogOperations({ pool, authority: a, resolveAccess: async () => ({ maxBeats: null }) });
   const q = queries.createCatalogQueries({ pool, authority: a, cursorKeys: [{ kid: 'k', secret: crypto.randomBytes(32) }] });
   const cmd = commands.createCatalogCommands({ pool, authority: a });
-  const transport = createCatalogTransport({ pool, authority: a, operations: ops, gateway, tempDir: TMP });
+  const transport = createDirectSeeder({ pool, authority: a, operations: ops, browser: gateway });
   const worker = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport: gateway, owner: 'w', options: { globalConcurrency: 2, renewEveryMs: 100_000 } });
   const playback = pb.createCatalogPlayback({ pool, authority: a, randomBytes: rng });
-  const media = mediaMod.createCatalogMedia({ pool, authority: a, gateway, grantTtlMs });
+  const media = mediaMod.createCatalogMedia({ pool, authority: a });
   return { a, ops, q, cmd, gateway, transport, worker, playback, media, server };
 }
 async function nativeLibrary(pool) {
@@ -115,11 +116,7 @@ async function drawAll(playback, hdr, roundId, startSeq = 0) {
 }
 const mappingRows = async (pool, uid, roundId) => (await pool.query('SELECT count(*)::int AS n FROM catalog_round_mapping WHERE user_id = $1 AND round_id = $2', [uid, roundId])).rows[0].n;
 const rejects = (p, code, extra = () => true) => assert.rejects(p, (e) => { assert.equal(e.code, code, `código esperado ${code}, recibido ${e.code}: ${e.message}`); return extra(e); });
-// Respuesta HTTP mínima para `media.stream`.
-function fakeRes() {
-  const r = { headers: {}, statusCode: 200, chunks: [], ended: false, destroyed: null, headersSent: false, setHeader(k, v) { r.headers[k.toLowerCase()] = v; }, status(c) { r.statusCode = c; r.headersSent = true; return r; }, write(c) { r.chunks.push(Buffer.from(c)); return true; }, end() { r.ended = true; }, once() {}, destroy(e) { r.destroyed = e || true; }, bytes: () => Buffer.concat(r.chunks) };
-  return r;
-}
+
 
 test('rondas N=0/1/2/240: cada miembro exactamente una vez, remaining exacto, ronda completa sin sorteo (m=0), mapping vacío al terminar; la canción actual se consume al abrir si N>1', () => withDb(async (pool) => {
   for (const n of [0, 1, 2, 240]) {
@@ -232,9 +229,9 @@ test('vecino de orden (I2): siguiente/anterior por slot del conjunto; fuera del 
   assert.deepEqual([(await byRating(null, 'next')).beatId, (await byRating('b0004', 'next')).beatId, (await byRating('b0000', 'next')).edge, (await byRating(null, 'previous')).beatId, (await byRating('b0002', 'previous')).beatId], ['b0004', 'b0003', 'end', 'b0000', 'b0003']);
 }));
 
-test('medios: acceso por referencia (concesión por parte, caché por época/revisión), stream completo y por Range desde el gateway, multipart completo con hash, denegado en TRASH y recuperado al restaurar, otra cuenta, caducidad, cierre de sesión, fallo del proveedor antes del primer byte', () => withDb(async (pool) => {
+test('medios (E77): acceso por referencia directa (caché por época/revisión, sin concesiones de bytes), lectura del navegador completa y por rangos, multipart con hash, denegado en TRASH y recuperado al restaurar, otra cuenta', () => withDb(async (pool) => {
   const lib = await nativeLibrary(pool); const other = await nativeLibrary(pool);
-  const { ops, cmd, transport, worker, media, server, gateway } = modules(pool, { grantTtlMs: 600_000 });
+  const { ops, cmd, transport, worker, media, server, gateway } = modules(pool);
   const hdr = hdrOf(lib);
   const b0 = crypto.randomBytes(300_000); const b1 = crypto.randomBytes(120_000);
   const part = (k, bytes, idx) => ({ partKey: k, slotKey: 'MASTER', role: 'MASTER', partIndex: idx, size: bytes.length, sha256: sha(bytes), filename: 'beat.mp3', mime: 'audio/mpeg' });
@@ -246,47 +243,28 @@ test('medios: acceso por referencia (concesión por parte, caché por época/rev
   const access = await media.issueAccess({ userId: lib.userId, fileId, epoch: lib.epoch });
   assert.deepEqual([access.beatId, access.role, access.parts.length, access.partsTotalBytes, access.parts.map((p) => p.size), access.parts.map((p) => p.hashVerified)], [op.beatId, 'MASTER', 2, 420_000, [300_000, 120_000], [false, false]]);
   assert.match(access.cacheKey, new RegExp(`^${lib.userId}:${lib.epoch}:${op.beatId}:${fileId}:1$`));
-  assert.ok(access.parts.every((p) => /^[A-Za-z0-9_-]{43}$/.test(p.token) && !JSON.stringify(p).match(/chat|message|-100/)), 'sin chat ni message_id hacia el cliente');
-  // stream completo de la parte 0 y por rangos; multipart en orden = bytes originales (hash verificado por el cliente)
-  const r0 = fakeRes(); const s0 = await media.stream({ userId: lib.userId, token: access.parts[0].token, res: r0 });
-  assert.deepEqual([r0.statusCode, s0.bytes, r0.headers['content-length'], r0.headers['accept-ranges']], [200, 300_000, '300000', 'bytes']); assert.ok(r0.bytes().equals(b0));
-  const r1 = fakeRes(); await media.stream({ userId: lib.userId, token: access.parts[0].token, rangeHeader: 'bytes=1000-1999', res: r1 });
-  assert.deepEqual([r1.statusCode, r1.headers['content-range'], r1.bytes().length], [206, 'bytes 1000-1999/300000', 1000]); assert.ok(r1.bytes().equals(b0.subarray(1000, 2000)));
-  const r2 = fakeRes(); await media.stream({ userId: lib.userId, token: access.parts[1].token, rangeHeader: 'bytes=-5', res: r2 });
-  assert.ok(r2.bytes().equals(b1.subarray(b1.length - 5)));
-  const rAll = fakeRes(); await media.stream({ userId: lib.userId, token: access.parts[1].token, res: rAll });
-  assert.equal(sha(Buffer.concat([r0.bytes(), rAll.bytes()])), sha(Buffer.concat([b0, b1])), 'todas las partes en orden: hash del archivo completo');
-  assert.ok(server.counters().downloads >= 4, 'la concesión es reutilizable dentro de su vigencia (Range)');
-  // V09 hallazgo: proveedor con lectura corta (menos bytes que el tamaño declarado) → la respuesta se corta (socket destruido), nunca queda abierta esperando
-  const msg0 = server.messages().find((m) => m.size === 300_000); server.truncateDocument(msg0.id, 1000);
-  const rShort = fakeRes(); const sShort = await media.stream({ userId: lib.userId, token: access.parts[0].token, res: rShort });
-  assert.deepEqual([sShort.shortRead, sShort.interrupted, sShort.bytes, rShort.headers['content-length'], Boolean(rShort.destroyed), rShort.destroyed && rShort.destroyed.code], [true, true, 1000, '300000', true, 'MEDIA_SHORT_READ']);
-  assert.ok(media.metrics.providerErrors >= 1);
-  const h = fakeRes(); await media.stream({ userId: lib.userId, token: access.parts[0].token, rangeHeader: 'bytes=0-9', res: h, method: 'HEAD' });
-  assert.deepEqual([h.statusCode, h.bytes().length, h.headers['content-range']], [206, 0, 'bytes 0-9/300000']);
-  await rejects(media.stream({ userId: lib.userId, token: access.parts[0].token, rangeHeader: 'bytes=999999-', res: fakeRes() }), 'RANGE_NOT_SATISFIABLE');
-  // otra cuenta: ni acceso ni stream
+  assert.ok(access.parts.every((p) => p.token === undefined && p.url === undefined && p.direct && p.direct.chatId === lib.chatId && Number.isSafeInteger(p.direct.messageId)), 'solo referencias directas; sin token ni URL de bytes');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM catalog_media_grants')).rows[0].n, 0, 'no se emiten concesiones de bytes');
+  // el NAVEGADOR lee de Telegram con la referencia (aquí, el cliente de operador sobre el fake): completo, por rangos y multipart en orden
+  const read = async (p, offset = 0, limit = null) => { const out = []; for await (const c of await gateway.downloadPart({ chatId: p.direct.chatId, messageId: p.direct.messageId, offset, limit })) out.push(Buffer.from(c)); return Buffer.concat(out); };
+  const full0 = await read(access.parts[0]); assert.ok(full0.equals(b0));
+  assert.ok((await read(access.parts[0], 1000, 1000)).equals(b0.subarray(1000, 2000)));
+  assert.ok((await read(access.parts[1], b1.length - 5, 5)).equals(b1.subarray(b1.length - 5)));
+  assert.equal(sha(Buffer.concat([full0, await read(access.parts[1])])), sha(Buffer.concat([b0, b1])), 'todas las partes en orden: hash del archivo completo');
+  assert.equal(media.stream, undefined, 'el Cloud no transmite bytes');
+  // otra cuenta: sin acceso
   await rejects(media.issueAccess({ userId: other.userId, fileId }), 'NOT_FOUND');
-  await rejects(media.stream({ userId: other.userId, token: access.parts[0].token, res: fakeRes() }), 'MEDIA_GRANT_INVALID');
   await rejects(media.issueAccess({ userId: lib.userId, fileId, epoch: '999' }), 'CATALOG_EPOCH_STALE');
-  // papelera: denegado; restaurar: recuperado (nueva concesión; la versión del archivo no cambia)
+  // papelera: denegado; restaurar: recuperado (la versión del archivo no cambia)
   const beat = (await pool.query('SELECT version::text AS version FROM catalog_beats WHERE user_id = $1 AND beat_id = $2', [lib.userId, op.beatId])).rows[0];
   await cmd.trashBeats({ ...hdr, idempotencyKey: key(), items: [{ beatId: op.beatId, expectedVersion: beat.version }] });
   await rejects(media.issueAccess({ userId: lib.userId, fileId }), 'ACCESS_DENIED', (e) => e.detail.reason === 'BEAT_NOT_ACTIVE' && e.detail.state === 'TRASH');
   const v2 = (await pool.query('SELECT version::text AS version FROM catalog_beats WHERE user_id = $1 AND beat_id = $2', [lib.userId, op.beatId])).rows[0].version;
   await cmd.restoreBeats({ ...hdr, idempotencyKey: key(), items: [{ beatId: op.beatId, expectedVersion: v2 }] });
   const access2 = await media.issueAccess({ userId: lib.userId, fileId });
-  assert.equal(access2.revision, access.revision);
-  // caducidad y cierre de sesión
-  await pool.query("UPDATE catalog_media_grants SET expires_at = now() - interval '1 second' WHERE grant_hash = $1", [mediaMod.tokenHash(access2.parts[0].token)]);
-  await rejects(media.stream({ userId: lib.userId, token: access2.parts[0].token, res: fakeRes() }), 'MEDIA_GRANT_EXPIRED');
-  const rv = await media.revokeGrants({ userId: lib.userId });
-  assert.ok(rv.revoked >= 1);
-  await rejects(media.stream({ userId: lib.userId, token: access2.parts[1].token, res: fakeRes() }), 'MEDIA_GRANT_INVALID', (e) => e.detail.reason === 'REVOKED');
-  // objeto no PRESENT → denegado; fallo del proveedor antes del primer byte → 502 estable (no se interpreta como borrado)
-  const access3 = await media.issueAccess({ userId: lib.userId, fileId });
-  gateway.client.script({ type: 'noop' }).script({ type: 'downloadFail' }); // GetMessages consume el primer fault (neutro); iterDownload, el segundo
-  await rejects(media.stream({ userId: lib.userId, token: access3.parts[0].token, res: fakeRes() }), 'MEDIA_UNAVAILABLE', (e) => e.status === 502);
+  assert.equal(access2.revision, access.revision); assert.deepEqual(access2.parts.map((p) => p.direct), access.parts.map((p) => p.direct));
+  void server;
+  // objeto no PRESENT → denegado
   await pool.query("UPDATE catalog_media_objects SET status = 'DELETING' WHERE user_id = $1", [lib.userId]);
   await rejects(media.issueAccess({ userId: lib.userId, fileId }), 'ACCESS_DENIED', (e) => e.detail.reason === 'OBJECT_NOT_PRESENT');
   assert.ok(media.metrics.denied >= 2);

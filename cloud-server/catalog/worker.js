@@ -66,7 +66,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
       if (part.dispatch_state === 'VERIFIED') return { skipped: 'ALREADY_VERIFIED' };
       if (part.dispatch_state !== 'RECEIPT') throw new WorkerJobError('NO_RECEIPT', 'part has no receipt yet', { transient: true, retryAfterMs: 5000 });
       const receipt = JSON.parse(part.receipt_json);
-      const evidence = await remote(job.userId, () => transport.verifyMessage({ chatId: part.chat_id, messageId: Number(receipt.messageId), randomId: part.random_id, senderId: part.sender_id, declaredSize: Number(part.declared_size), declaredSha256: part.declared_sha256 }));
+      const evidence = await remote(job.userId, () => transport.verifyMessage({ chatId: part.chat_id, messageId: Number(receipt.messageId), randomId: part.random_id, senderId: part.sender_id, declaredSize: Number(part.declared_size), declaredSha256: part.declared_sha256, operationId: job.operationId, partKey }));
       if (!evidence || !Number.isSafeInteger(evidence.size)) throw new WorkerJobError('VERIFY_INCONCLUSIVE', 'provider returned no usable evidence', { transient: true });
       const r = await operations.recordVerification({ userId: job.userId, operationId: job.operationId, partKey, evidence: { size: evidence.size, sha256: evidence.sha256 ?? null, provider: evidence.provider ?? 'telegram', messageId: Number(receipt.messageId) }, lease: { jobId: job.jobId, owner, generation: job.lease.generation } });
       if (r.ready) await operations.enqueueJob({ userId: job.userId, kind: 'TRANSFER_COMMIT', operationId: job.operationId, payload: { reason: 'READY' }, jobId: `job-commit-${job.operationId}` }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });

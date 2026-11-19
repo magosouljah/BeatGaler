@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const ROOT = path.resolve(__dirname, '..');
 const CLOUD = path.join(ROOT, 'cloud-server');
 const gateway = require(path.join(CLOUD, 'catalog', 'transport-gateway.js'));
+const telegramOp = require(path.join(CLOUD, 'operator', 'telegram-file-io.js'));
 const { createFakeTelegramServer } = require(path.join(CLOUD, 'tests', 'helpers', 'catalog-fake-mtproto.cjs'));
 
 class HarnessStop extends Error { constructor(code, message, exitCode) { super(message); this.name = 'HarnessStop'; this.code = code; this.exitCode = exitCode; } }
@@ -46,7 +47,7 @@ const channelPeer = (sdk) => new sdk.Api.InputPeerChannel({ channelId: sdk.bigIn
 const userPeer = (sdk) => new sdk.Api.InputPeerUser({ userId: sdk.bigInt('555'), accessHash: sdk.bigInt('9') });
 const file = (name, content) => ({ name, buffer: Buffer.from(content) });
 function mkGateway(sdk, client, { channel = true, senderId = bot.senderId } = {}) {
-  return gateway.createTelegramGateway({ client, sdk, senderId, resolvePeer: async () => ({ peer: channel ? channelPeer(sdk) : userPeer(sdk), channel }) });
+  return telegramOp.createOperatorTelegram({ client, sdk, senderId, resolvePeer: async () => ({ peer: channel ? channelPeer(sdk) : userPeer(sdk), channel }) });
 }
 
 // Cada experimento devuelve { outcome, details }. outcome ∈ PASS_FAKE | REQUIRES_SANDBOX | FAIL.
@@ -56,7 +57,7 @@ const EXPERIMENTS = [
     expected: 'PASS_FAKE',
     async run({ sdk }) {
       const ids = ['-9223372036854775808', '9223372036854775807', '0', '-1', gateway.newRandomId()];
-      const bytes = ids.map((rid) => gateway.buildSendMedia(sdk, { peer: channelPeer(sdk), inputFile: new sdk.Api.InputFile({ id: sdk.bigInt('1'), parts: 1, name: 'a.wav', md5Checksum: '' }), mimeType: 'audio/wav', fileName: 'a.wav', caption: gateway.captionFor({ operationId: 'top-1', partKey: 'm0' }), randomId: rid }).getBytes().length);
+      const bytes = ids.map((rid) => telegramOp.buildSendMedia(sdk, { peer: channelPeer(sdk), inputFile: new sdk.Api.InputFile({ id: sdk.bigInt('1'), parts: 1, name: 'a.wav', md5Checksum: '' }), mimeType: 'audio/wav', fileName: 'a.wav', caption: gateway.captionFor({ operationId: 'top-1', partKey: 'm0' }), randomId: rid }).getBytes().length);
       const roundtrip = ids.every((rid) => gateway.longToText(gateway.randomIdToLong(rid, sdk.bigInt)) === rid);
       let outOfRange = false; try { gateway.randomIdToLong('9223372036854775808', sdk.bigInt); } catch (e) { outOfRange = e.code === 'RANDOM_ID_INVALID'; }
       const caption = gateway.captionFor({ operationId: 'top-abc', partKey: 'f1' });
@@ -176,8 +177,8 @@ const EXPERIMENTS = [
     async run({ sdk }) {
       const inputFile = new sdk.Api.InputFile({ id: sdk.bigInt('1'), parts: 1, name: 'p.zip', md5Checksum: '' });
       const caption = gateway.captionFor({ operationId: 'top-e9', partKey: 'p0' });
-      const ch = gateway.buildSendMedia(sdk, { peer: channelPeer(sdk), inputFile, mimeType: 'application/zip', fileName: 'p.zip', caption, randomId: '5' });
-      const us = gateway.buildSendMedia(sdk, { peer: userPeer(sdk), inputFile, mimeType: 'application/zip', fileName: 'p.zip', caption, randomId: '5' });
+      const ch = telegramOp.buildSendMedia(sdk, { peer: channelPeer(sdk), inputFile, mimeType: 'application/zip', fileName: 'p.zip', caption, randomId: '5' });
+      const us = telegramOp.buildSendMedia(sdk, { peer: userPeer(sdk), inputFile, mimeType: 'application/zip', fileName: 'p.zip', caption, randomId: '5' });
       const sCh = gateway.buildSearch(sdk, { peer: channelPeer(sdk), caption, limit: 500 });
       const gCh = gateway.buildGetMessages(sdk, { peer: channelPeer(sdk), messageId: 7, channel: true });
       const gUs = gateway.buildGetMessages(sdk, { peer: userPeer(sdk), messageId: 7, channel: false });

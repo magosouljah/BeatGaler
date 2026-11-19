@@ -119,6 +119,8 @@ const CATALOG_REQUIRED_TABLES = Object.freeze([
   'catalog_restore_runs', 'catalog_restore_findings',
   // T20-N (0039_catalog_search_gram_counts.sql): contadores exactos de 1-/2-gramas por biblioteca/estado (proyección de search_text).
   'catalog_search_gram_counts',
+  // E75 (0041_catalog_prefix_packs.sql): manifiesto SQL del MAIN de prefijos de audio (los bytes viven en Telegram; nunca un INDEX).
+  'catalog_prefix_packs', 'catalog_prefix_pack_entries',
 ]);
 // Guardas 0027 que el contrato exige presentes (NATIVO r2.1 §3.2, §5.1, §6, §7). No relajan nada de 0026.
 const CATALOG_NATIVE_REQUIRED = Object.freeze([

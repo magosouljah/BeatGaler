@@ -437,4 +437,6 @@ function installProductiveTempAuthBoundary(express) {
 module.exports = {
   installProductiveTempAuthBoundary,
   stripPermanentSecrets,
+  // Direct B (catálogo): mismo bloque de vinculación, sin pasar por las rutas legacy (/transport/session/*).
+  transformSession,
 };

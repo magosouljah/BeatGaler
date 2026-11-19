@@ -62,14 +62,14 @@ function listen(router) { const app = express(); app.use(express.json()); app.us
 function raw(port, method, p, { headers = {}, body = null } = {}) { return new Promise((resolve, reject) => { const req = http.request({ host: '127.0.0.1', port, method, path: p, headers }, (res) => { let d = ''; res.on('data', (c) => { d += c; }); res.on('end', () => resolve({ status: res.statusCode, body: d ? JSON.parse(d) : null })); }); req.on('error', reject); if (body) req.write(JSON.stringify(body)); req.end(); }); }
 const anyAsync = () => new Proxy({}, { get: () => async () => ({}) });
 
-test('montaje completo: con operations+transport+playback+media+purge inyectados, las rutas T09/T12/T14/T15 responden (no 501); sin autoridad → 503 NOT_MOUNTED en todo /catalog/v1', async () => {
+test('montaje completo: con operations+direct+playback+media+purge inyectados, las rutas T09/Direct B/T14/T15 responden (no 501); sin autoridad → 503 NOT_MOUNTED en todo /catalog/v1', async () => {
   const calls = [];
   const router = createCatalogRouter({
     authority: {}, queries: {}, commands: anyAsync(),
     operations: { async createOperation(a) { calls.push('transfer'); return { operationId: 'top-1', created: true }; }, async getOperation() { return { operationId: 'top-1' }; } },
-    transport: { async issueUploadCapability() { calls.push('capability'); return { token: 'T'.repeat(43) }; }, async uploadPart() { return { status: 200, body: {} }; }, async uploadProjectPart() { return { status: 200, body: {} }; }, async listAttempts() { return { attempts: [] }; } },
+    direct: { async issueSendTicket() { calls.push('ticket'); return { randomId: '-1' }; }, async listAttempts() { return { attempts: [] }; } },
     playback: { async startRound() { calls.push('round'); return { roundId: 'rnd-1' }; }, async nextInRound() { return {}; }, async consumeInRound() { return {}; }, async rebuildRound() { return {}; }, async releaseRound() { return {}; }, async getRound() { return {}; }, async neighbor() { return {}; } },
-    media: { async issueAccess() { calls.push('access'); return { parts: [] }; }, async stream() {} },
+    media: { async issueAccess() { calls.push('access'); return { parts: [] }; } },
     purge: { async requestPurge() { calls.push('purge'); return { operationId: 'op-purge-1', created: true, status: 'ENUMERATING' }; }, async getPurge() { return {}; }, async cancelPurge() { return {}; }, async releaseRestoreHold() { return { restoreHold: false }; } },
     authenticate: () => ({ id: 'u1' }),
   });
@@ -77,12 +77,12 @@ test('montaje completo: con operations+transport+playback+media+purge inyectados
   try {
     const W = { 'idempotency-key': 'k', 'x-catalog-era': 'e', 'x-catalog-epoch': '1', 'content-type': 'application/json' };
     assert.equal((await raw(port, 'POST', '/catalog/v1/operations', { headers: W, body: { kind: 'IMPORT' } })).status, 201);
-    assert.equal((await raw(port, 'POST', '/catalog/v1/operations/top-1/parts/m0/capability', { headers: W })).status, 201);
+    assert.equal((await raw(port, 'POST', '/catalog/v1/operations/top-1/parts/m0/send-ticket', { headers: W })).status, 201);
     assert.equal((await raw(port, 'POST', '/catalog/v1/playback/rounds', { headers: W, body: { setId: 's' } })).status, 201);
     assert.equal((await raw(port, 'POST', '/catalog/v1/files/f-1/access', { headers: W })).status, 201);
     assert.equal((await raw(port, 'POST', '/catalog/v1/operations', { headers: W, body: { kind: 'PURGE' } })).status, 202);
     assert.equal((await raw(port, 'POST', '/catalog/v1/library/restore-hold/release', { headers: W })).status, 200);
-    assert.deepEqual(calls, ['transfer', 'capability', 'round', 'access', 'purge']);
+    assert.deepEqual(calls, ['transfer', 'ticket', 'round', 'access', 'purge']);
   } finally { server.close(); }
   const off = createCatalogRouter({ authority: null, queries: null, authenticate: () => ({ id: 'u1' }) });
   const s2 = await listen(off);
