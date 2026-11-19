@@ -385,9 +385,9 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const cancelReview = useCallback(() => { setReview((r) => { if (r) platform.importer.releaseBeat(r.beat.id); return null; }); }, []);
   // «Save and finish» (comportamiento del BeatGaler anterior: «Save/next stays immediate; the extracted cloud queue owns upload work»):
   // la revisión se cierra en cuanto el servidor aceptó la operación (nombre libre, cuota, tamaño) y la subida a Telegram continúa en segundo plano.
-  // E79 — una única representación: un beat nuevo NO tiene tarjeta mientras sube (antes aparecía una tarjeta provisional aparte, luego duplicada
-  // junto a la real). Su avance se muestra en el aviso flotante y la tarjeta aparece una sola vez, cuando PostgreSQL lo confirma, ya en su
-  // posición según el orden y los filtros vigentes. Fallo definitivo → la revisión se reabre con lo editado y el archivo intacto;
+  // E83 — una única tarjeta estable: el beat que se sube ocupa el primer hueco de la rejilla (BeatCard original con el logo girando, sin reproducción)
+  // y la sustituye la real cuando PostgreSQL la confirma (ver `pendingImports`); además un aviso flotante con el avance. Fallo definitivo → la
+  // revisión se reabre con lo editado y el archivo intacto;
   // incierto → aviso persistente y NUNCA reenvío (E5).
   // E80: el avance es el de los BYTES enviados por Direct B (no por archivo terminado); con varias subidas, el total es bytes enviados / bytes
   // totales de todas (una subida grande pesa lo que pesa, no lo mismo que una pequeña). El estado solo cambia cuando cambia el % entero.
@@ -399,11 +399,17 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const [pendingImports, setPendingImports] = useState<Array<{ id: string; beat: Beat; realId: string | null }>>([]);
   const residentIds = useMemo(() => { const s = new Set<string>(); if (pendingImports.some((p) => p.realId)) for (const b of snapshot.blocks) for (const it of b.items) s.add(it.id); return s; }, [snapshot.blocks, pendingImports]);
   const pendingCards = useMemo(() => pendingImports.filter((p) => !(p.realId && residentIds.has(p.realId))).map(({ id, beat }) => ({ id, beat })), [pendingImports, residentIds]);
-  useEffect(() => {
-    const done = pendingImports.filter((p) => p.realId && residentIds.has(p.realId)); if (done.length === 0) return;
-    setPendingImports((list) => list.filter((p) => !done.some((d) => d.id === p.id)));
-    for (const p of done) { setBeatCloudUpdateBusy(p.realId as string, false, true); setBeatCloudUpdateBusy(p.id, false); window.setTimeout(() => seededArtwork.current.delete(p.realId as string), 4000); } // la real ya montada: completa su overlay
-  }, [pendingImports, residentIds]);
+  // E85: el traspaso provisional → real (y su animación de «completado») ocurre UNA sola vez por subida, llegue la real por el camino normal o por la
+  // red de seguridad: antes la red de seguridad (5 s) volvía a emitir «completado» sobre la tarjeta real y la animación verde reaparecía.
+  const handedOff = useRef(new Set<string>());
+  const completeHandoff = useCallback((uploadId: string, realId: string) => {
+    if (handedOff.current.has(uploadId)) return;
+    handedOff.current.add(uploadId);
+    setPendingImports((list) => list.filter((p) => p.id !== uploadId));
+    setBeatCloudUpdateBusy(realId, false, true); setBeatCloudUpdateBusy(uploadId, false); // la real ya está montada: completa su overlay (una vez)
+    window.setTimeout(() => seededArtwork.current.delete(realId), 4000); // handedOff conserva el id de la subida (único): la red de seguridad posterior no repite el traspaso
+  }, []);
+  useEffect(() => { for (const p of pendingImports) if (p.realId && residentIds.has(p.realId)) completeHandoff(p.id, p.realId); }, [pendingImports, residentIds, completeHandoff]);
   const uploadNotice = uploads.length === 0 ? null
     : uploads.length === 1 ? `Subiendo «${uploads[0].name}»… ${uploads[0].percent} %`
     : `Subiendo ${uploads.length} beats… ${aggregateUploadPercent(uploads)} %`;
@@ -456,7 +462,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
         if (lands && realId) {
           setBeatCloudUpdateBusy(realId, true); if (updated.image_base64 && String(updated.image_base64).startsWith("data:")) seededArtwork.current.set(realId, String(updated.image_base64));
           setPendingImports((list) => list.map((x) => (x.id === uploadId ? { ...x, realId } : x)));
-          window.setTimeout(() => { setBeatCloudUpdateBusy(realId, false, true); dropPending(); }, 5000); // red de seguridad si la real no llega a esta vista (idempotente)
+          window.setTimeout(() => completeHandoff(uploadId, realId), 5000); // red de seguridad si la real no llega a esta vista (no repite un traspaso ya hecho)
         }
         refreshAfterMutation(); // PostgreSQL ya lo tiene: la Gallery se actualiza en el sitio con la tarjeta real
         setNotice((n) => (n && noticeTone(n) === "error" ? n : `«${updated.name}» importado.`));
@@ -469,7 +475,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
       setNotice(`No se pudo importar «${updated.name}»: ${reason.replace(/[.s]+$/, "")}. Tus cambios siguen en la revisión.`);
       if (platform.importer.fileForBeat(r.beat.id)) showReview({ beat: updated, hydrated: null }); // reabre con lo editado (o en cola si hay otra revisión abierta)
     });
-  }, [review, mutations, refreshAfterMutation, showReview]);
+  }, [review, mutations, refreshAfterMutation, showReview, completeHandoff]);
 
   // §6.1-5: al arrancar se consulta el resultado de las subidas que quedaron a medias (p. ej. al recargar la página). Las confirmadas aparecen
   // en la Gallery; las terminadas sin efecto se informan una vez; las que siguen abiertas se informan sin reenviar nada (los archivos no se

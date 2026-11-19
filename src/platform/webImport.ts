@@ -80,7 +80,7 @@ export function createWebImportCandidate(file: File): PlatformImportCandidate {
   }
   const hydrated = Promise.all([parseId3FromFile(file), entry.ready]).then(([metadata]) => ({
     ...beat, mp3_path: entry.slots.MASTER?.name || "", playback_path: entry.objectUrl,
-    bpm: metadata.bpm, key: metadata.key, tags: metadata.tags, image_base64: metadata.image_base64,
+    bpm: metadata.bpm, key: metadata.key, tags: metadata.tags, rating: metadata.rating, image_base64: metadata.image_base64,
   }));
   // Review opens immediately. Save still observes preparation failures via entry.ready.
   void hydrated.catch(() => {});

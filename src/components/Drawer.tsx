@@ -90,6 +90,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
   const displayedBeatIdRef = useRef(beat.id);
+  const ratingEditedRef = useRef(false); // E86: el usuario ya eligió estrellas a mano (la hidratación del ID3 no las pisa)
   const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
@@ -236,10 +237,13 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         tags: current.tags.length > 0 ? current.tags : beat.tags,
         image_base64: current.image_base64 || beat.image_base64,
         image_preview_base64: current.image_preview_base64 || beat.image_preview_base64,
+        // E86: las estrellas del ID3 llegan al hidratar la revisión; si el usuario ya las tocó, prevalece su elección.
+        rating: reviewInfo && !ratingEditedRef.current ? (beat.rating || current.rating) : current.rating,
       }));
       return;
     }
     displayedBeatIdRef.current = beat.id;
+    ratingEditedRef.current = false;
     setData({ ...beat });
     setPending({});
     setPendingCloud({});
@@ -798,7 +802,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             </div> : <div style={{ fontWeight: 500, fontSize: 19, color: "#fff" }}>{data.name}</div>}
           </div>}
 
-          <div style={{ marginTop: 14 }}><BulkCheck field="rating" label="RATING" /><Stars n={data.rating} onChange={(isEdit || isBulk) ? v => setData(d => ({ ...d, rating: v })) : undefined} /></div>
+          <div style={{ marginTop: 14 }}><BulkCheck field="rating" label="RATING" /><Stars n={data.rating} onChange={(isEdit || isBulk) ? v => { ratingEditedRef.current = true; setData(d => ({ ...d, rating: v })); } : undefined} /></div>
 
           <div style={{ marginTop: 14, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
             <BulkCheck field="tags" label={isBulk ? `TAGS (${bulkTagsMode.toUpperCase()})` : "TAGS"} />

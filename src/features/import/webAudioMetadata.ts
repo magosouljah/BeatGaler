@@ -1,8 +1,12 @@
+import { readMp3Rating } from "../audio/id3Rating";
+
 export interface WebAudioMetadata {
   bpm: string;
   key: string;
   tags: string[];
   image_base64: string | null;
+  /** Estrellas 0–5 del POPM del MP3 (0 si no hay). Se lee de los bytes del archivo, no de jsmediatags. */
+  rating: number;
 }
 
 const EMPTY_METADATA: WebAudioMetadata = {
@@ -10,6 +14,7 @@ const EMPTY_METADATA: WebAudioMetadata = {
   key: "",
   tags: [],
   image_base64: null,
+  rating: 0,
 };
 
 let jsMediaTagsLoader: Promise<void> | null = null;
@@ -31,6 +36,13 @@ async function loadJsMediaTags(): Promise<void> {
 
 /** Browser-only, best-effort metadata hydration. Import never waits for this. */
 export async function parseId3FromFile(file: File): Promise<WebAudioMetadata> {
+  // El rating no depende del parser externo (CDN): si éste falla, BPM/key/tags/portada quedan vacíos pero las estrellas se conservan.
+  const rating = await readMp3Rating(file);
+  const meta = await parseTextAndArtwork(file);
+  return { ...meta, rating };
+}
+
+async function parseTextAndArtwork(file: File): Promise<WebAudioMetadata> {
   try {
     await loadJsMediaTags();
     const jsMediaTags: any = (window as any).jsmediatags;
@@ -71,7 +83,7 @@ export async function parseId3FromFile(file: File): Promise<WebAudioMetadata> {
               image_base64 = `data:${picture.format};base64,${btoa(binary)}`;
             }
 
-            resolve({ bpm, key, tags, image_base64 });
+            resolve({ bpm, key, tags, image_base64, rating: 0 });
           },
           onError: () => resolve({ ...EMPTY_METADATA }),
         });
