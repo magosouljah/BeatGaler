@@ -49,7 +49,7 @@ if MODE == "restore":
     if len(args) != 2:
         raise SystemExit("usage: pg-runtime-env.py --restore bk-id database_restore_name")
     env["BACKUP_SOURCE"] = env.get("BACKUP_TARGET", "")
-    command = ["/usr/bin/bash", "/opt/beatgaler/backup/pg-restore.sh", *args]
+    command = ["/usr/bin/bash", "/opt/beatgaler/backup/pg-restore-s3-kms.sh", *args]
 else:
-    command = ["/usr/bin/bash", "/opt/beatgaler/backup/pg-backup.sh"]
+    command = ["/usr/bin/bash", "/opt/beatgaler/backup/pg-backup-s3-kms.sh"]
 os.execvpe(command[0], command, env)
