@@ -17,6 +17,8 @@ export interface UseCatalogVirtualRowsOptions {
   measure?: () => VirtualRowsMeasure;          // inyectable para fixtures sin layout
   geometryOverride?: Partial<RowGeometry>;
   viewportHeightFallback?: number;
+  /** E83: tarjetas provisionales (subidas en curso) que ocupan los primeros huecos de la MISMA rejilla; posición = ordinal + lead. */
+  lead?: number;
 }
 export interface VirtualRowsState {
   geometry: RowGeometry;
@@ -43,6 +45,7 @@ function defaultMeasure(scroller: HTMLElement | null, track: HTMLElement | null,
 
 export function useCatalogVirtualRows(o: UseCatalogVirtualRowsOptions): VirtualRowsState & { onScroll: () => void } {
   const { store, snapshot, scrollerRef, trackRef, sampleCardRef } = o;
+  const lead = Math.max(0, o.lead ?? 0);
   const [tick, setTick] = useState(0);
   const [measured, setMeasured] = useState<VirtualRowsMeasure>({ columns: null, rowHeight: null, rowGap: null, padTop: null, viewportHeight: null, viewportWidth: null });
   const anchorRef = useRef<RowAnchor | null>(null);
@@ -62,8 +65,9 @@ export function useCatalogVirtualRows(o: UseCatalogVirtualRowsOptions): VirtualR
   const viewportHeight = measured.viewportHeight ?? o.viewportHeightFallback ?? 800;
 
   // Origen físico = primera fila residente; top de fila relativo a ella (track = intervalo residente, no toda la biblioteca).
-  const firstResidentRow = rowOf(snapshot.firstOrdinal, geometry.columns);
-  const lastResidentRow = snapshot.endOrdinal > snapshot.firstOrdinal ? rowOf(snapshot.endOrdinal - 1, geometry.columns) : firstResidentRow - 1;
+  const firstResidentRow = snapshot.firstOrdinal === 0 ? 0 : rowOf(snapshot.firstOrdinal + lead, geometry.columns);
+  const lastOfItems = snapshot.endOrdinal > snapshot.firstOrdinal ? rowOf(snapshot.endOrdinal - 1 + lead, geometry.columns) : firstResidentRow - 1;
+  const lastResidentRow = snapshot.firstOrdinal === 0 && lead > 0 ? Math.max(lastOfItems, rowOf(lead - 1, geometry.columns)) : lastOfItems;
   const originRow = firstResidentRow;
   const scrollTop = scrollerRef.current?.scrollTop ?? 0;
   const range = visibleRowRange({ scrollTop, viewportHeight, originRow, geometry, firstResidentRow, lastResidentRow });
@@ -84,19 +88,19 @@ export function useCatalogVirtualRows(o: UseCatalogVirtualRowsOptions): VirtualR
   }, [scrollerRef, trackRef, sampleCardRef, o.measure, tick]);
 
   // Compensación de ancla antes de paint cuando cambian origen/columnas/filas (prepend, evict, resize).
-  const key = `${snapshot.queryGeneration}|${geometry.columns}|${snapshot.firstOrdinal}|${snapshot.endOrdinal}|${geometry.rowHeight}|${geometry.rowGap}`;
+  const key = `${snapshot.queryGeneration}|${geometry.columns}|${snapshot.firstOrdinal}|${snapshot.endOrdinal}|${geometry.rowHeight}|${geometry.rowGap}|${lead}`;
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
     if (prevKey.current && prevKey.current !== key && anchorRef.current && anchorRef.current.ordinal >= snapshot.firstOrdinal && anchorRef.current.ordinal < snapshot.endOrdinal) {
       const sameGen = prevKey.current.split("|")[0] === String(snapshot.queryGeneration);
       if (sameGen) {
-        const target = scrollTopForAnchor(anchorRef.current, originRow, geometry);
+        const target = scrollTopForAnchor(anchorRef.current, originRow, geometry, lead);
         if (Math.abs(target - scroller.scrollTop) >= 1) scroller.scrollTop = target;
       }
     }
     prevKey.current = key;
-  }, [key, originRow, geometry, scrollerRef, snapshot.firstOrdinal, snapshot.endOrdinal, snapshot.queryGeneration]);
+  }, [key, originRow, geometry, lead, scrollerRef, snapshot.firstOrdinal, snapshot.endOrdinal, snapshot.queryGeneration]);
 
   // Scroll pasivo + rAF: recalcular rango, capturar ancla y avisar al store (protección + prefetch).
   const onScroll = () => {
@@ -106,10 +110,11 @@ export function useCatalogVirtualRows(o: UseCatalogVirtualRowsOptions): VirtualR
       rafRef.current = null;
       const scroller = scrollerRef.current;
       if (!scroller) return;
-      anchorRef.current = captureAnchor({ scrollTop: scroller.scrollTop, originRow, geometry, ordinalAt: (i) => store.itemAt(i)?.id ?? null, firstResidentOrdinal: snapshot.firstOrdinal, lastResidentOrdinal: snapshot.endOrdinal - 1 });
+      anchorRef.current = captureAnchor({ scrollTop: scroller.scrollTop, originRow, geometry, ordinalAt: (i) => store.itemAt(i)?.id ?? null, firstResidentOrdinal: snapshot.firstOrdinal, lastResidentOrdinal: snapshot.endOrdinal - 1, lead });
       const r = visibleRowRange({ scrollTop: scroller.scrollTop, viewportHeight, originRow, geometry, firstResidentRow, lastResidentRow });
       const perViewport = Math.max(1, Math.ceil(viewportHeight / rowPitch(geometry))) * geometry.columns;
-      store.observeViewport({ firstOrdinal: r.start * geometry.columns, lastOrdinal: Math.max(r.start * geometry.columns, r.end * geometry.columns - 1), perViewport });
+      const firstO = Math.max(0, r.start * geometry.columns - lead);
+      store.observeViewport({ firstOrdinal: firstO, lastOrdinal: Math.max(firstO, r.end * geometry.columns - 1 - lead), perViewport });
       setTick((t) => t + 1);
     });
   };

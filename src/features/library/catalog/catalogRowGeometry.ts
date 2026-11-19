@@ -11,7 +11,6 @@ export interface RowGeometry {
 export interface RowRange { start: number; end: number } // filas globales, [start, end)
 
 export const DECLARED_TILE_HEIGHT = 239; // estimación inicial (CSS .lab-beat-tile--v2), siempre corregida por medición
-export const DECLARED_TILE_WIDTH = 160;
 export const DEFAULT_ROW_GAP = 28;
 
 export function assertGeometry(g: RowGeometry): RowGeometry {
@@ -25,7 +24,6 @@ export const rowPitch = (g: RowGeometry): number => g.rowHeight + g.rowGap;
 export const rowOf = (ordinal: number, columns: number): number => Math.floor(ordinal / columns);
 export const colOf = (ordinal: number, columns: number): number => ordinal % columns;
 export const rowCount = (total: number, columns: number): number => (total <= 0 ? 0 : Math.ceil(total / columns));
-export const firstOrdinalOfRow = (row: number, columns: number): number => row * columns;
 // Ordinales de una fila dentro de [0, total): la última fila parcial alinea con las mismas columnas (no se centra).
 export function ordinalsOfRow(row: number, columns: number, total: number): number[] {
   const first = row * columns;
@@ -66,24 +64,25 @@ export function trackHeight(input: { residentRows: number; geometry: RowGeometry
 
 // Ancla estable: tarjeta de referencia y su offset respecto al área útil del mismo scroller.
 export interface RowAnchor { ordinal: number; beatId: string; intraRowPx: number; viewportOffsetPx: number; columns: number }
-export function captureAnchor(input: { scrollTop: number; originRow: number; geometry: RowGeometry; ordinalAt: (ordinal: number) => string | null; firstResidentOrdinal: number; lastResidentOrdinal: number; focusedOrdinal?: number | null }): RowAnchor | null {
+export function captureAnchor(input: { scrollTop: number; originRow: number; geometry: RowGeometry; ordinalAt: (ordinal: number) => string | null; firstResidentOrdinal: number; lastResidentOrdinal: number; focusedOrdinal?: number | null; lead?: number }): RowAnchor | null {
   const { scrollTop, originRow, geometry, ordinalAt, firstResidentOrdinal, lastResidentOrdinal } = input;
+  const lead = input.lead ?? 0; // E83: huecos provisionales (subidas en curso) delante del primer ordinal: posición = ordinal + lead
   if (lastResidentOrdinal < firstResidentOrdinal) return null;
   const P = rowPitch(geometry);
   let ordinal: number;
   if (input.focusedOrdinal != null && input.focusedOrdinal >= firstResidentOrdinal && input.focusedOrdinal <= lastResidentOrdinal) ordinal = input.focusedOrdinal;
   else {
     const firstVisibleRow = originRow + Math.floor(Math.max(0, scrollTop - geometry.padTop) / P);
-    ordinal = Math.min(Math.max(firstVisibleRow * geometry.columns, firstResidentOrdinal), lastResidentOrdinal);
+    ordinal = Math.min(Math.max(firstVisibleRow * geometry.columns - lead, firstResidentOrdinal), lastResidentOrdinal);
   }
   const beatId = ordinalAt(ordinal);
   if (beatId === null) return null;
-  const top = rowTop(rowOf(ordinal, geometry.columns), originRow, geometry);
+  const top = rowTop(rowOf(ordinal + lead, geometry.columns), originRow, geometry);
   return { ordinal, beatId, intraRowPx: 0, viewportOffsetPx: top - scrollTop, columns: geometry.columns };
 }
 // scrollTop que mantiene el ancla en el mismo offset tras cambiar origen, columnas o filas (prepend/evict/resize).
-export function scrollTopForAnchor(anchor: RowAnchor, originRow: number, geometry: RowGeometry): number {
-  return Math.max(0, rowTop(rowOf(anchor.ordinal, geometry.columns), originRow, geometry) - anchor.viewportOffsetPx);
+export function scrollTopForAnchor(anchor: RowAnchor, originRow: number, geometry: RowGeometry, lead = 0): number {
+  return Math.max(0, rowTop(rowOf(anchor.ordinal + lead, geometry.columns), originRow, geometry) - anchor.viewportOffsetPx);
 }
 // Delta exacto de scroll al retirar/añadir `rows` filas por arriba (originRow se mueve por las filas retiradas).
 export const scrollDeltaForRows = (rows: number, geometry: RowGeometry): number => rows * rowPitch(geometry);

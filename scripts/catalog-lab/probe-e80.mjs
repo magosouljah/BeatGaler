@@ -85,13 +85,19 @@ try {
   const landed = (await list()).some((b) => b.name === `E80 grande ${stamp}`); await shot('b1-after-big');
   rec('PROGRESS-SINGLE-LARGE', landed && monotonic(single) && new Set(inter).size >= 5 ? 'PASS' : 'FAIL', { mb: MB, uploadKiBps: KBPS, distinctPercents: new Set(single).size, intermediate: inter.length, first: single.slice(0, 6), last: single.slice(-4), monotonic: monotonic(single), committed: landed });
 
+  // E83: tarjetas estables durante varias subidas simultáneas (una por beat, ninguna copia, logo girando, nada que desaparezca y reaparezca).
+  await ex(() => { window.__cf = []; window.__cfStop = false; const tick = () => { const tiles = [...document.querySelectorAll('.lab-beat-tile')]; const f = { pend: document.querySelectorAll('[data-pending-import]').length, spin: document.querySelectorAll('[data-pending-import] [aria-label="Updating beat in Galer Cloud"]').length }; for (const n of ['E80 multi grande', 'E80 multi chica']) f[n] = tiles.filter((c) => c.textContent.includes(n)).length; window.__cf.push(f); if (!window.__cfStop) requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
   await startSampling();
   await startImport(`E80 multi grande ${stamp}`, Math.round(MB * 0.75 * 1024 * 1024), 'm1');
   await startImport(`E80 multi chica ${stamp}`, 256 * 1024, 'm2');
   await waitFor(async () => (await ex(() => Number(document.querySelector('.bg-catalog-shell-status').getAttribute('data-uploads') || 0))) === 0 || null, { timeout: 180000, interval: 200, msg: 'multi done' });
+  await sleep(1500); const cf = await ex(() => { window.__cfStop = true; return window.__cf; });
   const multiAll = await stopSampling(); const multi = multiAll.filter((x) => /beats$/.test(x.who)).map((x) => x.p);
   const okMulti = (await list()).filter((b) => b.name.startsWith('E80 multi ') && b.name.endsWith(String(stamp))).length === 2;
   rec('PROGRESS-MULTI-WEIGHTED', okMulti && multi.length >= 3 && monotonic(multi) && multi.some((p) => p > 0 && p < 100) ? 'PASS' : 'FAIL', { aggregatePercents: multi.slice(0, 12), monotonic: monotonic(multi), samples: multiAll.length, committed: okMulti });
+  const names = ['E80 multi grande', 'E80 multi chica']; const firstSeen = Object.fromEntries(names.map((n) => [n, cf.findIndex((f) => f[n] > 0)])); const lastSeen = Object.fromEntries(names.map((n) => [n, cf.length - 1 - [...cf].reverse().findIndex((f) => f[n] > 0)]));
+  const holes = names.filter((n) => cf.slice(firstSeen[n], lastSeen[n] + 1).some((f) => f[n] === 0)); const dups = cf.filter((f) => names.some((n) => f[n] > 1)).length;
+  rec('UPLOAD-MULTI-CARDS-STABLE', okMulti && Math.max(...cf.map((f) => f.pend)) === 2 && cf.some((f) => f.spin === 2) && dups === 0 && holes.length === 0 && cf[cf.length - 1].pend === 0 ? 'PASS' : 'FAIL', { frames: cf.length, maxPending: Math.max(...cf.map((f) => f.pend)), framesBothSpinning: cf.filter((f) => f.spin === 2).length, duplicateFrames: dups, namesWithHoles: holes, endPending: cf[cf.length - 1].pend });
   await cdp('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }).catch(() => {});
 } catch (e) { rec('ERROR', 'FAIL', { message: String(e.message).slice(0, 300) }); await shot('error').catch(() => {}); }
 await finish();

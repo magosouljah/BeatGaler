@@ -62,9 +62,9 @@
 .lab-beat-tile--v2 .lab-beat-tile__detail-row{
   height:19px;display:flex;align-items:center;justify-content:space-between;gap:3px;
 }
-/* E79: las cinco estrellas se ven siempre; las vacías pasan de #454545 (2,0:1 sobre el fondo #0c0c0c, casi invisibles) a #6e6e6e (3,8:1). Posición y tamaño sin cambios. */
+/* E82: llenas ★ #f2f2f2 frente a vacías ☆ (contorno, #6e6e6e): se distinguen por forma, no solo por tono. E79: las cinco estrellas se ven siempre; las vacías pasan de #454545 (2,0:1 sobre el fondo #0c0c0c, casi invisibles) a #6e6e6e (3,8:1). Posición y tamaño sin cambios. */
 .lab-beat-tile--v2 .lab-beat-tile__stars{white-space:nowrap;letter-spacing:-1px;font-size:11px;color:#6e6e6e}
-.lab-beat-tile--v2 .lab-beat-tile__stars .is-filled{color:#d4d4d4}
+.lab-beat-tile--v2 .lab-beat-tile__stars .is-filled{color:#f2f2f2}
 .lab-beat-tile--v2 .lab-beat-tile__details{
   margin:0;min-width:0;white-space:nowrap;color:#818181;
   font:400 10.5px/1 var(--lab-font);letter-spacing:-.18px;

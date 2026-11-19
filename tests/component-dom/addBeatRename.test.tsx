@@ -106,10 +106,10 @@ describe("Add beat: nombre ≤ 50 caracteres", () => {
   });
 });
 
-import { importFailureNotice } from "../../src/features/library/catalog/useCatalogGalleryScope";
+import { importFailureMessage } from "../../src/features/library/catalog/useCatalogGalleryScope";
 describe("Add beat: aviso de fallo de importación", () => {
   it("sin transporte configurado (TRANSFER_UNAVAILABLE) lo dice claro y confirma que no se guardó; otros errores conservan su mensaje", () => {
-    expect(importFailureNotice("Mi beat", { code: "TRANSFER_UNAVAILABLE", message: "no transfer gateway is configured" })).toMatch(/Mi beat.*no está disponible.*no se guardó/s);
-    expect(importFailureNotice("Mi beat", new Error("El nombre admite como máximo 50 caracteres"))).toBe("No se pudo importar «Mi beat»: El nombre admite como máximo 50 caracteres");
+    expect(importFailureMessage({ code: "TRANSFER_UNAVAILABLE", message: "no transfer gateway is configured" })).toMatch(/no está disponible.*no se guardó/s);
+    expect(importFailureMessage(new Error("El nombre admite como máximo 50 caracteres"))).toBe("El nombre admite como máximo 50 caracteres");
   });
 });

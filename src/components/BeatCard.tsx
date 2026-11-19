@@ -672,7 +672,7 @@ export default function BeatCard({
           <button type="button" ref={node => { dotsRef.current = node; }} className="lab-beat-tile__more" aria-label={`More options for ${beat.name}`} disabled={!interactive} onClick={openMenu}>···</button>
         </div>
         <div className="lab-beat-tile__detail-row">
-          <span className="lab-beat-tile__stars" aria-label={`${beat.rating} out of 5 stars`}>{[1,2,3,4,5].map(i => <span key={i} className={i <= beat.rating ? "is-filled" : ""}>★</span>)}</span>
+          <span className="lab-beat-tile__stars" aria-label={`${beat.rating} out of 5 stars`}>{[1,2,3,4,5].map(i => <span key={i} className={i <= beat.rating ? "is-filled" : ""}>{i <= beat.rating ? "★" : "☆"}</span>)}</span>
           <span className="lab-beat-tile__details" title={`${beat.bpm} BPM · ${beat.key}`}>{beat.bpm ? `${beat.bpm} BPM` : "—"} · {beat.key.replace(/ minor$/, "m").replace(/ major$/, "") || "—"}</span>
         </div>
         <div className="lab-beat-tile__tags" data-beat-tag-trigger data-hidden-tags={JSON.stringify(compact.hidden)}

@@ -17,6 +17,8 @@ export interface CatalogVirtualGalleryProps {
   measure?: () => VirtualRowsMeasure;
   geometryOverride?: Partial<RowGeometry>;
   viewportHeightFallback?: number;
+  /** E83: tarjetas provisionales de subidas en curso: ocupan los primeros huecos de la rejilla (posición = ordinal + n) y se retiran en el mismo render en que llega la real. */
+  leadCards?: ReadonlyArray<{ id: string; node: ReactNode }>;
   onGoToStart?: () => void;
   /** Acciones del estado vacío (paridad con la Gallery anterior): «Add beat» en biblioteca vacía y «Clear filters» sin resultados. */
   onAddBeat?: () => void;
@@ -54,7 +56,9 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const sampleRef = useRef<HTMLDivElement | null>(null);
-  const rows = useCatalogVirtualRows({ store, snapshot, scrollerRef, trackRef, sampleCardRef: sampleRef, measure: props.measure, geometryOverride: props.geometryOverride, viewportHeightFallback: props.viewportHeightFallback });
+  const leadCards = snapshot.firstOrdinal === 0 ? props.leadCards ?? [] : [];
+  const lead = leadCards.length;
+  const rows = useCatalogVirtualRows({ store, snapshot, scrollerRef, trackRef, sampleCardRef: sampleRef, lead, measure: props.measure, geometryOverride: props.geometryOverride, viewportHeightFallback: props.viewportHeightFallback });
   const { geometry, originRow, range, firstResidentRow, lastResidentRow } = rows;
   const P = rowPitch(geometry);
 
@@ -75,7 +79,7 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
   const topOf = (globalRow: number) => rowTop(globalRow, originRow, geometry) + rowOffset;
   const total = snapshot.totalMatched;
   const copy = { ...DEFAULT_COPY, ...(props.statusCopy ?? {}) };
-  const statusLike = !["ready", "loading", "resolving", "idle"].includes(snapshot.status);
+  const statusLike = !["ready", "loading", "resolving", "idle"].includes(snapshot.status) && !(lead > 0 && snapshot.status === "empty");
   const error = snapshot.edgeError;
 
   return (
@@ -105,9 +109,13 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
         </div>
       )}
       {!statusLike && Array.from({ length: Math.max(0, range.end - range.start) }, (_, k) => range.start + k).map((globalRow) => {
-        const ordinals = ordinalsOfRow(globalRow, geometry.columns, Number.MAX_SAFE_INTEGER).filter((i) => i >= snapshot.firstOrdinal && i < snapshot.endOrdinal);
+        const positions = ordinalsOfRow(globalRow, geometry.columns, Number.MAX_SAFE_INTEGER);
+        const ordinals = positions.filter((p) => p >= lead).map((p) => p - lead).filter((i) => i >= snapshot.firstOrdinal && i < snapshot.endOrdinal);
         return (
           <div key={`${snapshot.queryGeneration}:${geometry.columns}:${globalRow}`} className="bg-catalog-row" role="presentation" data-catalog-row={globalRow} style={{ top: topOf(globalRow), height: geometry.rowHeight }}>
+            {positions.filter((p) => p < lead).map((p) => (
+              <article key={`lead:${leadCards[p].id}`} className="lab-gallery-item" data-pending-import={leadCards[p].id}>{leadCards[p].node}</article>
+            ))}
             {ordinals.map((ordinal, col) => {
               const item = store.itemAt(ordinal);
               if (!item) return <div key={`gap-${ordinal}`} aria-hidden="true" />;

@@ -87,10 +87,12 @@ export function Stars({
           onMouseLeave={() => onChange && setHov(null)}
           style={{
             fontSize: 13, cursor: onChange ? "pointer" : "default",
-            color: i <= (hov ?? n) ? "#f59e0b" : "#252525",
+            // E83: las cinco siempre visibles; vacías en contorno (☆) con el contraste de la BeatCard (antes #252525, casi invisibles sobre el panel).
+            color: i <= (hov ?? n) ? "#f59e0b" : "#6e6e6e",
             transition: "color 0.1s",
           }}
-        >★</span>
+          data-star-filled={i <= (hov ?? n) ? "true" : "false"}
+        >{i <= (hov ?? n) ? "★" : "☆"}</span>
       ))}
     </div>
   );

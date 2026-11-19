@@ -12,7 +12,6 @@ import { DEFAULT_FILTERS, filtersKey, isCatalogApiError } from "./catalogApi";
 
 export const BLOCK_SIZE = 240;
 export const MAX_BLOCKS = 6;
-export const MAX_RESIDENT_ITEMS = MAX_BLOCKS * BLOCK_SIZE;
 export const MAX_RESIDENT_BYTES = 12 * 1024 * 1024;
 export const MAX_INFLIGHT = 2;
 export const PREFETCH_VIEWPORTS_MIN = 1;

@@ -20,6 +20,7 @@ import { enqueueReview, nextReview, pendingTransferNotice, saveDrawerChanges, su
 import { resolveImportPlan } from "./catalogImportPlan";
 import { appAlert } from "../../../lib/dialog";
 import { cleanTags } from "../../../lib/metadataValidation";
+import { readBlobAsArrayBuffer } from "../../audio/mp3Metadata";
 import { downloadBeatFiles, saveBlobWithBrowser, type DownloadKind } from "./catalogDownloads";
 import type { CatalogBeatFile } from "./catalogCommandsApi";
 import { normalizeArtworkFile, replaceBeatArtwork, resolveArtworkFile } from "./catalogArtworkReplace";
@@ -45,11 +46,6 @@ export function importFailureMessage(error: unknown): string {
   if (e?.code === "TRANSFER_UNAVAILABLE") return "El servicio de almacenamiento de archivos no está disponible en este entorno. El beat no se guardó.";
   if (e?.code === "PROJECT_TOO_LARGE") return "El PROJECT supera el tamaño máximo de tu plan.";
   return String(e?.message ?? error);
-}
-export function importFailureNotice(name: string, error: unknown): string {
-  const e = error as { code?: unknown; detail?: { reason?: unknown }; message?: unknown } | null;
-  if (e && e.code === "TRANSFER_UNAVAILABLE") return `No se pudo importar «${name}»: el servicio de almacenamiento de archivos no está disponible en este entorno. El beat no se guardó.`;
-  return `No se pudo importar «${name}»: ${String(e?.message ?? error)}`;
 }
 
 export interface CatalogGalleryScopeOptions {
@@ -86,9 +82,12 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     const m = dtoById.current; m.delete(dto.id); m.set(dto.id, dto);
     while (m.size > KNOWN_BEATS_MAX) { const first = m.keys().next().value as string; if (first === audio.playingId) { const second = [...m.keys()][1]; if (second) m.delete(second); else break; } else m.delete(first); }
   }, [audio.playingId]);
+  const seededArtwork = useRef(new Map<string, string>());
+  const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot;
   const toBeat = useCallback((dto: CatalogBeatDto): Beat => {
     remember(dto);
-    const url = dto.artwork ? artworkUrls[dto.artwork.fileId] ?? null : null;
+    // E83: la tarjeta real que sustituye a la provisional nace con la portada de esta (sin fotograma negro hasta que cargue la de Telegram).
+    const url = dto.artwork ? artworkUrls[dto.artwork.fileId] ?? seededArtwork.current.get(dto.id) ?? null : null;
     return beatFromCatalogDetail(dto, url || null, url === "");
   }, [artworkUrls, remember]);
   const beatById = useCallback((id: string): Beat => { const dto = dtoById.current.get(id); return dto ? toBeat(dto) : placeholderBeat(id); }, [toBeat]);
@@ -393,6 +392,18 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   // E80: el avance es el de los BYTES enviados por Direct B (no por archivo terminado); con varias subidas, el total es bytes enviados / bytes
   // totales de todas (una subida grande pesa lo que pesa, no lo mismo que una pequeña). El estado solo cambia cuando cambia el % entero.
   const [uploads, setUploads] = useState<Array<{ id: string; name: string; percent: number; uploadedBytes: number; totalBytes: number }>>([]);
+  // E83: tarjeta ÚNICA y estable del beat que se sube (la BeatCard original con el logo giratorio): ocupa el primer hueco de la MISMA rejilla virtual
+  // (no un bloque aparte) y se retira en el mismo render en que llega la tarjeta real de PostgreSQL, que hereda la portada y el overlay (completado
+  // incluido). Como en el original, aparece arriba sea cual sea el orden (la real ocupa luego su sitio ordenado: manual → el mismo hueco);
+  // solo con la lista al inicio y sin búsqueda ni etiquetas (un beat que no encajaría en esa vista no se dibuja: queda el aviso de progreso).
+  const [pendingImports, setPendingImports] = useState<Array<{ id: string; beat: Beat; realId: string | null }>>([]);
+  const residentIds = useMemo(() => { const s = new Set<string>(); if (pendingImports.some((p) => p.realId)) for (const b of snapshot.blocks) for (const it of b.items) s.add(it.id); return s; }, [snapshot.blocks, pendingImports]);
+  const pendingCards = useMemo(() => pendingImports.filter((p) => !(p.realId && residentIds.has(p.realId))).map(({ id, beat }) => ({ id, beat })), [pendingImports, residentIds]);
+  useEffect(() => {
+    const done = pendingImports.filter((p) => p.realId && residentIds.has(p.realId)); if (done.length === 0) return;
+    setPendingImports((list) => list.filter((p) => !done.some((d) => d.id === p.id)));
+    for (const p of done) { setBeatCloudUpdateBusy(p.realId as string, false, true); setBeatCloudUpdateBusy(p.id, false); window.setTimeout(() => seededArtwork.current.delete(p.realId as string), 4000); } // la real ya montada: completa su overlay
+  }, [pendingImports, residentIds]);
   const uploadNotice = uploads.length === 0 ? null
     : uploads.length === 1 ? `Subiendo «${uploads[0].name}»… ${uploads[0].percent} %`
     : `Subiendo ${uploads.length} beats… ${aggregateUploadPercent(uploads)} %`;
@@ -430,15 +441,28 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
       return;
     }
     setUploads((list) => [...list.filter((x) => x.id !== uploadId), { id: uploadId, name: updated.name, percent, ...bytes }]);
+    const snap = snapshotRef.current; const scroller = typeof document !== "undefined" ? document.querySelector<HTMLElement>('[data-library-scroll="true"]') : null;
+    const lands = snap.filters.state === "ACTIVE" && !snap.filters.q.trim() && snap.filters.includeTags.length === 0 && snap.filters.excludeTags.length === 0 && snap.firstOrdinal === 0 && (!scroller || scroller.scrollTop < 24);
+    if (lands) { setPendingImports((list) => [{ id: uploadId, beat: updated, realId: null }, ...list.filter((x) => x.id !== uploadId)]); setBeatCloudUpdateBusy(uploadId, true); }
+    const dropPending = () => { setPendingImports((list) => list.filter((x) => x.id !== uploadId)); setBeatCloudUpdateBusy(uploadId, false); };
     setNotice((n) => (n && noticeTone(n) === "success" ? null : n)); // un «importado» anterior no tapa el avance de esta subida; errores e inciertos sí permanecen
     setReview(null); // cierra la revisión ya: el archivo sigue retenido hasta que termine la subida
     void job.then(({ outcome, error }) => {
       setUploads((list) => list.filter((x) => x.id !== uploadId));
       if (outcome && outcome.status === "committed") {
-        platform.importer.releaseBeat(r.beat.id); refreshAfterMutation(); // PostgreSQL ya lo tiene: la Gallery se actualiza en el sitio con la tarjeta real
+        platform.importer.releaseBeat(r.beat.id);
+        // Traspaso: la tarjeta real nace ya «ocupada» y con la portada de la provisional; la provisional se retira cuando la real está residente.
+        const realId = (outcome as { beatId?: string }).beatId;
+        if (lands && realId) {
+          setBeatCloudUpdateBusy(realId, true); if (updated.image_base64 && String(updated.image_base64).startsWith("data:")) seededArtwork.current.set(realId, String(updated.image_base64));
+          setPendingImports((list) => list.map((x) => (x.id === uploadId ? { ...x, realId } : x)));
+          window.setTimeout(() => { setBeatCloudUpdateBusy(realId, false, true); dropPending(); }, 5000); // red de seguridad si la real no llega a esta vista (idempotente)
+        }
+        refreshAfterMutation(); // PostgreSQL ya lo tiene: la Gallery se actualiza en el sitio con la tarjeta real
         setNotice((n) => (n && noticeTone(n) === "error" ? n : `«${updated.name}» importado.`));
         return;
       }
+      dropPending(); // fallo o incierto: ninguna tarjeta falsa permanente
       // §6.1-7: RECONCILE («blocked») y tiempo agotado también pueden confirmarse después: como «uncertain», sin reabrir para reenviar.
       if (outcome && (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout")) { platform.importer.releaseBeat(r.beat.id); setNotice(outcome.status === "uncertain" ? uncertainNotice(updated.name) : pendingTransferNotice(updated.name)); refreshAfterMutation(); return; }
       const reason = error ? importFailureMessage(error) : (outcome as { error?: unknown } | null)?.error ? importFailureMessage((outcome as { error?: unknown }).error) : `quedó en estado ${outcome ? outcome.status : "desconocido"}`;
@@ -487,7 +511,10 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const downloadKind = useCallback((kind: DownloadKind) => {
     if (!cloudFiles || downloadBusy) return;
     setDownloadBusy(kind);
-    void downloadBeatFiles({ files: cloudFiles.files, kind, beatName: cloudFiles.beat.name, download: (id) => media.downloadFile(id), save: saveBlobWithBrowser }).then((r) => {
+    const dlBeat = cloudFiles.beat; const artFile = cloudFiles.files.find((f) => f.role === "ARTWORK" && f.current && f.status !== "DELETED");
+    const mp3Tags = { metadata: { name: dlBeat.name, bpm: dlBeat.bpm, key: dlBeat.key, tags: dlBeat.tags, rating: dlBeat.rating },
+      artwork: artFile ? async () => { const { blob } = await media.downloadFile(artFile.fileId); return { mimeType: blob.type || artFile.mime || "image/png", bytes: await readBlobAsArrayBuffer(blob) }; } : undefined };
+    void downloadBeatFiles({ files: cloudFiles.files, kind, beatName: dlBeat.name, download: (id) => media.downloadFile(id), save: saveBlobWithBrowser, mp3Tags }).then((r) => {
       if (r.status === "done") { setDownloaded((d) => new Set(d).add(kind)); setNotice(r.saved.length > 1 ? `${r.saved.length} archivos descargados.` : `«${r.saved[0]}» descargado.`); }
       else if (r.status === "empty") setNotice("Ese archivo no está disponible para este beat.");
       else setNotice(`No se pudo descargar: ${r.message}`);
@@ -506,7 +533,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     drawer, setDrawer, updateBeat, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
-    showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, uploads, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
+    showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, uploads, pendingCards, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
     notice: notice ?? uploadNotice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
     accountId, context,

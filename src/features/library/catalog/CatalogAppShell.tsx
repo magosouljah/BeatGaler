@@ -129,6 +129,17 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           {/* E79: los beats que están subiendo no tienen tarjeta; la Gallery solo dibuja lo que PostgreSQL confirma (una representación por beat). */}
           <CatalogVirtualGallery store={services.store} scrollerRef={scrollerRef} tenantKey={tenantKey} renderCard={renderCard} viewportHeightFallback={viewportHeightFallback}
             onMountCard={scope.onMountCard} onUnmountCard={scope.onUnmountCard}
+            leadCards={scope.pendingCards.map(({ id, beat }) => ({ id, node: (
+              // E83: la BeatCard original de una subida en curso (logo de BeatGaler girando sobre la portada, sin reproducción): ocupa el primer hueco de la rejilla.
+              <BeatCard
+                beat={beat} visible interactive={false} playbackInteractive={false} openableProject={false} tagFrequency={scope.tagFrequency} showIncompleteWarnings={false}
+                playing={false} selected={false} selectedCount={0} selectMode={false}
+                dragEnabled={false} networkOnline={scope.connectionState === "online"} offlineBusy={false} canUseOfflinePackage={false} canUseLocalHelper={false} canInspectNativeProject={false}
+                onToggleOffline={() => {}} onRetryUpload={() => {}} onBulkEdit={() => {}} onBulkUpload={() => {}} onBulkDelete={() => {}}
+                onPlay={() => {}} onWarm={() => {}} onDetail={() => {}} onEdit={() => {}} onDelete={() => {}} onAddToQueue={() => {}}
+                onUpload={() => {}} onUploadTelegram={() => {}} onDownloadTelegram={() => {}} onUploadProjectTelegram={() => {}} onOpenProject={() => {}} onUpdateProject={() => {}} onCloudFiles={() => {}}
+                onToggleSelect={() => {}} animDelay={0}
+              />) }))}
             cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false" })}
             onGoToStart={() => { void services.store.loadFirst(); }} onAddBeat={openAdd} onClearFilters={() => { scope.setSearch(""); scope.clearTagFilters(); }} />
         </div>
