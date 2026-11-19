@@ -196,11 +196,15 @@ function makeSpec(seedText: string) {
   return { blobs, targetCoverage };
 }
 
-function renderProceduralCanvas(seedText: string, outputSize = OUTPUT_SIZE, backgroundHex = BACKGROUND_HEX): HTMLCanvasElement | null {
+type DrawTarget = HTMLCanvasElement | OffscreenCanvas;
+// Lienzo fuente de 16×16 reutilizado: crear un contexto 2D por tarjeta costaba ~2 ms cada uno (E80). drawImage toma la instantánea al llamarse.
+let sharedSource: HTMLCanvasElement | null = null;
+
+function renderProceduralCanvas<T extends DrawTarget = HTMLCanvasElement>(seedText: string, outputSize = OUTPUT_SIZE, backgroundHex = BACKGROUND_HEX, target?: T): T | null {
   if (typeof document === "undefined") return null;
   const spec = makeSpec(seedText);
   const bg = hexToRgb01(backgroundHex);
-  const source = document.createElement("canvas");
+  const source = (sharedSource ??= document.createElement("canvas"));
   source.width = INTERNAL_SIZE;
   source.height = INTERNAL_SIZE;
   const sctx = source.getContext("2d");
@@ -255,10 +259,10 @@ function renderProceduralCanvas(seedText: string, outputSize = OUTPUT_SIZE, back
   }
   sctx.putImageData(image, 0, 0);
 
-  const output = document.createElement("canvas");
+  const output = (target ?? document.createElement("canvas")) as T;
   output.width = outputSize;
   output.height = outputSize;
-  const ctx = output.getContext("2d");
+  const ctx = output.getContext("2d") as CanvasRenderingContext2D | null;
   if (!ctx) return null;
   ctx.clearRect(0, 0, output.width, output.height);
   ctx.fillStyle = backgroundHex;
@@ -272,6 +276,25 @@ function renderProceduralCanvas(seedText: string, outputSize = OUTPUT_SIZE, back
   ctx.drawImage(source, -pad, -pad, output.width + pad * 2, output.height + pad * 2);
   ctx.restore();
   return output;
+}
+
+/** Dibuja el fondo procedural del beat DIRECTAMENTE en `canvas` (mismas operaciones y píxeles que la imagen de
+ * `getProceduralBeatBackgroundDataUrl`) sin codificar un PNG: en la Gallery la codificación síncrona costaba ~5 ms por tarjeta (E80). */
+// Con OffscreenCanvas se dibuja en UN lienzo compartido y el bitmap se transfiere al <canvas> visible (contexto `bitmaprenderer`, sin
+// contexto 2D ni copia por tarjeta); sin esa API se dibuja con 2D en el propio lienzo. Mismas operaciones de dibujo en ambos casos.
+let sharedOutput: OffscreenCanvas | null = null;
+export function drawProceduralBeatBackground(canvas: HTMLCanvasElement, beatId: string): boolean {
+  const seed = `${GENERATOR_VERSION}:${beatId}`;
+  if (typeof OffscreenCanvas === "function" && typeof ImageBitmapRenderingContext !== "undefined") {
+    const out = renderProceduralCanvas(seed, OUTPUT_SIZE, BACKGROUND_HEX, (sharedOutput ??= new OffscreenCanvas(OUTPUT_SIZE, OUTPUT_SIZE)));
+    if (out) {
+      const bitmap = out.transferToImageBitmap();
+      const ctx = canvas.getContext("bitmaprenderer");
+      if (ctx) { canvas.width = OUTPUT_SIZE; canvas.height = OUTPUT_SIZE; ctx.transferFromImageBitmap(bitmap); return true; }
+      bitmap.close();
+    }
+  }
+  return renderProceduralCanvas(seed, OUTPUT_SIZE, BACKGROUND_HEX, canvas) !== null;
 }
 
 export function getProceduralBeatBackgroundDataUrl(beatId: string): string | null {

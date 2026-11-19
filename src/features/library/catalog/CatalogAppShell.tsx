@@ -122,27 +122,11 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
       )}
       <div ref={scrollerRef} className="lab-gallery-main" data-library-scroll="true" aria-busy={scope.loading}
         style={{ flex: 1, position: "relative", overflowY: "auto", paddingBottom: currentBeat ? 140 : 90 }}>
-        <div className="bg-catalog-shell-status" role="status" aria-live="polite" data-selection-count={selectedCount} data-selection-status={interaction.selection.status} data-playback-status={playback.status} data-store-status={snapshot.status}>
+        <div className="bg-catalog-shell-status" role="status" aria-live="polite" data-uploads={scope.uploads.length} data-selection-count={selectedCount} data-selection-status={interaction.selection.status} data-playback-status={playback.status} data-store-status={snapshot.status}>
           {/* Los avisos son flotantes (FloatingNotice, fixed): no ocupan espacio aquí ni desplazan la Gallery. */}
         </div>
         <div className="bg-catalog-grid-host" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut} onPointerDown={tagPeek.onPointerDown} onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}>
-          {scope.pendingImports.length > 0 && (
-            <div className="bg-catalog-pending" data-catalog-pending={scope.pendingImports.length} role="status" aria-label="Beats importándose">
-              {scope.pendingImports.map(({ id, beat }) => (
-                <article key={id} className="lab-gallery-item" data-pending-import={id}>
-                  <BeatCard
-                    beat={beat} visible interactive={false} playbackInteractive={false} openableProject={false} tagFrequency={scope.tagFrequency} showIncompleteWarnings={false}
-                    playing={false} selected={false} selectedCount={0} selectMode={false}
-                    dragEnabled={false} networkOnline={scope.connectionState === "online"} offlineBusy={false} canUseOfflinePackage={false} canUseLocalHelper={false} canInspectNativeProject={false}
-                    onToggleOffline={() => {}} onRetryUpload={() => {}} onBulkEdit={() => {}} onBulkUpload={() => {}} onBulkDelete={() => {}}
-                    onPlay={() => {}} onWarm={() => {}} onDetail={() => {}} onEdit={() => {}} onDelete={() => {}} onAddToQueue={() => {}}
-                    onUpload={() => {}} onUploadTelegram={() => {}} onDownloadTelegram={() => {}} onUploadProjectTelegram={() => {}} onOpenProject={() => {}} onUpdateProject={() => {}} onCloudFiles={() => {}}
-                    onToggleSelect={() => {}} animDelay={0}
-                  />
-                </article>
-              ))}
-            </div>
-          )}
+          {/* E79: los beats que están subiendo no tienen tarjeta; la Gallery solo dibuja lo que PostgreSQL confirma (una representación por beat). */}
           <CatalogVirtualGallery store={services.store} scrollerRef={scrollerRef} tenantKey={tenantKey} renderCard={renderCard} viewportHeightFallback={viewportHeightFallback}
             onMountCard={scope.onMountCard} onUnmountCard={scope.onUnmountCard}
             cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false" })}
@@ -180,7 +164,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={incompleteWarnings} onIncompleteWarningsChanged={setIncompleteWarnings} customCursorEnabled onCustomCursorChanged={() => {}}
           telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.handleDisconnectTelegramAccount}
-          onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} hideCustomCursor trashSource={trashSource} onBeatRestored={() => { void scope.reloadLibrary(); }} />
+          onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} hideCustomCursor trashSource={trashSource} localCaches={services.localCaches} onBeatRestored={() => { void scope.reloadLibrary(); }} />
       )}
       {drawer && (
         <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }} onSaved={scope.updateBeat}

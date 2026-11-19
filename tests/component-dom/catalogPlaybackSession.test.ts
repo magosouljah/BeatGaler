@@ -23,7 +23,7 @@ function harness(opts: Parameters<typeof createCatalogFakeCommands>[0] = {}) {
     async releaseRound(roundId) { await fetchImpl(`https://cloud.invalid/api/catalog/v1/playback/rounds/${roundId}/release`, { method: "POST", headers: { "X-Catalog-Era": "e", "X-Catalog-Epoch": "1", "Content-Type": "application/json" }, body: "{}" }); },
     async neighbor(input) { const p = new URLSearchParams({ direction: input.direction, sort: input.sort }); if (input.beatId) p.set("beatId", input.beatId); const r = await fetchImpl(`https://cloud.invalid/api/catalog/v1/query-sets/${input.setId}/neighbor?${p}`, { method: "GET", headers: {} }); return r.json(); },
   };
-  const media = createCatalogMediaClient({ ...common, accountId: () => "acc-1", createObjectURL: () => `blob:${Math.random()}`, revokeObjectURL: () => {} });
+  const media = createCatalogMediaClient({ ...common, direct: server.directPort, accountId: () => "acc-1", createObjectURL: () => `blob:${Math.random()}`, revokeObjectURL: () => {} });
   const sets = new Map<string, Promise<{ setId: string; memberCount: number }>>();
   const resolveSet = (q: PlaybackQuery) => { const k = JSON.stringify([q.filters, q.revision]); if (!sets.has(k)) sets.set(k, (async () => { const r = await fetchImpl("https://cloud.invalid/api/catalog/v1/query-sets", { method: "POST", headers: { "X-Catalog-Era": "e", "X-Catalog-Epoch": "1", "Content-Type": "application/json" }, body: JSON.stringify({ query: { ...q.filters, sort: q.sort }, consumer: { id: "p", kind: "SHUFFLE" } }) }); const b = await r.json(); return { setId: b.setId, memberCount: b.memberCount }; })()); return sets.get(k)!; };
   let account = "acc-1"; const released: string[] = [];

@@ -12,6 +12,11 @@ import type {
   WebTransportLibraryIndexResult,
   WebTransportPrefetchBatchInput,
   WebTransportPrefetchBatchResult,
+  WebTransportCatalogReadInput,
+  WebTransportCatalogReadResult,
+  WebTransportCatalogSendInput,
+  WebTransportCatalogSendResult,
+  WebTransportDirectFailure,
   WebTransportPrefetchChunk,
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
@@ -79,7 +84,7 @@ function quarantinePlaybackRoute(messageId: number, code: WebTransportErrorCode 
 }
 
 export class WebTransportWorkerError extends Error {
-  constructor(message: string, readonly code?: WebTransportErrorCode) {
+  constructor(message: string, readonly code?: WebTransportErrorCode, readonly failure?: WebTransportDirectFailure) {
     super(message);
     this.name = "WebTransportWorkerError";
   }
@@ -294,7 +299,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       if (completed.operation === "prefetch" && completed.prefetchMessageId) {
         quarantinePlaybackRoute(completed.prefetchMessageId, message.code);
       }
-      completed.reject(new WebTransportWorkerError(message.error, message.code));
+      completed.reject(new WebTransportWorkerError(message.error, message.code, message.failure));
       return;
     }
     if (completed.operation === "prefetch") {
@@ -705,6 +710,17 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   upload(input: WebTransportUploadInput, onProgress?: (progress: WebTransportProgress) => void): Promise<WebTransportUploadResult> {
     return this.request<WebTransportUploadResult>({ op: "upload", input }, onProgress);
+  }
+
+  /** E70: lectura de un rango del vault. Cancelable con `cancel` (aborta la descarga en el Worker). */
+  catalogRead(input: WebTransportCatalogReadInput, requestId: ReturnType<typeof crypto.randomUUID> = crypto.randomUUID()): Promise<WebTransportCatalogReadResult> {
+    return this.request<WebTransportCatalogReadResult>({ op: "catalog_read", input }, undefined, undefined, requestId);
+  }
+  cancelCatalogRead(targetRequestId: string): void { this.sendStreamControl("cancel", targetRequestId); }
+
+  /** E70: envío directo de una parte del catálogo con la identidad del ticket. Un error lleva `failure` (clasificación fail-closed). */
+  catalogSend(input: WebTransportCatalogSendInput, onProgress?: (progress: WebTransportProgress) => void): Promise<WebTransportCatalogSendResult> {
+    return this.request<WebTransportCatalogSendResult>({ op: "catalog_send", input }, onProgress);
   }
 
   async shutdown(): Promise<void> {

@@ -95,6 +95,6 @@ describe("Papelera nativa (Settings → Trash)", () => {
   it("restaurar con conflicto o un beat desconocido falla con aviso; purga bloqueada falla", async () => {
     const src = createCatalogTrashSource({ api: { listBeats: async () => ({ items: [dto("b1", "Uno")] }) } as never, mutations: { restoreBeats: async () => ({ status: "CONFLICT" }), purgeTrash: async () => ({ status: "blocked", operationId: "o" }), purgeState: vi.fn() } as never, sleep: async () => {} });
     await expect(src.restoreBeat("zz")).rejects.toThrow(/ya no está/); await src.listBeats();
-    await expect(src.restoreBeat("b1")).rejects.toThrow(/cambió en otro dispositivo/); await expect(src.purgeBeats()).rejects.toThrow(/bloqueada en el servidor; no se eliminó ningún beat/);
+    await expect(src.restoreBeat("b1")).rejects.toThrow(/cambió en otro dispositivo/); await expect(src.purgeBeats()).rejects.toThrow(/No se pudo eliminar definitivamente ningún beat/);
   });
 });

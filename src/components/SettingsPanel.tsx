@@ -7,6 +7,7 @@ import type {
   PlatformTrashItem as TrashItem,
 } from "../platform/contracts";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
+import type { CatalogLocalCacheKind, CatalogLocalCacheUsage, CatalogLocalCaches } from "../features/library/catalog/catalogLocalCaches";
 import {
   beginMfaSetup, changeBeatGalerPassword, confirmBeatGalerEmailChange, disableMfa, disconnectOAuthProvider,
   enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, startBeatGalerCheckout, oauthBeatGalerAccount,
@@ -33,6 +34,8 @@ interface Props {
   /** Oculta el ajuste «Custom cursor» (la Gallery PostgreSQL usa el cursor normal del navegador). */
   hideCustomCursor?: boolean;
   trashSource?: { listBeats(): Promise<import("../platform/contracts").PlatformTrashItem[]>; restoreBeat(id: string): Promise<Beat>; purgeBeats(): Promise<number> };
+  /** Catálogo PostgreSQL (E80): copias locales de este dispositivo (metadatos de arranque, inicios de audio, portadas) con su uso y limpieza. */
+  localCaches?: CatalogLocalCaches;
 }
 
 type Section = "account" | "plan" | "preferences" | "trash" | "tools" | "privacy" | "terms";
@@ -122,6 +125,8 @@ export default function SettingsPanel(props: Props) {
   const [cacheStatus, setCacheStatus] = useState<PlaybackCacheStatus | null>(null);
   const [cacheBusy, setCacheBusy] = useState(false);
   const [customCacheMb, setCustomCacheMb] = useState("2048");
+  const [localUsage, setLocalUsage] = useState<CatalogLocalCacheUsage[] | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const navigationSections: Section[] = [
@@ -183,6 +188,7 @@ export default function SettingsPanel(props: Props) {
       setLoadingTrash(false);
       setLoadingPresetTrash(false);
     }
+    if (props.localCaches) props.localCaches.usage().then(u => { if (active) setLocalUsage(u); }).catch(() => { if (active) setLocalUsage([]); });
     if (platform.capabilities.playbackCache) {
       platform.playbackCache.status().then(status => {
         if (active) { setCacheStatus(status); setCustomCacheMb(String(status.limit_mb)); }
@@ -209,6 +215,14 @@ export default function SettingsPanel(props: Props) {
       setCacheStatus(status);
       setCustomCacheMb(String(status.limit_mb));
     } finally { setCacheBusy(false); }
+  };
+
+  // Copias locales del catálogo: limpiar solo libera espacio en este dispositivo (nunca toca PostgreSQL ni Telegram).
+  const clearLocal = async (kind: CatalogLocalCacheKind | "all") => {
+    if (!props.localCaches) return;
+    setLocalBusy(true);
+    try { setLocalUsage(await props.localCaches.clear(kind)); } catch { /* el uso se vuelve a leer al reabrir Settings */ }
+    finally { setLocalBusy(false); }
   };
 
   const clearCache = async () => {
@@ -430,6 +444,25 @@ export default function SettingsPanel(props: Props) {
   };
 
   const switchButton = (enabled: boolean, onClick: () => void) => <button disabled={preferenceBusy} onClick={onClick} style={{ width: 40, height: 22, padding: 2, borderRadius: 20, border: "1px solid #303030", background: enabled ? "#ddd" : "#1b1b1b", cursor: preferenceBusy ? "default" : "pointer" }}><span style={{ display: "block", width: 16, height: 16, borderRadius: "50%", background: enabled ? "#111" : "#666", transform: enabled ? "translateX(16px)" : "translateX(0)", transition: "transform .15s" }}/></button>;
+  const LOCAL_CACHE_COPY: Record<CatalogLocalCacheKind, { name: string; hint: string }> = {
+    metadata: { name: "Gallery data", hint: "The first beats of your Gallery, so it opens instantly." },
+    prefixes: { name: "Audio starts", hint: "The first seconds of each MP3, so playback starts instantly." },
+    artwork: { name: "Original covers", hint: "Cover art already downloaded, so it is not downloaded again." },
+  };
+  const localTotal = (localUsage ?? []).reduce((n, u) => n + u.bytes, 0);
+  const localStorageBlock = <div data-settings-local-storage="" style={{ padding: "14px 0 4px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+      <div><div style={{ fontSize: 13, color: "#bbb" }}>Storage on this device</div><div style={{ fontSize: 10, color: "#555", marginTop: 3, maxWidth: 380 }}>Copies kept on this device so the Gallery opens and plays faster. Clearing them only frees space here: your beats and files in Galer Cloud are not affected. Older copies are removed automatically when a limit is reached.</div></div>
+      <button disabled={localBusy || !localUsage || localTotal === 0} onClick={() => void clearLocal("all")} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10, whiteSpace: "nowrap" }}>Clear all</button>
+    </div>
+    <div style={{ marginTop: 10 }}>
+      {(localUsage ?? []).filter(u => u.available).map(u => <div key={u.kind} data-local-cache={u.kind} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "8px 0", borderTop: "1px solid #181818" }}>
+        <div><div style={{ fontSize: 12, color: "#aaa" }}>{LOCAL_CACHE_COPY[u.kind].name}</div><div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>{LOCAL_CACHE_COPY[u.kind].hint}</div></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}><span data-local-cache-used={u.bytes} style={{ fontSize: 10, color: "#666" }}>{formatBytes(u.bytes)}{u.limitBytes ? ` of ${formatBytes(u.limitBytes)}` : ""}</span><button disabled={localBusy || u.bytes === 0} onClick={() => void clearLocal(u.kind)} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Clear</button></div>
+      </div>)}
+      {!localUsage && <div style={{ fontSize: 10, color: "#666", padding: "8px 0" }}>Used: …</div>}
+    </div>
+  </div>;
   const card = (children: React.ReactNode) => <div style={{ border: "1px solid #202020", background: "#121212", borderRadius: 12, padding: 18, marginBottom: 14 }}>{children}</div>;
   const title = (heading: string, sub: string) => <div style={{ marginBottom: 24 }}><div style={{ fontSize: 23, color: "#e7e7e7", fontWeight: 650, letterSpacing: -.4 }}>{heading}</div><div style={{ marginTop: 5, color: "#666", fontSize: 12 }}>{sub}</div></div>;
 
@@ -583,7 +616,7 @@ export default function SettingsPanel(props: Props) {
           {accountError && <div style={{ marginTop: 12, padding: 10, border: "1px solid #542020", background: "#241010", borderRadius: 8, color: "#e6a0a0", fontSize: 10 }}>{sanitizeUserVisibleText(accountError)}</div>}
         </>}
 
-        {active === "preferences" && <>{title("Preferences", "Control how BeatGaler behaves on this device.")}{card(<><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Incomplete file warnings</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Warn when Samples or a project file is missing.</div></div>{switchButton(showIncompleteWarnings, toggleIncomplete)}</div>{!props.hideCustomCursor && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0 8px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Custom cursor</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Use the BeatGaler custom pointer.</div></div>{switchButton(customCursorEnabled, toggleCursor)}</div>}{platform.capabilities.playbackCache && <div style={{ padding: "14px 0 4px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Playback cache</div><div style={{ fontSize: 10, color: "#555", marginTop: 3, maxWidth: 380 }}>Keeps recently played MASTER MP3s on this device so repeat playback starts instantly. BeatGaler removes older cached audio automatically when the limit is reached.</div></div><select disabled={cacheBusy || !cacheStatus} value={[0,500,1024,2048,5120,10240].includes(cacheStatus?.limit_mb ?? -1) ? String(cacheStatus?.limit_mb ?? 2048) : "custom"} onChange={(e) => { if (e.target.value !== "custom") void updateCacheLimit(Number(e.target.value)); }} style={{ background: "#151515", color: "#bbb", border: "1px solid #2a2a2a", borderRadius: 7, padding: "7px 9px", minWidth: 110 }}><option value="0">Off</option><option value="500">500 MB</option><option value="1024">1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option><option value="10240">10 GB</option><option value="custom">Custom…</option></select></div><div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}><span style={{ fontSize: 10, color: "#666" }}>Used: {cacheStatus ? formatBytes(cacheStatus.used_bytes) : "…"}{cacheStatus && cacheStatus.limit_mb > 0 ? ` of ${cacheStatus.limit_mb >= 1024 ? `${(cacheStatus.limit_mb / 1024).toFixed(cacheStatus.limit_mb % 1024 === 0 ? 0 : 1)} GB` : `${cacheStatus.limit_mb} MB`}` : ""}</span><input type="number" min={0} max={51200} step={100} value={customCacheMb} onChange={(e) => setCustomCacheMb(e.target.value)} style={{ width: 90, background: "#111", color: "#aaa", border: "1px solid #272727", borderRadius: 6, padding: "6px 7px", fontSize: 10 }} /><span style={{ fontSize: 10, color: "#555" }}>MB</span><button disabled={cacheBusy || !customCacheMb} onClick={() => void updateCacheLimit(Number(customCacheMb))} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Set</button><button disabled={cacheBusy || !cacheStatus || cacheStatus.used_bytes === 0} onClick={() => void clearCache()} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Clear cache</button></div></div>}</>)}</>}
+        {active === "preferences" && <>{title("Preferences", "Control how BeatGaler behaves on this device.")}{card(<><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0" }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Incomplete file warnings</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Warn when Samples or a project file is missing.</div></div>{switchButton(showIncompleteWarnings, toggleIncomplete)}</div>{!props.hideCustomCursor && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0 8px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Custom cursor</div><div style={{ fontSize: 10, color: "#555", marginTop: 3 }}>Use the BeatGaler custom pointer.</div></div>{switchButton(customCursorEnabled, toggleCursor)}</div>}{platform.capabilities.playbackCache && <div style={{ padding: "14px 0 4px", borderTop: "1px solid #1c1c1c", marginTop: 8 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}><div><div style={{ fontSize: 13, color: "#bbb" }}>Playback cache</div><div style={{ fontSize: 10, color: "#555", marginTop: 3, maxWidth: 380 }}>Keeps recently played MASTER MP3s on this device so repeat playback starts instantly. BeatGaler removes older cached audio automatically when the limit is reached.</div></div><select disabled={cacheBusy || !cacheStatus} value={[0,500,1024,2048,5120,10240].includes(cacheStatus?.limit_mb ?? -1) ? String(cacheStatus?.limit_mb ?? 2048) : "custom"} onChange={(e) => { if (e.target.value !== "custom") void updateCacheLimit(Number(e.target.value)); }} style={{ background: "#151515", color: "#bbb", border: "1px solid #2a2a2a", borderRadius: 7, padding: "7px 9px", minWidth: 110 }}><option value="0">Off</option><option value="500">500 MB</option><option value="1024">1 GB</option><option value="2048">2 GB</option><option value="5120">5 GB</option><option value="10240">10 GB</option><option value="custom">Custom…</option></select></div><div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" }}><span style={{ fontSize: 10, color: "#666" }}>Used: {cacheStatus ? formatBytes(cacheStatus.used_bytes) : "…"}{cacheStatus && cacheStatus.limit_mb > 0 ? ` of ${cacheStatus.limit_mb >= 1024 ? `${(cacheStatus.limit_mb / 1024).toFixed(cacheStatus.limit_mb % 1024 === 0 ? 0 : 1)} GB` : `${cacheStatus.limit_mb} MB`}` : ""}</span><input type="number" min={0} max={51200} step={100} value={customCacheMb} onChange={(e) => setCustomCacheMb(e.target.value)} style={{ width: 90, background: "#111", color: "#aaa", border: "1px solid #272727", borderRadius: 6, padding: "6px 7px", fontSize: 10 }} /><span style={{ fontSize: 10, color: "#555" }}>MB</span><button disabled={cacheBusy || !customCacheMb} onClick={() => void updateCacheLimit(Number(customCacheMb))} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Set</button><button disabled={cacheBusy || !cacheStatus || cacheStatus.used_bytes === 0} onClick={() => void clearCache()} style={{ ...buttonStyle, padding: "6px 9px", fontSize: 10 }}>Clear cache</button></div></div>}{props.localCaches && localStorageBlock}</>)}</>}
 
         {active === "trash" && platform.capabilities.trashLifecycle && <>
           {title("Trash", platform.capabilities.localHelper

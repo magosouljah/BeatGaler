@@ -9,7 +9,7 @@ import { createCatalogFakeCommands, fakeBeats } from "../helpers/catalogFakeComm
 function harness(opts: Parameters<typeof createCatalogFakeCommands>[0] = {}) {
   const server = createCatalogFakeCommands({ beats: fakeBeats(20), ...opts });
   let account = "acc-1"; const urls: string[] = []; const revoked: string[] = []; let n = 0;
-  const client = createCatalogMediaClient({ fetchImpl: server.fetchImpl, baseUrl: () => "https://cloud.invalid/api", token: () => "tok", csrf: () => "c", headers: () => ({ era: "era-fake", epoch: "1" }), accountId: () => account, artworkBudgetBytes: 3000, artworkConcurrency: 2, createObjectURL: () => { const u = `blob:fake/${++n}`; urls.push(u); return u; }, revokeObjectURL: (u) => { revoked.push(u); } });
+  const client = createCatalogMediaClient({ direct: server.directPort, fetchImpl: server.fetchImpl, baseUrl: () => "https://cloud.invalid/api", token: () => "tok", csrf: () => "c", headers: () => ({ era: "era-fake", epoch: "1" }), accountId: () => account, artworkBudgetBytes: 3000, artworkConcurrency: 2, createObjectURL: () => { const u = `blob:fake/${++n}`; urls.push(u); return u; }, revokeObjectURL: (u) => { revoked.push(u); } });
   return { server, client, urls, revoked, setAccount: (a: string) => { account = a; } };
 }
 
@@ -19,7 +19,7 @@ describe("catalogMediaClient", () => {
     const a1 = await h.client.access("f-g1"); const a2 = await h.client.access("f-g1");
     expect(a1).toBe(a2); expect(h.server.mediaStats.accesses).toBe(1);
     expect(a1.parts.map((p) => p.partIndex)).toEqual([0, 1]); expect(a1.cacheKey).toMatch(/^fake:1:g1:f-g1:1$/);
-    expect(JSON.stringify(a1)).not.toMatch(/chat|message|bot/i);
+    expect(a1.parts.every((p) => p.direct && !("token" in p) && !("url" in p))).toBe(true); // E77: solo referencias directas, sin concesiones de bytes
     const { blob, verified } = await h.client.downloadFile("f-g1");
     const expected = h.server.mediaBytes("g1");
     expect(blob.size).toBe(expected.length); expect(new Uint8Array(await blob.arrayBuffer())).toEqual(expected); expect(verified).toBe("SIZE");
@@ -31,8 +31,9 @@ describe("catalogMediaClient", () => {
     expect(h.client.metrics.denied).toBe(1);
     h.server.beats.get("g2")!.state = "ACTIVE";
     expect((await h.client.access("f-g2")).beatId).toBe("g2");
-    h.server.expireGrants();
-    await expect(h.client.fetchPart(a1.parts[0])).rejects.toMatchObject({ code: "MEDIA_GRANT_EXPIRED" });
+    h.server.directState.ready = false; // sin sesión directa no hay lectura (ni respaldo por el Cloud)
+    await expect(h.client.fetchPart(a1.parts[0])).rejects.toMatchObject({ code: "DIRECT_UNAVAILABLE" });
+    h.server.directState.ready = true;
     const fresh = await h.client.access("f-g1", { force: true }); expect(fresh).not.toBe(a1);
   });
 
@@ -56,12 +57,12 @@ describe("catalogMediaClient", () => {
 
   it("artwork perezoso: ≤2 descargas concurrentes (opción), LRU por bytes acotado, cache hit sin red, invalidate por beat revoca su artwork", async () => {
     const h = harness();
-    const urls = await Promise.all(["g5", "g6", "g7", "g8"].map((id) => h.client.loadArtwork(`f-${id}`)));
+    const urls = await Promise.all(["g5", "g6", "g7", "g8"].map((id) => h.client.loadArtwork({ fileId: `f-${id}`, revision: "1" }, id)));
     expect(new Set(urls).size).toBe(4);
     expect(h.client.metrics.artworkBytes).toBeLessThanOrEqual(3000);
     expect(h.client.metrics.artworkEvictions).toBeGreaterThan(0);
     const hitBefore = h.server.mediaStats.streams;
-    const last = await h.client.loadArtwork("f-g8"); expect(last).toBe(urls[3]); expect(h.server.mediaStats.streams).toBe(hitBefore);
+    const last = await h.client.loadArtwork({ fileId: "f-g8", revision: "1" }, "g8"); expect(last).toBe(urls[3]); expect(h.server.mediaStats.streams).toBe(hitBefore);
     h.client.invalidate("g8");
     expect(h.revoked).toContain(urls[3]);
     expect(h.client.metrics.artworkEntries).toBeLessThanOrEqual(3);

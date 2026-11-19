@@ -45,66 +45,20 @@ describe("catalogTransfer", () => {
     expect(part).toEqual({ partKey: "m0", slotKey: "MASTER", role: "MASTER", partIndex: 0, size: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", filename: "a.mp3", mime: "audio/mpeg" });
   });
 
-  it("createOperation envía Idempotency-Key, era/época, CSRF y bearer; uploadPart: capacidad → PUT 503 SEND_REJECTED (Retry-After) → espera → nueva capacidad → PUT 200 RECEIPT", async () => {
-    waits.length = 0;
+  it("createOperation envía Idempotency-Key, era/época, CSRF y bearer; uploadPart sin puerto directo → DIRECT_UNAVAILABLE sin ninguna llamada (E77: el Cloud no recibe bytes)", async () => {
     const blob = new Blob([new TextEncoder().encode("abc")], { type: "audio/mpeg" });
-    let caps = 0;
-    const f = fakeFetch((c) => {
-      if (c.url.endsWith("/catalog/v1/operations")) return { status: 201, body: op("PREPARED", { created: true }) };
-      if (c.url.endsWith("/capability")) return { status: 201, body: cap(++caps) };
-      if (c.url.includes("/transfer/upload/")) return caps === 1 ? { status: 503, body: { error: "flood", code: "SEND_REJECTED", detail: { retry_after_ms: 7000, same_identity: true } }, headers: { "retry-after": "7" } } : { status: 200, body: op("VERIFYING", { upload: { state: "RECEIPT", partKey: "m0", attempt: 2, bytesSha256: "x", level: "GATEWAY", verification: "PENDING_PROVIDER" } }) };
-      return { status: 404, body: { code: "NOT_FOUND" } };
-    });
+    const f = fakeFetch((c) => (c.url.endsWith("/catalog/v1/operations") ? { status: 201, body: op("PREPARED", { created: true }) } : { status: 404, body: { code: "NOT_FOUND" } }));
     const t = mk(f.fetchImpl);
     const created = await t.createOperation({ kind: "IMPORT", parts: [{ partKey: "m0", slotKey: "MASTER", role: "MASTER", partIndex: 0, size: 3, sha256: null }], metadata: { name: "x" } });
     expect(created.created).toBe(true);
     const h0 = f.calls[0].headers;
     expect([h0["Idempotency-Key"], h0["X-Catalog-Era"], h0["X-Catalog-Epoch"], h0["X-BeatGaler-CSRF"], h0.Authorization]).toEqual(["idem-1", "e1", "7", "csrf-1", "Bearer tok"]);
-    const r = await t.uploadPart({ operationId: "top-1", partKey: "m0", blob });
-    expect(r.state).toBe("RECEIPT"); expect(r.attempt).toBe(2);
-    expect(f.calls.map((c) => `${c.method} ${c.url.replace("https://cloud.invalid/api", "")}`)).toEqual(["POST /catalog/v1/operations", "POST /catalog/v1/operations/top-1/parts/m0/capability", `PUT /catalog/v1/transfer/upload/${TOKEN}`, "POST /catalog/v1/operations/top-1/parts/m0/capability", `PUT /catalog/v1/transfer/upload/${TOKEN}`]);
-    expect(waits).toEqual([7000]);
-    const put = f.calls[2];
-    expect(put.body).toBe(blob); expect(put.headers["Content-Type"]).toBe("audio/mpeg"); expect(put.headers["X-Catalog-Era"]).toBe("e1");
-    expect(Object.keys(put.headers).some((k) => /telegram|token|chat/i.test(k))).toBe(false);
+    await expect(t.uploadPart({ operationId: "top-1", partKey: "m0", blob })).rejects.toMatchObject({ status: 503, code: "DIRECT_UNAVAILABLE", detail: { reason: "NO_DIRECT" } });
+    expect(f.calls).toHaveLength(1); // solo la creación de la operación: ni capacidad, ni PUT de bytes
+    expect(Object.keys(t).sort()).toEqual(["cancel", "commit", "createOperation", "getOperation", "renewReservation", "uploadPart"]); // sin issueCapability ni uploadProject
   });
 
-  it("202 UNCERTAIN y 409 PART_UNCERTAIN → sin reenvío (una sola capacidad); PART_BYTES_MISMATCH / permanente / capacidad inválida → error sin reintento; agotar intentos → último error", async () => {
-    waits.length = 0;
-    const blob = new Blob([new TextEncoder().encode("abc")]);
-    const f1 = fakeFetch((c) => (c.url.endsWith("/capability") ? { status: 201, body: cap(1) } : { status: 202, body: op("TRANSFERRING", { upload: { state: "UNCERTAIN", reconcile: true, resend: "BLOCKED" } }) }));
-    const r1 = await mk(f1.fetchImpl).uploadPart({ operationId: "top-1", partKey: "m0", blob });
-    expect(r1.state).toBe("UNCERTAIN"); expect(f1.calls.length).toBe(2);
-    const f2 = fakeFetch((c) => (c.url.endsWith("/capability") ? { status: 409, body: { error: "u", code: "PART_UNCERTAIN", detail: { reconcile: true } } } : { status: 200, body: op("TRANSFERRING") }));
-    const r2 = await mk(f2.fetchImpl).uploadPart({ operationId: "top-1", partKey: "m0", blob });
-    expect(r2.state).toBe("UNCERTAIN"); expect(f2.calls.map((c) => c.method)).toEqual(["POST", "GET"]);
-    for (const [code, status] of [["PART_BYTES_MISMATCH", 409], ["SEND_REJECTED_PERMANENT", 403], ["CAPABILITY_EXPIRED", 403], ["CREDENTIAL_REVOKED", 503]] as const) {
-      const f = fakeFetch((c) => (c.url.endsWith("/capability") ? { status: 201, body: cap(1) } : { status, body: { error: code, code, detail: {} } }));
-      await expect(mk(f.fetchImpl).uploadPart({ operationId: "top-1", partKey: "m0", blob })).rejects.toMatchObject({ code, status });
-      expect(f.calls.length).toBe(2);
-    }
-    // tamaño declarado distinto del archivo reseleccionado: error antes de enviar un byte
-    const f3 = fakeFetch(() => ({ status: 201, body: cap(1, 999) }));
-    await expect(mk(f3.fetchImpl).uploadPart({ operationId: "top-1", partKey: "m0", blob })).rejects.toMatchObject({ code: "PART_BYTES_MISMATCH" });
-    expect(f3.calls.length).toBe(1);
-    // rechazos sin efecto hasta agotar intentos
-    let n = 0;
-    const f4 = fakeFetch((c) => (c.url.endsWith("/capability") ? { status: 201, body: cap(++n) } : { status: 503, body: { error: "busy", code: "TRANSFER_BUSY", detail: { retry_after_ms: 5000 } } }));
-    await expect(mk(f4.fetchImpl, { maxSendAttempts: 3 }).uploadPart({ operationId: "top-1", partKey: "m0", blob })).rejects.toMatchObject({ code: "TRANSFER_BUSY" });
-    expect(n).toBe(3); expect(waits.slice(-2)).toEqual([5000, 5000]);
-    // sin retry_after_ms en detail → cabecera Retry-After en segundos
-    const f5 = fakeFetch((c) => (c.url.endsWith("/capability") ? { status: 201, body: cap(1) } : { status: 503, body: { error: "x", code: "UPLOAD_FAILED" }, headers: { "retry-after": "3" } }));
-    await expect(mk(f5.fetchImpl, { maxSendAttempts: 2 }).uploadPart({ operationId: "top-1", partKey: "m0", blob })).rejects.toMatchObject({ code: "UPLOAD_FAILED" });
-    expect(waits.at(-1)).toBe(3000);
-  });
-
-  it("uploadProject: PUT a la ruta PROJECT con X-Catalog-Filename; commit: 200 → COMMITTED, 202 → observar hasta COMMITTED, VERSION_CONFLICT → CONFLICT con error", async () => {
-    const blob = new Blob([new TextEncoder().encode("zip!")], { type: "application/zip" });
-    const fp = fakeFetch(() => ({ status: 200, body: op("VERIFYING", { upload: { state: "RECEIPT" } }) }));
-    const rp = await mk(fp.fetchImpl).uploadProject({ operationId: "top-1", partKey: "p0", blob, filename: "song.flp" });
-    expect(rp.state).toBe("RECEIPT");
-    expect(fp.calls[0].url).toBe("https://cloud.invalid/api/catalog/v1/operations/top-1/parts/p0/project");
-    expect(fp.calls[0].headers["X-Catalog-Filename"]).toBe("song.flp");
+  it("commit: 200 → COMMITTED, 202 → observar hasta COMMITTED, VERSION_CONFLICT → CONFLICT con error", async () => {
     const f1 = fakeFetch(() => ({ status: 200, body: op("COMMITTED", { result: { beatId: "b-1", version: "1", revision: "3" } }) }));
     expect((await mk(f1.fetchImpl).commit("top-1")).status).toBe("COMMITTED");
     const seq = ["VERIFYING", "VERIFYING", "READY"]; let i = 0;

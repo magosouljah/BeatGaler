@@ -153,7 +153,16 @@ export function createFirstBlockCache(options: { backend: FirstBlockBackend | nu
     } catch { return 0; }
   }
 
-  return Object.freeze({ read, candidates, pick, write, invalidateAccount, dropBeat, available: Boolean(backend) });
+  /** Settings (E80): copias de la cuenta en este dispositivo (número y bytes de metadatos guardados). */
+  async function usage(accountId: string): Promise<{ entries: number; bytes: number }> {
+    if (!backend) return { entries: 0, bytes: 0 };
+    try {
+      const mine = (await backend.all()).filter((e): e is FirstBlockEntry => Boolean(e && typeof e === "object" && (e as FirstBlockEntry).accountId === accountId));
+      return { entries: mine.length, bytes: mine.reduce((n, e) => n + (Number.isFinite(e.bytes) ? e.bytes : 0), 0) };
+    } catch { return { entries: 0, bytes: 0 }; }
+  }
+
+  return Object.freeze({ read, candidates, pick, write, invalidateAccount, dropBeat, usage, available: Boolean(backend) });
 }
 export type FirstBlockCache = ReturnType<typeof createFirstBlockCache>;
 

@@ -9,6 +9,8 @@
 // Los hashes declarados se calculan en streaming (SHA-256 incremental, sin cargar el archivo completo en memoria).
 import { CatalogApiError } from "./catalogApi";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
+import { DirectSendError, type DirectFailure } from "./catalogDirectCore";
+import { DIRECT_UNAVAILABLE_MESSAGE, DIRECT_WAIT, DirectUnavailableError, type DirectPort } from "./catalogDirectTypes";
 
 export type TransferKind = "IMPORT" | "REPLACE";
 export type TransferRole = "MASTER" | "WAV" | "ARTWORK" | "PROJECT" | "SAMPLES" | "STEMS" | "LOOP";
@@ -45,10 +47,10 @@ export interface TransferOperationDto {
   created?: boolean;
   upload?: UploadOutcome;
 }
-export type UploadOutcome =
-  | { state: "RECEIPT"; partKey: string; attempt: number; bytesSha256: string; level: "GATEWAY"; verification: "PENDING_PROVIDER" }
-  | { state: "UNCERTAIN"; partKey: string; attempt: number; reconcile: true; resend: "BLOCKED"; retryAfterMs?: number; bytesSha256: string; level: "GATEWAY" };
-export interface UploadCapability { operationId: string; partKey: string; token: string; expiresAt: string; attempt: number; uploadPath: string; method: "PUT"; declaredSize: string; declaredSha256: string | null; singleUse: true }
+// El navegador envió a Telegram; el recibo es un candidato (nivel CLIENT) que el worker verifica con el proveedor.
+export type UploadOutcome = { state: "RECEIPT"; partKey: string; attempt: number; level: "CLIENT"; verification: "PENDING_PROVIDER" };
+/** Ticket de envío directo (E70): identidad persistida por el servidor ANTES del efecto. */
+export interface SendTicket { operationId: string; partKey: string; attempt: number; randomId: string; caption: string; chatId: string; botId: string; filename: string | null; mime: string; size: number; declaredSha256: string | null; level: "CLIENT" }
 export type UploadPartResult = { state: "RECEIPT"; attempt: number; operation: TransferOperationDto } | { state: "UNCERTAIN"; attempt: number; operation: TransferOperationDto | null };
 export type CommitResult = { status: "COMMITTED"; operation: TransferOperationDto } | { status: "CONFLICT" | "BLOCKED" | "CANCELED" | "FAILED" | "RECONCILE"; operation: TransferOperationDto; error: CatalogApiError | null } | { status: "TIMEOUT"; operation: TransferOperationDto | null };
 
@@ -60,18 +62,18 @@ export interface CatalogTransferOptions {
   /** Cabeceras C5 de la biblioteca (era/época del contexto resuelto). */
   headers: () => { era: string; epoch: string };
   timeoutMs?: number;
-  uploadTimeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
-  /** Intentos máximos por parte ante rechazos sin efecto (cada uno pide una capacidad nueva). */
+  /** Intentos máximos por parte ante rechazos sin efecto (cada uno pide un ticket nuevo con la misma identidad). */
   maxSendAttempts?: number;
   pollIntervalMs?: number;
   maxPollMs?: number;
   idempotencyKey?: () => string;
+  /** Direct B: puerto navegador ↔ Telegram. E77: único transporte de archivos; sin él (o sin sesión) la subida falla con DIRECT_UNAVAILABLE. */
+  direct?: DirectPort | null;
 }
 
 const INFLIGHT: ReadonlySet<string> = new Set(["PREPARED", "TRANSFERRING", "VERIFYING", "READY"]);
-const RETRY_WITHOUT_EFFECT: ReadonlySet<string> = new Set(["SEND_REJECTED", "UPLOAD_FAILED", "TRANSFER_BUSY"]);
-export const TRANSFER_DEFAULTS = Object.freeze({ timeoutMs: 20_000, uploadTimeoutMs: 30 * 60_000, maxSendAttempts: 5, pollIntervalMs: 1500, maxPollMs: 10 * 60_000, hashChunkBytes: 4 * 1024 * 1024 });
+export const TRANSFER_DEFAULTS = Object.freeze({ timeoutMs: 20_000, maxSendAttempts: 5, pollIntervalMs: 1500, maxPollMs: 10 * 60_000, hashChunkBytes: 4 * 1024 * 1024 });
 
 // ---------- SHA-256 incremental (FIPS 180-4) ----------
 const K = new Uint32Array([
@@ -181,14 +183,13 @@ export function createCatalogTransfer(options: CatalogTransferOptions) {
   const csrf = options.csrf ?? (() => { try { return sessionStorage.getItem("beatgaler:web-csrf:v1"); } catch { return null; } });
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const timeoutMs = options.timeoutMs ?? TRANSFER_DEFAULTS.timeoutMs;
-  const uploadTimeoutMs = options.uploadTimeoutMs ?? TRANSFER_DEFAULTS.uploadTimeoutMs;
   const maxSendAttempts = options.maxSendAttempts ?? TRANSFER_DEFAULTS.maxSendAttempts;
   const pollIntervalMs = options.pollIntervalMs ?? TRANSFER_DEFAULTS.pollIntervalMs;
   const maxPollMs = options.maxPollMs ?? TRANSFER_DEFAULTS.maxPollMs;
   const newKey = options.idempotencyKey ?? defaultKey;
 
   interface Reply<T> { status: number; body: T; headers: Headers }
-  async function request<T>(method: "GET" | "POST" | "PUT", path: string, { body, raw, signal, extraHeaders = {}, timeout = timeoutMs }: { body?: unknown; raw?: Blob; signal?: AbortSignal; extraHeaders?: Record<string, string>; timeout?: number } = {}): Promise<Reply<T>> {
+  async function request<T>(method: "GET" | "POST" | "PUT", path: string, { body, signal, extraHeaders = {} }: { body?: unknown; signal?: AbortSignal; extraHeaders?: Record<string, string> } = {}): Promise<Reply<T>> {
     const headers: Record<string, string> = { Accept: "application/json", ...extraHeaders };
     const bearer = token();
     if (bearer) headers.Authorization = `Bearer ${bearer}`;
@@ -199,14 +200,13 @@ export function createCatalogTransfer(options: CatalogTransferOptions) {
       headers["X-Catalog-Era"] = h.era; headers["X-Catalog-Epoch"] = h.epoch;
     }
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    if (raw) headers["Content-Type"] = raw.type || "application/octet-stream";
     const controller = new AbortController();
     const onAbort = () => controller.abort();
     signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeout);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
-      response = await fetchImpl(`${baseUrl()}${path}`, { method, headers, credentials: "include", body: raw ?? (body === undefined ? undefined : JSON.stringify(body)), signal: controller.signal });
+      response = await fetchImpl(`${baseUrl()}${path}`, { method, headers, credentials: "include", body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });
     } catch (error) {
       if (signal?.aborted) throw error;
       throw Object.assign(new Error("Could not reach BeatGaler Cloud."), { name: "CatalogNetworkError", cause: error });
@@ -228,51 +228,73 @@ export function createCatalogTransfer(options: CatalogTransferOptions) {
   async function getOperation(operationId: string, signal?: AbortSignal): Promise<TransferOperationDto> {
     return (await request<TransferOperationDto>("GET", `/catalog/v1/operations/${encodeURIComponent(operationId)}`, { signal })).body;
   }
-  async function issueCapability(operationId: string, partKey: string, signal?: AbortSignal): Promise<UploadCapability> {
-    return (await request<UploadCapability>("POST", `/catalog/v1/operations/${encodeURIComponent(operationId)}/parts/${encodeURIComponent(partKey)}/capability`, { signal })).body;
-  }
-
-  /** Sube una parte Direct: capacidad → PUT; reintenta solo ante rechazos sin efecto; nunca reenvía un envío incierto. */
-  async function uploadPart({ operationId, partKey, blob, signal }: { operationId: string; partKey: string; blob: Blob; signal?: AbortSignal }): Promise<UploadPartResult> {
+  /**
+   * E70 — envío directo de una parte: ticket (identidad persistida y despacho ANTES del efecto) → envío del navegador a Telegram → recibo.
+   *  - Fallo sin efecto (rechazo, flood, subida) → se informa y se pide otro ticket con la MISMA identidad (random_id), tras la espera.
+   *  - Incierto (respuesta perdida, error desconocido, Worker perdido) → se informa y NO se reenvía: reconcilia el servidor (C7.8).
+   *  - PERMANENT/REVOKED → error visible. El recibo es un candidato; el commit exige la verificación del proveedor.
+   */
+  async function uploadPartDirect(direct: DirectPort, { operationId, partKey, blob, signal, onProgress }: { operationId: string; partKey: string; blob: Blob; signal?: AbortSignal; onProgress?: (uploadedBytes: number) => void }): Promise<UploadPartResult> {
+    const base = `/catalog/v1/operations/${encodeURIComponent(operationId)}/parts/${encodeURIComponent(partKey)}`;
+    const uncertain = async (attempt: number): Promise<UploadPartResult> => ({ state: "UNCERTAIN", attempt, operation: await getOperation(operationId, signal).catch(() => null) });
     let lastError: CatalogApiError | null = null;
     for (let attempt = 1; attempt <= maxSendAttempts; attempt++) {
-      let cap: UploadCapability;
-      try { cap = await issueCapability(operationId, partKey, signal); } catch (error) {
-        if (error instanceof CatalogApiError && error.code === "PART_UNCERTAIN") return { state: "UNCERTAIN", attempt, operation: await getOperation(operationId, signal).catch(() => null) };
+      let ticket: SendTicket;
+      try { ticket = (await request<SendTicket>("POST", `${base}/send-ticket`, { signal })).body; } catch (error) {
+        if (error instanceof CatalogApiError && error.code === "PART_UNCERTAIN") return uncertain(attempt);
         throw error;
       }
-      if (Number(cap.declaredSize) !== blob.size) throw new CatalogApiError(409, "PART_BYTES_MISMATCH", "El archivo seleccionado no coincide con el tamaño declarado; vuelve a seleccionar el mismo archivo.", { declared: cap.declaredSize, received: blob.size });
+      const report = async (outcome: DirectFailure["kind"], code: string, retryMs: number): Promise<boolean> => {
+        try { await request("POST", `${base}/send-report`, { body: { attempt: ticket.attempt, outcome, code, retryAfterMs: retryMs || null } }); return true; } catch { return false; }
+      };
+      if (Number(ticket.size) !== blob.size) {
+        await report("UPLOAD_FAILED", "BYTES_MISMATCH", 0);
+        throw new CatalogApiError(409, "PART_BYTES_MISMATCH", "El archivo seleccionado no coincide con el tamaño declarado; vuelve a seleccionar el mismo archivo.", { declared: ticket.size, received: blob.size });
+      }
+      let sent;
       try {
-        const r = await request<TransferOperationDto>("PUT", cap.uploadPath, { raw: blob, signal, timeout: uploadTimeoutMs });
-        if (r.status === 202) return { state: "UNCERTAIN", attempt: cap.attempt, operation: r.body };
-        return { state: "RECEIPT", attempt: cap.attempt, operation: r.body };
+        if (signal?.aborted) throw Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+        // E80: el avance son los bytes que el transporte Direct B confirma haber enviado (eventos del propio envío, sin estimaciones).
+        sent = await direct.send({ blob, filename: ticket.filename || partKey, mime: ticket.mime, caption: ticket.caption, randomId: ticket.randomId, chatId: ticket.chatId, size: blob.size }, { signal, onProgress: onProgress ? (uploaded) => onProgress(Math.max(0, Math.min(blob.size, uploaded))) : undefined });
       } catch (error) {
-        if (!(error instanceof CatalogApiError)) throw error;
-        if (error.code === "PART_UNCERTAIN" || error.code === "RECEIPT_PERSIST_FAILED") return { state: "UNCERTAIN", attempt: cap.attempt, operation: await getOperation(operationId, signal).catch(() => null) };
-        if (!RETRY_WITHOUT_EFFECT.has(error.code)) throw error; // PART_BYTES_MISMATCH, CAPABILITY_*, SEND_REJECTED_PERMANENT, CREDENTIAL_REVOKED, 401…
-        lastError = error;
-        if (attempt < maxSendAttempts) await sleep(retryAfterMs(error, null));
+        // Sin efecto posible: sesión no disponible o cancelación ANTES del envío. Todo lo demás desconocido es incierto (fail-closed).
+        const failure: DirectFailure = error instanceof DirectSendError ? error.failure
+          : error instanceof DirectUnavailableError || (error as { name?: string } | null)?.name === "AbortError" ? { kind: "UPLOAD_FAILED", code: error instanceof DirectUnavailableError ? "DIRECT_UNAVAILABLE" : "ABORTED", retryAfterMs: 5_000 }
+          : { kind: "UNCERTAIN", code: "UNKNOWN", retryAfterMs: 60_000 };
+        const reported = await report(failure.kind, failure.code, failure.retryAfterMs);
+        if (!reported || failure.kind === "UNCERTAIN") return uncertain(ticket.attempt);
+        if (signal?.aborted) throw error;
+        if (failure.kind === "PERMANENT") throw new CatalogApiError(403, "SEND_REJECTED_PERMANENT", "Telegram rechazó el envío de forma permanente.", { rpc: failure.code, partKey });
+        if (failure.kind === "REVOKED") throw new CatalogApiError(503, "CREDENTIAL_REVOKED", "La sesión directa fue revocada; vuelve a intentarlo.", { rpc: failure.code, partKey });
+        lastError = new CatalogApiError(503, failure.kind === "UPLOAD_FAILED" ? "UPLOAD_FAILED" : "SEND_REJECTED", `Envío rechazado sin efecto (${failure.code}).`, { retry_after_ms: failure.retryAfterMs, same_identity: true, rpc: failure.code });
+        if (attempt < maxSendAttempts) await sleep(failure.retryAfterMs || 5_000);
+        continue;
+      }
+      // Recibo candidato: se reintenta ante fallos de red (idempotente por hash); si no se logra persistir, el servidor lo conciliará.
+      const receipt = { messageId: sent.messageId, documentId: sent.documentId, size: sent.size, senderId: sent.senderId, chatId: sent.chatId };
+      for (let tries = 1; ; tries++) {
+        try {
+          const r = await request<TransferOperationDto>("PUT", `${base}/direct-receipt`, { body: { attempt: ticket.attempt, receipt }, signal });
+          return { state: "RECEIPT", attempt: ticket.attempt, operation: r.body };
+        } catch (error) {
+          if (error instanceof CatalogApiError && !(error.status >= 500)) throw error; // RECEIPT_CONFLICT, OPERATION_TRANSITION_INVALID…: visible
+          if (tries >= 3) return uncertain(ticket.attempt);
+          await sleep(Math.min(5_000, 500 * 2 ** tries));
+        }
       }
     }
     throw lastError ?? new CatalogApiError(503, "SEND_REJECTED", "La transferencia no pudo completarse tras varios intentos.", {});
   }
 
-  /** PROJECT por MASTER (misma máquina de estados; el servidor conserva Access, admisión y temporal). */
-  async function uploadProject({ operationId, partKey, blob, filename, signal }: { operationId: string; partKey: string; blob: Blob; filename?: string | null; signal?: AbortSignal }): Promise<UploadPartResult> {
-    let lastError: CatalogApiError | null = null;
-    for (let attempt = 1; attempt <= maxSendAttempts; attempt++) {
-      try {
-        const r = await request<TransferOperationDto>("PUT", `/catalog/v1/operations/${encodeURIComponent(operationId)}/parts/${encodeURIComponent(partKey)}/project`, { raw: blob, signal, timeout: uploadTimeoutMs, extraHeaders: filename ? { "X-Catalog-Filename": filename } : {} });
-        return r.status === 202 ? { state: "UNCERTAIN", attempt, operation: r.body } : { state: "RECEIPT", attempt, operation: r.body };
-      } catch (error) {
-        if (!(error instanceof CatalogApiError)) throw error;
-        if (error.code === "PART_UNCERTAIN" || error.code === "RECEIPT_PERSIST_FAILED") return { state: "UNCERTAIN", attempt, operation: await getOperation(operationId, signal).catch(() => null) };
-        if (!RETRY_WITHOUT_EFFECT.has(error.code)) throw error;
-        lastError = error;
-        if (attempt < maxSendAttempts) await sleep(retryAfterMs(error, null));
-      }
-    }
-    throw lastError ?? new CatalogApiError(503, "UPLOAD_FAILED", "La transferencia del PROJECT no pudo completarse.", {});
+  /**
+   * Sube una parte (MASTER, WAV, portada o PROJECT): SIEMPRE navegador → Telegram por Direct B; el Cloud nunca recibe bytes (E77).
+   * La disponibilidad se decide UNA vez y antes de cualquier efecto: sin sesión directa en un plazo razonable → error claro y nada enviado.
+   */
+  async function uploadPart({ operationId, partKey, blob, signal, onProgress }: { operationId: string; partKey: string; blob: Blob; signal?: AbortSignal; /** E80: bytes de ESTA parte ya enviados por Direct B. */ onProgress?: (uploadedBytes: number) => void }): Promise<UploadPartResult> {
+    const direct = options.direct ?? null;
+    const available = direct ? await direct.ready(signal, { maxWaitMs: DIRECT_WAIT.sendMs }).catch((error) => { if (signal?.aborted) throw error; return false; }) : false;
+    if (!direct || !available) throw new CatalogApiError(503, "DIRECT_UNAVAILABLE", DIRECT_UNAVAILABLE_MESSAGE, { reason: direct ? "SESSION_NOT_READY" : "NO_DIRECT", partKey });
+    return uploadPartDirect(direct, { operationId, partKey, blob, signal, onProgress });
   }
 
   /** Commit idempotente: 200 → COMMITTED; 202 → observar hasta un estado terminal o agotar el tiempo (sin reenviar nada). */
@@ -315,6 +337,6 @@ export function createCatalogTransfer(options: CatalogTransferOptions) {
     return (await request<TransferOperationDto>("POST", `/catalog/v1/operations/${encodeURIComponent(operationId)}/reservation/renew`, { signal })).body;
   }
 
-  return Object.freeze({ createOperation, getOperation, issueCapability, uploadPart, uploadProject, commit, cancel, renewReservation });
+  return Object.freeze({ createOperation, getOperation, uploadPart, commit, cancel, renewReservation });
 }
 export type CatalogTransfer = ReturnType<typeof createCatalogTransfer>;

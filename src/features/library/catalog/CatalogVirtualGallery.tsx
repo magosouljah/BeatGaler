@@ -21,7 +21,7 @@ export interface CatalogVirtualGalleryProps {
   /** Acciones del estado vacío (paridad con la Gallery anterior): «Add beat» en biblioteca vacía y «Clear filters» sin resultados. */
   onAddBeat?: () => void;
   onClearFilters?: () => void;
-  onMountCard?: (id: string) => void;
+  onMountCard?: (id: string, ordinal: number) => void;
   onUnmountCard?: (id: string) => void;
   statusCopy?: Partial<Record<CatalogStoreSnapshot["status"], string>>;
   /** Atributos estables (data-*) sobre la celda de cada tarjeta, para pruebas DOM/e2e sin añadir nodos visibles (T16/V08). */
@@ -40,8 +40,12 @@ const DEFAULT_COPY: Record<string, string> = {
   error: "No se pudo cargar la Gallery.",
 };
 
-function Card({ id, children, onMount, onUnmount }: { id: string; children: ReactNode; onMount?: (id: string) => void; onUnmount?: (id: string) => void }) {
-  useEffect(() => { onMount?.(id); return () => onUnmount?.(id); }, [id, onMount, onUnmount]);
+// `mediaKey` = referencia de la portada vigente: con la actualización en el sitio (E79) una tarjeta sigue montada cuando PostgreSQL confirma
+// un cambio, así que `onMount` (carga perezosa de la portada) se repite también cuando la referencia cambia, no solo al montar.
+// El ordinal se entrega al montar (no es dependencia): una tarjeta que cambia de fila se vuelve a montar y su desmontaje anterior ya lo había olvidado.
+function Card({ id, ordinal, mediaKey, children, onMount, onUnmount }: { id: string; ordinal: number; mediaKey: string; children: ReactNode; onMount?: (id: string, ordinal: number) => void; onUnmount?: (id: string) => void }) {
+  useEffect(() => { onMount?.(id, ordinal); }, [id, mediaKey, onMount]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onUnmount?.(id), [id, onUnmount]);
   return <>{children}</>;
 }
 
@@ -110,7 +114,7 @@ export function CatalogVirtualGallery(props: CatalogVirtualGalleryProps) {
               const ref = globalRow === range.start && col === 0 ? sampleRef : undefined;
               return (
                 <article key={`${tenantKey}:${item.id}`} ref={ref} className="lab-gallery-item" data-catalog-ordinal={ordinal} aria-posinset={ordinal + 1} aria-setsize={total ?? -1} {...(props.cardAttributes ? props.cardAttributes(item, ordinal) : {})}>
-                  <Card id={item.id} onMount={props.onMountCard} onUnmount={props.onUnmountCard}>{renderCard(item, ordinal)}</Card>
+                  <Card id={item.id} ordinal={ordinal} mediaKey={item.artwork ? `${item.artwork.fileId}:${item.artwork.revision}` : ""} onMount={props.onMountCard} onUnmount={props.onUnmountCard}>{renderCard(item, ordinal)}</Card>
                 </article>
               );
             })}

@@ -9,6 +9,22 @@ export interface WebTransportUploadInput {
   threadId: number;
 }
 
+/** E70 (Direct B): envío al vault con la identidad (random_id) y el caption fijados por el servidor en el ticket. */
+export interface WebTransportCatalogSendInput {
+  file: Blob;
+  filename: string;
+  mime: string;
+  caption: string;
+  randomId: string;
+  size: number;
+}
+/** E70: lectura de un rango de un mensaje del vault (hasta WEB_CATALOG_READ_MAX_BYTES por llamada; el llamador encadena rangos). */
+export interface WebTransportCatalogReadInput { messageId: number; offset: number; length: number }
+export interface WebTransportCatalogReadResult { buffer: ArrayBuffer; totalBytes: number }
+export const WEB_CATALOG_READ_MAX_BYTES = 16 * 1024 * 1024;
+export interface WebTransportCatalogSendResult { messageId: number; documentId: string | null; size: number; senderId: string; chatId: string }
+export interface WebTransportDirectFailure { kind: "REJECTED" | "UPLOAD_FAILED" | "PERMANENT" | "REVOKED" | "UNCERTAIN"; code: string; retryAfterMs: number }
+
 export const WEB_DIRECT_MAX_FILE_BYTES = 1900 * 1024 * 1024;
 export const WEB_PLAYBACK_FIRST_CHUNK_KB = 64;
 export const WEB_PLAYBACK_FIRST_CHUNK_BYTES = WEB_PLAYBACK_FIRST_CHUNK_KB * 1024;
@@ -139,6 +155,8 @@ export type WebTransportWorkerCommand = (
   | { requestId: string; op: "stream_ack"; targetRequestId: string }
   | { requestId: string; op: "cancel"; targetRequestId: string }
   | { requestId: string; op: "upload"; input: WebTransportUploadInput }
+  | { requestId: string; op: "catalog_send"; input: WebTransportCatalogSendInput }
+  | { requestId: string; op: "catalog_read"; input: WebTransportCatalogReadInput }
   | { requestId: string; op: "shutdown" }) & {
     stage1TraceContext?: { correlation_id: string; account_label: string; task2_passive_ping_trace?: boolean };
   };
@@ -151,7 +169,7 @@ export type WebTransportWorkerRequest = WebTransportWorkerCommand extends infer 
 
 export type WebTransportWorkerResponse =
   | { requestId: string; ok: true; result?: unknown }
-  | { requestId: string; ok: false; error: string; code?: WebTransportErrorCode }
+  | { requestId: string; ok: false; error: string; code?: WebTransportErrorCode; failure?: WebTransportDirectFailure }
   | { requestId: string; event: "progress"; progress: WebTransportProgress }
   | { requestId: string; event: "download-chunk"; chunk: ArrayBuffer; downloadedBytes: number; totalBytes: number }
   | { requestId: string; event: "prefetch-chunk"; progress: WebTransportPrefetchChunk }

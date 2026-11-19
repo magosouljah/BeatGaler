@@ -7,7 +7,11 @@ import { installPlaybackGetFileTrace } from "./playbackGetFileTrace";
 import { measureMp3PlayablePrefix } from "../audio/mp3PlayablePrefix";
 import { playTrace, playTraceSpan } from "../playback/playTrace";
 import type { WebVaultPeerRef } from "./webVaultPeerCache";
+import { DirectSendError, runDirectSend, type DirectSendDeps, type ResumableUploadState } from "../library/catalog/catalogDirectCore";
 import {
+  type WebTransportCatalogReadResult,
+  type WebTransportCatalogSendResult,
+  WEB_CATALOG_READ_MAX_BYTES,
   STARTUP_PREFIX_BYTES,
   WEB_DIRECT_MAX_FILE_BYTES,
   WEB_PLAYBACK_DATA_LANES,
@@ -3291,6 +3295,95 @@ async function upload(requestId: string, input: Extract<WebTransportWorkerComman
   return { telegram_file_id: stored.telegram_file_id, telegram_message_id: messageId, filename: input.filename, original_size: input.file.size, parts: [stored], transport: "direct-web" };
 }
 
+// E70 (Direct B): envío de una parte del catálogo. La identidad (random_id) y el caption los fijó el servidor ANTES del efecto (ticket);
+// la subida y el envío están separados para distinguir «sin efecto» (subida) de «efecto posible» (envío). Nunca reintenta por su cuenta.
+// E78: progreso de las subidas por partes en curso (random_id → file_id + partes confirmadas). Vive en la memoria del Worker: sobrevive a la
+// sustitución del cliente MTProto por renovación de clave y a un reintento del mismo envío; se pierde al recargar la página (entonces se empieza de nuevo).
+const resumableUploads = new Map<string, ResumableUploadState>();
+async function waitClientReady(timeoutMs = 90_000): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    try { requireReady(); return; } catch (error) { if (Date.now() - started > timeoutMs) throw error; await new Promise((resolve) => setTimeout(resolve, 250)); }
+  }
+}
+async function saveBigFilePart(args: { fileId: unknown; index: number; totalParts: number; bytes: Uint8Array }): Promise<void> {
+  const current = requireReady(); // el cliente VIGENTE en cada parte (tras renovar la clave es otro)
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      current.call({ _: "upload.saveBigFilePart", fileId: args.fileId as Long, filePart: args.index, fileTotalParts: args.totalParts, bytes: args.bytes }, { kind: "upload" } as never),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("TIMEOUT upload part")), 60_000); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+async function catalogSend(requestId: string, input: Extract<WebTransportWorkerCommand, { op: "catalog_send" }>["input"]): Promise<WebTransportCatalogSendResult> {
+  requireReady();
+  if (!(input.file instanceof Blob) || input.file.size <= 0 || input.file.size > WEB_DIRECT_MAX_FILE_BYTES) throw new DirectSendError({ kind: "PERMANENT", code: "FILE_INVALID", retryAfterMs: 0 });
+  playTrace("WORKER_CATALOG_SEND_BEGIN", { bytes: input.file.size });
+  const receipt = await runDirectSend({
+    // Siempre el cliente vigente: durante una subida larga la clave temporal puede renovarse y el cliente MTProto se sustituye.
+    client: { uploadFile: (params) => (requireReady() as unknown as DirectSendDeps["client"]).uploadFile(params), sendMedia: (chat, media, params) => (requireReady() as unknown as DirectSendDeps["client"]).sendMedia(chat, media, params) },
+    resumable: {
+      savePart: saveBigFilePart, waitReady: () => waitClientReady(),
+      newFileId: () => { const bits = crypto.getRandomValues(new Int32Array(2)); return Long.fromBits(bits[0], bits[1], false); },
+      load: (randomId) => resumableUploads.get(randomId) ?? null,
+      save: (randomId, state) => { if (state) { resumableUploads.set(randomId, state); if (resumableUploads.size > 8) resumableUploads.delete(resumableUploads.keys().next().value as string); } else resumableUploads.delete(randomId); },
+      makeInputFile: (state, fileName) => ({ _: "inputFileBig", id: state.fileId as Long, parts: state.totalParts, name: fileName }),
+    },
+    makeMedia: (uploaded, o) => InputMedia.document(uploaded as never, { fileName: o.fileName, fileMime: o.fileMime, fileSize: o.fileSize, caption: o.caption }),
+    toLong: (decimal) => Long.fromString(decimal, false),
+    chatId,
+    onProgress: (uploadedBytes, totalBytes) => scope.postMessage({ requestId, event: "progress", progress: { uploadedBytes, totalBytes } }),
+  }, { file: input.file, filename: input.filename, mime: input.mime || "application/octet-stream", caption: input.caption, randomId: input.randomId, size: input.size });
+  playTrace("WORKER_CATALOG_SEND_DONE", { bytes: input.file.size, message_id: receipt.messageId });
+  return { ...receipt, senderId: expectedBotId, chatId: String(chatId) };
+}
+
+// E70 (Direct B): lectura de un rango de un mensaje del vault con partes de 512 KiB (sin el acuse por trozo de 64 KiB de la reproducción).
+// El llamador (catalogDirectPort) encadena rangos y calcula el SHA-256 de los bytes realmente recibidos.
+async function catalogRead(requestId: string, input: Extract<WebTransportWorkerCommand, { op: "catalog_read" }>["input"]): Promise<WebTransportCatalogReadResult> {
+  const active = requireReady();
+  const messageId = Number(input.messageId || 0);
+  const offset = Math.floor(Number(input.offset));
+  const length = Math.floor(Number(input.length));
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud object reference is invalid.");
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset % 4096 !== 0 || !Number.isSafeInteger(length) || length <= 0 || length > WEB_CATALOG_READ_MAX_BYTES) {
+    throw new WorkerTransportError("TRANSFER_FAILED", "Galer Cloud catalog read range is invalid.");
+  }
+  const resolved = await resolvePlaybackMedia(active, messageId);
+  const total = resolved.totalBytes;
+  if (total > 0 && offset >= total) return { buffer: new ArrayBuffer(0), totalBytes: total };
+  const want = total > 0 ? Math.min(length, total - offset) : length;
+  const controller = new AbortController();
+  activeStreams.set(requestId, { controller, acknowledge: null });
+  try {
+    const out = new Uint8Array(want);
+    let got = 0;
+    await withDataLane(async () => {
+      // Hallazgo E72 (proveedor real): upload.getFile exige que cada petición (limit) sea múltiplo de 4096, divisor de 1 MiB y no cruce un límite de
+      // 1 MiB; mtcute además usa `limit` como posición final, no como longitud. Cada sub-lectura es UNA petición de tamaño potencia de dos que no cruza
+      // el límite; se acota con `fileSize = fin` (sin `limit`) para que mtcute no pida más trozos. Antes se pedían siempre 512 KiB por rango.
+      while (got < want) {
+        const pos = offset + got; const boundary = (Math.floor(pos / 1048576) + 1) * 1048576; const remain = want - got;
+        let chunk = 4096; while (chunk < Math.min(524288, remain)) chunk *= 2;
+        while (chunk > 4096 && pos + chunk > boundary) chunk /= 2;
+        const sub = Math.min(remain, chunk); let subGot = 0;
+        for await (const part of active.downloadAsIterable(resolved.media, { abortSignal: controller.signal, stallTimeout: 20_000, partSize: chunk / 1024, offset: pos, fileSize: pos + sub })) {
+          const take = Math.min(part.byteLength, sub - subGot);
+          if (take > 0) out.set(part.subarray(0, take), got + subGot);
+          subGot += take;
+          if (subGot >= sub) break;
+        }
+        got += subGot;
+        if (subGot < sub) break;
+      }
+    }, "warm");
+    if (got < want) throw new WorkerTransportError("MEDIA_UNAVAILABLE", `Galer Cloud returned a short object (${got} of ${want} bytes).`);
+    return { buffer: out.buffer as ArrayBuffer, totalBytes: total || offset + got };
+  } finally { activeStreams.delete(requestId); }
+}
+
 async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
   switch (command.op) {
     case "initialize": await initialize(command); return { ready: true };
@@ -3311,6 +3404,8 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "stream_ack": return acknowledgeStream(command.targetRequestId);
     case "cancel": return cancelStream(command.targetRequestId);
     case "upload": return upload(command.requestId, command.input);
+    case "catalog_send": return catalogSend(command.requestId, command.input);
+    case "catalog_read": return catalogRead(command.requestId, command.input);
     case "shutdown": await closeClient("shutdown", command.requestId); return { closed: true };
   }
 }
@@ -3339,6 +3434,7 @@ scope.onmessage = event => {
       ok: false,
       error: String((error as any)?.message || error),
       ...(error instanceof WorkerTransportError ? { code: error.code } : {}),
+      ...(error instanceof DirectSendError ? { failure: error.failure } : {}),
     }),
   );
 };

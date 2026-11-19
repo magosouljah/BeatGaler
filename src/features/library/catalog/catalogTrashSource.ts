@@ -6,11 +6,10 @@ import type { PlatformTrashItem } from "../../../platform/contracts";
 import { DEFAULT_FILTERS, type CatalogApi, type CatalogBeatDto } from "./catalogApi";
 import { beatFromCatalogDetail, type CatalogMutations } from "./catalogMutations";
 
-export const PURGE_DISABLED_MESSAGE = "La eliminación definitiva todavía no está habilitada en esta biblioteca. No se eliminó nada: los beats siguen en la papelera y puedes restaurarlos.";
 export interface CatalogTrashSource { listBeats(): Promise<PlatformTrashItem[]>; restoreBeat(id: string): Promise<Beat>; purgeBeats(): Promise<number> }
 
 export function createCatalogTrashSource({ api, mutations, sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)), pollMs = 800, pollMax = 25 }: {
-  api: Pick<CatalogApi, "listBeats"> & Partial<Pick<CatalogApi, "context">>; mutations: Pick<CatalogMutations, "restoreBeats" | "purgeTrash" | "purgeState">; sleep?: (ms: number) => Promise<void>; pollMs?: number; pollMax?: number;
+  api: Pick<CatalogApi, "listBeats">; mutations: Pick<CatalogMutations, "restoreBeats" | "purgeTrash" | "purgeState">; sleep?: (ms: number) => Promise<void>; pollMs?: number; pollMax?: number;
 }): CatalogTrashSource {
   const known = new Map<string, CatalogBeatDto>();
   async function list(): Promise<CatalogBeatDto[]> {
@@ -36,20 +35,16 @@ export function createCatalogTrashSource({ api, mutations, sleep = (ms: number) 
       }
       known.delete(id); return beatFromCatalogDetail(dto, null);
     },
-    // §6.1-4: solo se informa «eliminado» con la purga PURGED. Con `restore_hold` o `cleanup_enabled=false` el servidor no puede borrar nada y
-    // una purga movería los beats a PURGING (fuera de la papelera, sin poder restaurarse): no se inicia. Pendiente/bloqueada/parcial → mensaje veraz.
+    // §6.1-4 / E81: «eliminado» = los beats salieron de la biblioteca PostgreSQL (purga PURGED). La limpieza de sus archivos en Telegram sigue
+    // en segundo plano en el servidor y no bloquea nada (ni depende de restore_hold/cleanup). Pendiente/bloqueada/parcial → mensaje veraz.
     async purgeBeats() {
-      if (api.context) {
-        const ctx = await api.context();
-        if (ctx.restore_hold || !ctx.cleanup_enabled) throw new Error(PURGE_DISABLED_MESSAGE);
-      }
       const before = known.size || (await list()).length;
       const started = await mutations.purgeTrash();
       let status = started.status; let operation: { progress?: { purged?: number; blocked?: number } } | null = started.operation;
       for (let i = 0; i < pollMax && status === "pending"; i++) { await sleep(pollMs); const st = await mutations.purgeState(started.operationId); status = st.status; operation = st.operation; }
       if (status === "pending") throw new Error("La eliminación definitiva sigue en curso en el servidor; todavía no se ha confirmado el borrado de ningún beat.");
-      if (status === "partial") throw new Error(`Se eliminaron ${operation?.progress?.purged ?? "algunos"} beat(s); ${operation?.progress?.blocked ?? "otros"} no se pudieron eliminar y no se borró nada de ellos.`);
-      if (status === "blocked") throw new Error("La eliminación definitiva quedó bloqueada en el servidor; no se eliminó ningún beat.");
+      if (status === "partial") throw new Error(`Se eliminaron ${operation?.progress?.purged ?? "algunos"} beat(s); ${operation?.progress?.blocked ?? "otros"} siguen en la papelera sin cambios (una subida en curso o archivos no identificables) y no se borró nada de ellos.`);
+      if (status === "blocked") throw new Error("No se pudo eliminar definitivamente ningún beat: siguen en la papelera sin cambios y no se borró nada.");
       if (status === "cancelled") throw new Error("La eliminación definitiva se canceló; no se eliminó ningún beat más.");
       return before;
     },

@@ -1,9 +1,12 @@
 // T13 — Servidor fake de comandos /catalog/v1 a nivel fetch (C(T13), V07-A): PATCH con versiones e idempotencia, trash/restore por lote
 // (conflicto = nada aplicado), conjuntos (BUILDING → READY tras N consultas), selección server-side (flags, CAS, CONFLICT por revisión,
-// FROZEN por operación), operaciones bulk/rename con lotes ≤50 y conflicto programable, transferencias (capacidad → PUT → commit 202/200)
+// FROZEN por operación), operaciones bulk/rename con lotes ≤50 y conflicto programable, transferencias Direct B (ticket → envío del navegador
+// por `directPort` → recibo → commit 202/200; E77: el Cloud fake no recibe ni sirve bytes de archivos)
 // y detalle SQL. Cuenta llamadas por ruta y expone espías legacy (get_index/replace_index) que deben quedar en 0.
+import { DirectSendError } from "../../src/features/library/catalog/catalogDirectCore";
+import { DirectUnavailableError, type DirectPort } from "../../src/features/library/catalog/catalogDirectTypes";
 export interface FakeBeat { id: string; version: number; name: string; bpm: string; key: string; tags: string[]; rating: number; color: string | null; color2: string | null; state: "ACTIVE" | "TRASH" | "PURGED"; rank: number }
-export interface FakeCommandsOptions { beats?: FakeBeat[]; setReadyAfterPolls?: number; bulkBatch?: number; conflictAtBatch?: number | null; quotaMax?: number | null; transferVerifyAfterPolls?: number; rng?: () => number; mediaBytes?: (beatId: string) => Uint8Array; grantTtlMs?: number }
+export interface FakeCommandsOptions { beats?: FakeBeat[]; /** E77: tope de bytes de PROJECT del plan (ticket → 413). */ projectMaxBytes?: number | null; setReadyAfterPolls?: number; bulkBatch?: number; conflictAtBatch?: number | null; quotaMax?: number | null; transferVerifyAfterPolls?: number; rng?: () => number; mediaBytes?: (beatId: string) => Uint8Array; grantTtlMs?: number }
 type Json = Record<string, unknown>;
 
 export function fakeBeats(n: number): FakeBeat[] {
@@ -21,13 +24,14 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
   const selections = new Map<string, { selectionId: string; setId: string; sort: string; defaultSelected: boolean; selectionVersion: number; status: string; baseRevision: string; ops: Array<Json>; count: number }>();
   const operations = new Map<string, Json & { kind: string; memberIds: string[]; cursor: number; patch?: Json; tagsOp?: { op: "add" | "remove"; tags: string[] }; rename?: { from: string; to: string }; selectionId?: string }>();
   const transfers = new Map<string, Json & { parts: Array<Json>; polls: number; kind: string; beatId: string }>();
-  const capabilities = new Map<string, { operationId: string; partKey: string; used: boolean }>();
   let nextId = 1; let fail: { code: string; status: number; route: RegExp } | null = null;
   // ---- T14: rondas (Fisher–Yates perezoso en memoria, misma semántica que el servidor) y medios ----
   const rng = options.rng ?? Math.random;
   const rounds = new Map<string, { roundId: string; setId: string; baseRevision: string; status: string; remaining: number; sequence: number; mapping: Map<number, number>; inverse: Map<number, number>; consumed: Set<string>; commands: Map<string, Json> }>();
   const mediaBytesOf = options.mediaBytes ?? ((beatId: string) => { const n = 1000 + (beatId.length * 37) % 500; const b = new Uint8Array(n); for (let i = 0; i < n; i++) b[i] = (i * 31 + beatId.charCodeAt(beatId.length - 1)) & 0xff; return b; });
-  const grants = new Map<string, { fileId: string; beatId: string; partIndex: number; expiresAt: number; revoked: boolean; epoch: string }>();
+  // «Telegram» del fake: mensajes de medios existentes (messageId → beat/parte) y documentos enviados por el navegador en esta prueba.
+  const mediaMessages = new Map<number, { beatId: string; partIndex: number }>(); const directSent: Array<{ messageId: number; caption: string; size: number; filename: string }> = [];
+  const directState = { ready: true, faults: [] as Array<"rejected" | "uncertain" | "unavailable">, readFails: 0 };
   const purges = new Map<string, { purgeId: string; ids: string[]; polls: number; scope: string }>();
   const mediaStats = { accesses: 0, streams: 0, bytes: 0 };
   const roundSwap = (r: NonNullable<ReturnType<typeof rounds.get>>, position: number) => {
@@ -89,7 +93,7 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
 
   async function handle(method: string, url: string, headers: Record<string, string>, body: unknown): Promise<{ status: number; body: unknown; headers?: Record<string, string>; raw?: boolean }> {
     const u = new URL(url); const path = u.pathname.replace(/^.*?\/catalog\/v1/, "/catalog/v1");
-    count(`${method} ${path.replace(/\/(top-|op-|sel-|set-)[^/]+/g, "/:id").replace(/\/transfer\/upload\/[^/]+/, "/transfer/upload/:token").replace(/\/beats\/g\d+/, "/beats/:id").replace(/\/parts\/[^/]+/, "/parts/:partKey")}`);
+    count(`${method} ${path.replace(/\/(top-|op-|sel-|set-)[^/]+/g, "/:id").replace(/\/beats\/g\d+/, "/beats/:id").replace(/\/parts\/[^/]+/, "/parts/:partKey")}`);
     if (fail && fail.route.test(path)) return err(fail.status, fail.code, `fake ${fail.code}`);
     const j = (body ?? {}) as Json; const key = headers["Idempotency-Key"];
     if (method !== "GET" && (!headers["X-Catalog-Era"] || !headers["X-Catalog-Epoch"])) return err(428, "PRECONDITION_REQUIRED", "era/epoch");
@@ -164,9 +168,21 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
     }
     if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/cancel$/.exec(path)) && method === "POST") { const o = operations.get(m[1]); if (!o) return err(404, "NOT_FOUND", "op"); if (["QUEUED", "RUNNING"].includes(String(o.status))) o.status = "CANCELLING"; return ok(opDto(o)); }
     if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/resume$/.exec(path)) && method === "POST") { const o = operations.get(m[1]); if (!o) return err(404, "NOT_FOUND", "op"); if (o.status !== "CONFLICT") return err(409, "OPERATION_TRANSITION_INVALID", "not CONFLICT"); if (String(j.revision) !== String(revision)) return err(409, "REVISION_MISMATCH", "revision", { current_revision: String(revision) }); o.status = "RUNNING"; o.expectedRevision = String(revision); o.conflictBatchSeq = null; o.notExecuted = 0; return ok(opDto(o)); }
-    if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/parts\/([^/]+)\/capability$/.exec(path)) && method === "POST") { const t = transfers.get(m[1]); if (!t) return err(404, "NOT_FOUND", "op"); const p = t.parts.find((x) => x.partKey === decodeURIComponent(m![2])); if (!p) return err(404, "NOT_FOUND", "part"); if (p.role === "PROJECT") return err(400, "INPUT_INVALID", "PROJECT uses MASTER", { reason: "PROJECT_USES_MASTER" }); if (p.dispatchState !== "PENDING" && p.dispatchState !== "DISPATCHED") return err(409, "PART_STATE_CONFLICT", "state"); const token = `T${String(nextId++).padStart(42, "0")}`; capabilities.set(token, { operationId: t.operationId, partKey: String(p.partKey), used: false }); return ok({ operationId: t.operationId, partKey: p.partKey, token, expiresAt: "x", attempt: (p.attempts as number) + 1, uploadPath: `/catalog/v1/transfer/upload/${token}`, method: "PUT", declaredSize: String(p.size), declaredSha256: p.sha256 ?? null, singleUse: true }, 201); }
-    if ((m = /^\/catalog\/v1\/transfer\/upload\/([^/]+)$/.exec(path)) && method === "PUT") { const c = capabilities.get(m[1]); if (!c || c.used) return err(403, "CAPABILITY_INVALID", "token"); c.used = true; const t = transfers.get(c.operationId)!; const p = t.parts.find((x) => x.partKey === c.partKey)!; const size = (body as Blob)?.size ?? Number(headers["Content-Length"] ?? 0); if (size !== Number(p.size)) return err(409, "PART_BYTES_MISMATCH", "size", { declared: String(p.size), received: size }); p.dispatchState = "RECEIPT"; p.attempts = (p.attempts as number) + 1; t.status = "VERIFYING"; return ok(transferDto(t, { upload: { partKey: p.partKey, attempt: p.attempts, state: "RECEIPT", bytesSha256: "x", level: "GATEWAY", verification: "PENDING_PROVIDER" } })); }
-    if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/parts\/([^/]+)\/project$/.exec(path)) && method === "PUT") { const t = transfers.get(m[1]); if (!t) return err(404, "NOT_FOUND", "op"); const p = t.parts.find((x) => x.partKey === decodeURIComponent(m![2])); if (!p || p.role !== "PROJECT") return err(400, "INPUT_INVALID", "not a project part"); p.dispatchState = "RECEIPT"; p.attempts = (p.attempts as number) + 1; t.status = "VERIFYING"; return ok(transferDto(t, { upload: { partKey: p.partKey, attempt: p.attempts, state: "RECEIPT", level: "GATEWAY" } })); }
+    if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/parts\/([^/]+)\/send-ticket$/.exec(path)) && method === "POST") {
+      const t = transfers.get(m[1]); if (!t) return err(404, "NOT_FOUND", "op"); const p = t.parts.find((x) => x.partKey === decodeURIComponent(m![2])); if (!p) return err(404, "NOT_FOUND", "part");
+      if (p.role === "PROJECT" && options.projectMaxBytes != null && Number(p.size) > options.projectMaxBytes) return err(413, "PROJECT_TOO_LARGE", "PROJECT exceeds the plan byte limit", { declared: String(p.size), max_bytes: options.projectMaxBytes });
+      if (p.dispatchState !== "PENDING" && p.dispatchState !== "DISPATCHED") return err(409, "PART_STATE_CONFLICT", "state");
+      p.dispatchState = "DISPATCHED"; p.ticketAttempt = ((p.ticketAttempt as number | undefined) ?? 0) + 1;
+      return ok({ operationId: t.operationId, partKey: p.partKey, attempt: p.ticketAttempt, randomId: `-${t.operationId.length}${String(p.partKey).length}`, caption: `catalog:v1 op=${t.operationId} part=${p.partKey}`, chatId: "-1001", botId: "Bot20", filename: p.filename ?? String(p.partKey), mime: p.mime ?? "application/octet-stream", size: Number(p.size), declaredSha256: p.sha256 ?? null, level: "CLIENT" }, 201);
+    }
+    if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/parts\/([^/]+)\/send-report$/.exec(path)) && method === "POST") { const o = String(j.outcome); return ok(o === "UNCERTAIN" ? { state: "UNCERTAIN", reconcile: true, resend: "BLOCKED" } : { state: o, retry: o === "REJECTED" || o === "UPLOAD_FAILED" ? "SAME_IDENTITY" : "NONE", retryAfterMs: 0 }); }
+    if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/parts\/([^/]+)\/direct-receipt$/.exec(path)) && method === "PUT") {
+      const t = transfers.get(m[1]); if (!t) return err(404, "NOT_FOUND", "op"); const p = t.parts.find((x) => x.partKey === decodeURIComponent(m![2])); if (!p) return err(404, "NOT_FOUND", "part");
+      const receipt = (j.receipt ?? {}) as { messageId?: number; size?: number };
+      if (Number(receipt.size) !== Number(p.size)) return err(409, "RECEIPT_CONFLICT", "size", { declared: String(p.size), received: receipt.size });
+      p.dispatchState = "RECEIPT"; p.attempts = (p.attempts as number) + 1; p.messageId = receipt.messageId; t.status = "VERIFYING";
+      return ok(transferDto(t, { upload: { partKey: p.partKey, attempt: p.attempts, state: "RECEIPT", level: "CLIENT", verification: "PENDING_PROVIDER" } }));
+    }
     if ((m = /^\/catalog\/v1\/operations\/([^/]+)\/commit$/.exec(path)) && method === "POST") {
       const t = transfers.get(m[1]); if (!t) return err(404, "NOT_FOUND", "op");
       if (t.status === "COMMITTED") return ok(transferDto(t, { replay: true }));
@@ -217,17 +233,9 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
       const fileId = decodeURIComponent(m[1]); const beatId = fileId.replace(/^f-/, ""); const b = beats.get(beatId); if (!b) return err(404, "NOT_FOUND", "file");
       if (b.state !== "ACTIVE") return err(403, "ACCESS_DENIED", "denied", { reason: "BEAT_NOT_ACTIVE", state: b.state });
       mediaStats.accesses++; const bytes = mediaBytesOf(beatId); const half = Math.ceil(bytes.length / 2); const parts = [[0, half], [half, bytes.length]].map(([s, e], idx) => ({ s, e, idx })).filter((p) => p.e > p.s);
-      const ttl = options.grantTtlMs ?? 600_000; const expiresAt = new Date(Date.now() + ttl).toISOString();
-      const grantsOut = parts.map((p) => { const token = `G${String(nextId++).padStart(42, "0")}`; grants.set(token, { fileId, beatId, partIndex: p.idx, expiresAt: Date.now() + ttl, revoked: false, epoch }); return { partIndex: p.idx, size: p.e - p.s, sha256: null, hashVerified: false, verificationLevel: "PROVIDER", token, url: `/catalog/v1/media/${token}`, expiresAt }; });
+      const ttl = options.grantTtlMs ?? 600_000;
+      const grantsOut = parts.map((p) => { const messageId = 5000 + [...beats.keys()].indexOf(beatId) * 10 + p.idx; mediaMessages.set(messageId, { beatId, partIndex: p.idx }); return { partIndex: p.idx, size: p.e - p.s, sha256: null, hashVerified: false, verificationLevel: "PROVIDER", direct: { chatId: "-1001", messageId } }; });
       return ok({ fileId, beatId, role: "MASTER", slotKey: "MASTER", revision: String(b.version), filename: "beat.mp3", mime: "audio/mpeg", sizeBytes: bytes.length, partsTotalBytes: bytes.length, sha256: null, declaredSha256: null, cacheKey: `fake:${epoch}:${beatId}:${fileId}:${b.version}`, epoch, parts: grantsOut, ttlMs: ttl }, 201);
-    }
-    if ((m = /^\/catalog\/v1\/media\/([^/]+)$/.exec(path)) && method === "GET") {
-      const gr = grants.get(m[1]); if (!gr || gr.revoked) return err(403, "MEDIA_GRANT_INVALID", "grant", { reason: gr ? "REVOKED" : "UNKNOWN" }); if (gr.expiresAt <= Date.now()) return err(403, "MEDIA_GRANT_EXPIRED", "expired", { reason: "EXPIRED" });
-      const bytes = mediaBytesOf(gr.beatId); const half = Math.ceil(bytes.length / 2); const part = gr.partIndex === 0 ? bytes.subarray(0, half) : bytes.subarray(half);
-      const range = headers.Range ?? headers.range; let start = 0; let end = part.length - 1;
-      if (range) { const rm = /^bytes=(\d*)-(\d*)$/.exec(range); if (!rm) return err(416, "RANGE_NOT_SATISFIABLE", "range"); if (rm[1] === "") start = Math.max(0, part.length - Number(rm[2])); else { start = Number(rm[1]); if (rm[2] !== "") end = Math.min(end, Number(rm[2])); } if (start > end || start >= part.length) return err(416, "RANGE_NOT_SATISFIABLE", "range"); }
-      mediaStats.streams++; mediaStats.bytes += end - start + 1;
-      return { status: range ? 206 : 200, body: part.subarray(start, end + 1), headers: { "content-type": "audio/mpeg", "accept-ranges": "bytes", ...(range ? { "content-range": `bytes ${start}-${end}/${part.length}` } : {}) }, raw: true };
     }
     if (path === "/catalog/v1/tags/rename/preview" && method === "POST") { const from = String(j.from); const all = [...beats.values()]; const hit = (b: FakeBeat) => b.tags.some((t) => t.trim().toLowerCase() === from); return ok({ from, to: String(j.to), countActive: all.filter((b) => b.state === "ACTIVE" && hit(b)).length, countTrash: all.filter((b) => b.state === "TRASH" && hit(b)).length, mergesInto: all.some((b) => b.tags.some((t) => t.trim().toLowerCase() === String(j.to))), revision: String(revision), epoch, authorityEra: era }); }
     if (path === "/catalog/v1/tags/rename" && method === "POST") { const from = String(j.from); const members = [...beats.values()].filter((b) => b.tags.some((t) => t.trim().toLowerCase() === from)).map((b) => b.id); const operationId = `op-${nextId++}`; const o = { operationId, kind: "TAG_RENAME", status: "QUEUED", setId: null, selectionId: null, selectionVersion: null, expectedRevision: String(revision), committedRevision: null, memberIds: members, cursor: 0, confirmed: 0, notExecuted: 0, cancelled: 0, rename: { from, to: String(j.to) } }; operations.set(operationId, o); return ok({ ...opDto(o), created: true }, 201); }
@@ -255,7 +263,29 @@ export function createCatalogFakeCommands(options: FakeCommandsOptions = {}) {
     legacyRuntime: { async getLibraryIndex() { legacy.getLibraryIndex++; return { manifest: {}, messageId: 1 }; }, async replaceLibraryIndex() { legacy.replaceLibraryIndex++; return { messageId: 2, previousMessageId: 1, beatCount: 0 }; } },
     // T14
     round: (id: string) => rounds.get(id), mediaStats, mediaBytes: mediaBytesOf,
-    revokeGrants() { for (const g of grants.values()) g.revoked = true; },
-    expireGrants() { for (const g of grants.values()) g.expiresAt = 0; },
+    /** E77 — Doble del puerto Direct B: lee los medios del «Telegram» del fake y recibe los envíos del navegador. Fallos programables. */
+    directState, directSent,
+    directPort: {
+      ready: async () => directState.ready,
+      close: async () => {},
+      async read(ref, o = {}) {
+        if (directState.readFails > 0) { directState.readFails--; throw new Error("direct read failed"); }
+        const msg = mediaMessages.get(ref.messageId); if (!msg) throw new Error("no such message");
+        const bytes = mediaBytesOf(msg.beatId); const half = Math.ceil(bytes.length / 2); const part = msg.partIndex === 0 ? bytes.subarray(0, half) : bytes.subarray(half);
+        const offset = o.offset ?? 0; const length = o.length ?? part.length - offset; const out = part.slice(offset, offset + length);
+        mediaStats.streams++; mediaStats.bytes += out.length;
+        return { blob: new Blob([out as BlobPart]), sha256: null };
+      },
+      async send(input, opts) {
+        const fault = directState.faults.shift();
+        if (fault === "unavailable") throw new DirectUnavailableError("SESSION");
+        if (fault === "rejected") throw new DirectSendError({ kind: "REJECTED", code: "FLOOD_WAIT_1", retryAfterMs: 1 });
+        // E80: como el transporte real, informa los bytes enviados por tramos (cuartos del archivo) antes del recibo.
+        for (let k = 1; k <= 4; k++) opts?.onProgress?.(Math.floor((input.blob.size * k) / 4), input.blob.size);
+        const messageId = 9000 + directSent.length; directSent.push({ messageId, caption: input.caption, size: input.blob.size, filename: input.filename });
+        if (fault === "uncertain") throw new DirectSendError({ kind: "UNCERTAIN", code: "TIMEOUT", retryAfterMs: 60_000 });
+        return { messageId, documentId: "d", size: input.blob.size, senderId: "20", chatId: input.chatId };
+      },
+    } as DirectPort,
   };
 }

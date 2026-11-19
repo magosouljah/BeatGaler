@@ -108,23 +108,17 @@ describe("§6.1-4 Vaciar papelera", () => {
     restoreBeats: vi.fn(), purgeTrash: vi.fn(async () => ({ status: "pending" as const, operationId: "p1", durable: true as const, operation: {} as never })),
     purgeState: vi.fn(async () => ({ status: final, operation: { status: final.toUpperCase(), progress: { total: 2, purged: final === "purged" ? 2 : final === "partial" ? 1 : 0, blocked: final === "purged" ? 0 : 1, pending: 0, objects: {} } } as never })),
   });
-  it("biblioteca con restore_hold / cleanup deshabilitado → no se inicia ninguna purga (los beats seguirían en PURGING sin poder restaurarse)", async () => {
-    for (const flags of [{ restore_hold: true, cleanup_enabled: true }, { restore_hold: false, cleanup_enabled: false }]) {
-      const m = fakeMutations("purged");
-      const src = createCatalogTrashSource({ api: { ...api, context: vi.fn(async () => flags) } as never, mutations: m as never, sleep: async () => {}, pollMax: 3 });
-      await expect(src.purgeBeats()).rejects.toThrow(/no está habilitada/);
-      expect(m.purgeTrash).not.toHaveBeenCalled();
-    }
-    const ok = fakeMutations("purged");
-    const enabled = createCatalogTrashSource({ api: { ...api, context: vi.fn(async () => ({ restore_hold: false, cleanup_enabled: true })) } as never, mutations: ok as never, sleep: async () => {}, pollMax: 3 });
-    await expect(enabled.purgeBeats()).resolves.toBeTypeOf("number"); expect(ok.purgeTrash).toHaveBeenCalledOnce();
+  it("E81: restore_hold / cleanup deshabilitado ya no impiden eliminar definitivamente (solo difieren la limpieza en Telegram, en el servidor)", async () => {
+    const m = fakeMutations("purged");
+    const src = createCatalogTrashSource({ api: { ...api, context: vi.fn(async () => ({ restore_hold: true, cleanup_enabled: false })) } as never, mutations: m as never, sleep: async () => {}, pollMax: 3 });
+    await expect(src.purgeBeats()).resolves.toBeTypeOf("number"); expect(m.purgeTrash).toHaveBeenCalledOnce();
   });
   const api = { listBeats: vi.fn(async () => ({ items: [], nextCursor: null })) };
   it("purga aún pendiente al agotar el sondeo → nunca se informa como «borrado»", async () => {
     const src = createCatalogTrashSource({ api: api as never, mutations: fakeMutations("pending") as never, sleep: async () => {}, pollMax: 3 });
     await expect(src.purgeBeats()).rejects.toThrow(/pendiente|todavía|still/i);
   });
-  it("purga BLOCKED/PARTIAL (restore_hold o cleanup deshabilitado) → mensaje veraz, sin «puedes reintentarla» que no resolvería nada", async () => {
+  it("purga BLOCKED/PARTIAL (beats que siguen en la papelera) → mensaje veraz, sin «puedes reintentarla» que no resolvería nada", async () => {
     for (const final of ["blocked", "partial"] as const) {
       const src = createCatalogTrashSource({ api: api as never, mutations: fakeMutations(final) as never, sleep: async () => {}, pollMax: 3 });
       const err = await src.purgeBeats().then(() => null, (e: Error) => e);
@@ -192,7 +186,7 @@ import { beatFromCatalogDetail } from "../../src/features/library/catalog/catalo
 function mutationsHarness() {
   const server = createCatalogFakeCommands({ beats: fakeBeats(5) });
   const common = { fetchImpl: server.fetchImpl, baseUrl: () => "https://cloud.invalid/api", token: () => "tok", csrf: () => "c", headers: () => ({ era: "era-fake", epoch: "1" }) };
-  const mutations = createCatalogMutations({ commands: createCatalogCommandsApi(common), transfer: createCatalogTransfer({ ...common, sleep: async () => {}, pollIntervalMs: 1 }), accountId: () => "acc", refStore: createLocalOperationRefStore(memoryStorage()), prepareFiles: async (f) => ({ ...f, projectFlags: null }) });
+  const mutations = createCatalogMutations({ commands: createCatalogCommandsApi(common), transfer: createCatalogTransfer({ ...common, direct: server.directPort, sleep: async () => {}, pollIntervalMs: 1 }), accountId: () => "acc", refStore: createLocalOperationRefStore(memoryStorage()), prepareFiles: async (f) => ({ ...f, projectFlags: null }) });
   const deps = { mutations, knownDto: () => undefined, loadProject: async () => null, dataUrlToFile: () => null, errorMessage: (e: unknown) => String((e as Error)?.message ?? e) };
   return { server, mutations, deps };
 }
@@ -203,7 +197,7 @@ describe("saveDrawerChanges (Drawer → catálogo)", () => {
     const h = mutationsHarness(); const shown = await shownOf(h, "g1");
     const r = await saveDrawerChanges(h.deps, { original: shown, updated: shown, files: { WAV: new File([new Uint8Array(32)], "hq.wav", { type: "audio/wav" }) }, artworkRemoved: false });
     expect(r.status).toBe("committed");
-    expect(h.server.counters["PUT /catalog/v1/transfer/upload/:token"]).toBe(1);
+    expect(h.server.counters["PUT /catalog/v1/operations/:id/parts/:partKey/direct-receipt"]).toBe(1);
     // el doble no modela hasWav: se comprueba la operación (rol WAV) y la versión confirmada del beat
     const ops = h.mutations.pendingOperations(); expect(ops).toEqual([]); // confirmada → referencia olvidada
     expect(Number((await h.mutations.getBeat("g1")).version)).toBe(Number(shown.assets?.wav?.revision ?? 1) + 1);
@@ -236,7 +230,7 @@ describe("saveDrawerChanges (Drawer → catálogo)", () => {
     const h = mutationsHarness(); const shown = { ...(await shownOf(h, "g3")), image_base64: "blob:cover" };
     const r = await saveDrawerChanges(h.deps, { original: shown, updated: { ...shown, image_base64: null }, files: { WAV: new File([new Uint8Array(16)], "hq.wav", { type: "audio/wav" }) }, artworkRemoved: true });
     expect(r).toEqual({ status: "committed", artworkRemoved: true });
-    expect(h.server.counters["PATCH /catalog/v1/beats/:id"]).toBe(1); expect(h.server.counters["PUT /catalog/v1/transfer/upload/:token"]).toBe(1);
+    expect(h.server.counters["PATCH /catalog/v1/beats/:id"]).toBe(1); expect(h.server.counters["PUT /catalog/v1/operations/:id/parts/:partKey/direct-receipt"]).toBe(1);
   });
   it("transferencia en RECONCILE → error marcado `pending` (no éxito) y un segundo guardado no reenvía", async () => {
     const transfer = reconcileTransfer();

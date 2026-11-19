@@ -143,7 +143,8 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
     const ctx = snapshot.context;
     if (ctx && (page.authorityEra !== ctx.authority_era || page.epoch !== ctx.authority_epoch || page.generationId !== ctx.generation_id)) return { code: "CONTEXT_MISMATCH", status: null, message: "page belongs to another era/epoch/generation", direction };
     // Un bloque provisional (copia local) no fija revisión: la primera página de PostgreSQL lo sustituye aunque la revisión haya cambiado.
-    if (!snapshot.provisional && snapshot.revision !== null && page.revision !== snapshot.revision && snapshot.blocks.length > 0) return { code: "CURSOR_STALE", status: 409, message: "revision changed between blocks", direction };
+    // Tampoco una página «first»: sustituye a todos los bloques residentes (carga inicial o `refreshResident`), no se une a ellos.
+    if (direction !== "first" && !snapshot.provisional && snapshot.revision !== null && page.revision !== snapshot.revision && snapshot.blocks.length > 0) return { code: "CURSOR_STALE", status: 409, message: "revision changed between blocks", direction };
     if (expectStart !== null && page.startOrdinal !== expectStart) return { code: "ORDINAL_GAP", status: null, message: `expected ordinal ${expectStart}, got ${page.startOrdinal}`, direction };
     if (page.items.length > blockSize) return { code: "BLOCK_TOO_LARGE", status: null, message: "server returned more than a block", direction };
     const ids = new Set<string>();
@@ -194,6 +195,7 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
     if (Object.values(inflight).filter(Boolean).length >= MAX_INFLIGHT) return; // nunca una cola ilimitada
     const ctrl = controller ?? (controller = new AbortController());
     metrics.requests++;
+    let self: Promise<void> | undefined;
     const p = (async () => {
       try {
         const page = await fn(ctrl.signal);
@@ -206,11 +208,11 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
         const e = errorOf(error, direction);
         publish({ status: snapshot.blocks.length ? snapshot.status : (e.code === "OFFLINE" ? "offline" : e.status === 503 ? "unavailable" : "error"), edgeError: e });
       } finally {
-        delete inflight[direction];
+        if (inflight[direction] === self) delete inflight[direction]; // una petición descartada no borra la marca de otra posterior
         if (!destroyed && gen === generation) publish({});
       }
     })();
-    inflight[direction] = p;
+    inflight[direction] = self = p;
     publish({});
     return p;
   }
@@ -224,12 +226,17 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
     publish({ blocks: [], revision: null, totalMatched: null, staleReset: true, edgeError: null, status: "loading", provisional: false });
     await loadFirst({ keepGeneration: true });
   }
-  function applyFirst(page: CatalogPage, legacy: CatalogStoreSnapshot["legacy"] = null, cacheable = false): void {
-    const err = validatePage(page, null, "first");
-    if (err) { if (err.code === "CURSOR_STALE") { void recoverFromStale(generation); return; } integrityStop({ message: err.message, code: err.code }); return; }
-    const block = toBlock(page);
+  /** Sustituye los bloques residentes por `page` (y, en una actualización en el sitio, por las páginas contiguas que la siguen). */
+  function applyFirst(page: CatalogPage, legacy: CatalogStoreSnapshot["legacy"] = null, cacheable = false, following: CatalogPage[] = []): void {
+    let end = page.startOrdinal;
+    for (const p of [page, ...following]) {
+      const err = validatePage(p, p === page ? null : end, "first") ?? (p.revision !== page.revision ? { code: "REVISION_MIXED", message: "pages of one refresh belong to different revisions" } : null);
+      if (err) { integrityStop({ message: err.message, code: err.code }); return; }
+      end = p.startOrdinal + p.items.length;
+    }
+    const blocks = evict([page, ...following].map(toBlock));
     const status: CatalogStoreStatus = page.items.length === 0 ? (page.totalLibrary === 0 ? "empty" : "no-results") : "ready";
-    publish({ status, blocks: [block], revision: page.revision, totalMatched: page.totalMatched, totalLibrary: page.totalLibrary, edgeError: null, legacy, provisional: false });
+    publish({ status, blocks, revision: page.revision, totalMatched: page.totalMatched, totalLibrary: page.totalLibrary, edgeError: null, legacy, provisional: false });
     if (cacheable && page.startOrdinal === 0) { try { options.onFirstPage?.(page, { filters: snapshot.filters, sort: snapshot.sort, queryKey: snapshot.queryKey }); } catch { /* la copia local nunca rompe la Gallery */ } }
   }
   function listRequest(extra: { cursor?: string | null; edge?: "last" | null; includeTotal?: boolean }) {
@@ -340,7 +347,7 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
   function observeViewport(input: { firstOrdinal: number; lastOrdinal: number; perViewport: number; prefetchViewports?: number }): void {
     const pv = Math.min(PREFETCH_VIEWPORTS_MAX, Math.max(PREFETCH_VIEWPORTS_MIN, input.prefetchViewports ?? PREFETCH_VIEWPORTS_DEFAULT));
     protectedRange = { start: input.firstOrdinal, end: input.lastOrdinal + 1 };
-    if (snapshot.status !== "ready" || snapshot.provisional) return; // sin prefetch con cursores de la copia local
+    if (snapshot.status !== "ready" || snapshot.provisional || refreshing) return; // sin prefetch con cursores de la copia local ni con los que una actualización va a sustituir
     const lead = pv * Math.max(1, input.perViewport);
     if (snapshot.hasAfter && input.lastOrdinal + lead >= snapshot.endOrdinal) void loadNext();
     if (snapshot.hasBefore && input.firstOrdinal - lead < snapshot.firstOrdinal) void loadPrevious();
@@ -358,10 +365,44 @@ export function createCatalogQueryStore(options: CatalogQueryStoreOptions) {
     controller?.abort(); controller = null; inflight = {};
     publish({ queryGeneration: generation, staleReset: false, edgeError: null });
   }
-  // Aviso de cambio (SSE o feed): invalida de forma acotada → recarga del primer bloque de la query vigente, sin refetch total.
+  // Cambio confirmado en la biblioteca (mutación propia o aviso del servidor). E79: actualización EN EL SITIO — los bloques residentes se vuelven a
+  // pedir a PostgreSQL desde el inicio de la consulta vigente y se sustituyen de una vez al llegar. La Gallery no se vacía ni pierde el scroll: las
+  // tarjetas que siguen existiendo permanecen y las nuevas aparecen ya en su posición según el orden y los filtros vigentes. Los cursores
+  // anteriores se descartan con sus bloques. Un cambio que llega durante una actualización provoca otra al terminar (ninguno se pierde).
+  let refreshing = false; let refreshAgain = false;
   function notifyLibraryChanged(): void {
-    if (snapshot.status === "idle" || snapshot.status === "resolving") return;
-    void loadFirst({ keepGeneration: true });
+    if (destroyed || snapshot.status === "idle" || snapshot.status === "resolving") return;
+    if (snapshot.provisional) { void revalidate(); return; } // la copia local ya se está sustituyendo por el primer bloque de PostgreSQL
+    if (refreshing) { refreshAgain = true; return; }
+    refreshing = true;
+    void refreshResident().finally(() => { refreshing = false; if (refreshAgain) { refreshAgain = false; notifyLibraryChanged(); } });
+  }
+  async function refreshResident(): Promise<void> {
+    const gen = generation;
+    // Hasta dónde llegaba lo residente; si el inicio de la consulta ya no es residente (scroll muy profundo), solo el primer bloque.
+    const targetEnd = snapshot.firstOrdinal === 0 ? snapshot.endOrdinal : 0;
+    controller?.abort(); inflight = {}; // cargas de borde en vuelo: sus cursores quedan obsoletos
+    const ctrl = (controller = new AbortController());
+    const pages: CatalogPage[] = [];
+    try {
+      let cursor: string | null = null;
+      do {
+        metrics.requests++;
+        const page: CatalogPage = await api.listBeats(listRequest({ cursor, includeTotal: cursor === null }), ctrl.signal);
+        if (destroyed || gen !== generation) { metrics.discardedLate++; return; }
+        if (pages.length && page.revision !== pages[0].revision) { refreshAgain = true; return; } // otro cambio a mitad: se repite entera
+        pages.push(page); cursor = page.nextCursor;
+      } while (cursor && pages.length < maxBlocks && pages[pages.length - 1].startOrdinal + pages[pages.length - 1].items.length < targetEnd);
+    } catch (error) {
+      if (destroyed || gen !== generation || ctrl.signal.aborted) { metrics.discardedLate++; return; }
+      if (isCatalogApiError(error) && error.code === "CURSOR_STALE") { refreshAgain = true; return; } // otro cambio a mitad: se repite entera
+      if (isCatalogApiError(error) && error.status === 401) { publish({ status: "unauthenticated", edgeError: errorOf(error, "first") }); return; }
+      const e = errorOf(error, "first");
+      // Con tarjetas a la vista se conservan (siguen siendo lo último confirmado); sin ellas, el estado de error normal.
+      publish({ status: snapshot.blocks.length ? snapshot.status : (e.code === "OFFLINE" ? "offline" : e.status === 503 ? "unavailable" : "error"), edgeError: snapshot.blocks.length ? snapshot.edgeError : e });
+      return;
+    }
+    applyFirst(pages[0], null, true, pages.slice(1));
   }
   function teardown(): void {
     controller?.abort(); controller = null; inflight = {};

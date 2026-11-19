@@ -14,7 +14,7 @@ function harness(opts: Parameters<typeof createCatalogFakeCommands>[0] = {}, acc
   const server = createCatalogFakeCommands(opts);
   const common = { fetchImpl: server.fetchImpl, baseUrl: () => "https://cloud.invalid/api", token: () => "tok", csrf: () => "c", headers: () => ({ era: "era-fake", epoch: "1" }) };
   const commands = createCatalogCommandsApi(common);
-  const transfer = createCatalogTransfer({ ...common, sleep: async () => {}, pollIntervalMs: 1, idempotencyKey: () => `k-${Math.random().toString(36).slice(2)}` });
+  const transfer = createCatalogTransfer({ ...common, direct: server.directPort, sleep: async () => {}, pollIntervalMs: 1, idempotencyKey: () => `k-${Math.random().toString(36).slice(2)}` });
   const storage = memoryStorage();
   let accountId = account;
   const prepared: string[] = [];
@@ -76,16 +76,16 @@ describe("catalogMutations", () => {
     expect(h.server.legacy).toEqual({ getLibraryIndex: 0, replaceLibraryIndex: 0 });
   });
 
-  it("import: strip ID3/ZIP conservados como preparación, operación C7 (MASTER por capacidad, PROJECT por MASTER), progreso por etapas, commit; referencia de operación persistida y olvidada al confirmar", async () => {
+  it("import: strip ID3/ZIP conservados como preparación, operación C7 (MASTER y PROJECT por Direct B: ticket → envío del navegador → recibo), progreso por etapas, commit; referencia de operación persistida y olvidada al confirmar", async () => {
     const h = harness();
     const stages: string[] = [];
     const r = await h.mutations.importBeat({ beat: { name: "Nuevo", bpm: "120", key: "Cm", tags: ["trap"], rating: 3, color: "#111", color2: "#222", image_base64: null }, files: { master: blob(3000), project: blob(500, "application/zip") }, onProgress: (p) => stages.push(`${p.stage}:${p.uploadedBytes}/${p.totalBytes}`) });
     expect(r.status).toBe("committed"); if (r.status === "committed") { expect(r.version).toBe("1"); expect(h.server.beats.get(r.beatId)?.name).toBe("Nuevo"); }
     expect(h.prepared).toEqual(["prepare:Nuevo:master,project"]);
     expect(stages[0]).toBe("preparing:0/3500"); expect(stages.at(-1)).toBe("library:3500/3500"); expect(stages.some((s) => s.startsWith("master:"))).toBe(true); expect(stages.some((s) => s.startsWith("project:"))).toBe(true);
-    expect(h.server.counters["POST /catalog/v1/operations/:id/parts/:partKey/capability"]).toBe(1);
-    expect(h.server.counters["PUT /catalog/v1/transfer/upload/:token"]).toBe(1);
-    expect(h.server.counters["PUT /catalog/v1/operations/:id/parts/:partKey/project"]).toBe(1);
+    expect(h.server.counters["POST /catalog/v1/operations/:id/parts/:partKey/send-ticket"]).toBe(2);
+    expect(h.server.counters["PUT /catalog/v1/operations/:id/parts/:partKey/direct-receipt"]).toBe(2);
+    expect(h.server.directSent.map((x) => x.caption.split(" part=")[1]).sort()).toEqual(["MASTER:0", "PROJECT:0"]); // PROJECT también por el navegador, sin ruta propia en el Cloud
     expect(h.mutations.pendingOperations()).toEqual([]);
     expect(h.server.legacy).toEqual({ getLibraryIndex: 0, replaceLibraryIndex: 0 });
     await expect(h.mutations.importBeat({ beat: { name: "x", bpm: "", key: "", tags: [], rating: 0, color: "", color2: "", image_base64: null }, files: {} })).rejects.toMatchObject({ code: "INPUT_INVALID" });
@@ -100,7 +100,7 @@ describe("catalogMutations", () => {
     const spyFetch: typeof fetch = async (input, init) => { const url = String(input); if (!conflicted && url.includes("/commit")) { conflicted = true; h.server.externalEdit("g5"); } return serverFetch(input, init); };
     const common = { fetchImpl: spyFetch, baseUrl: () => "https://cloud.invalid/api", token: () => "tok", csrf: () => "c", headers: () => ({ era: "era-fake", epoch: "1" }) };
     const storage = memoryStorage(); let account = "acc-A";
-    const mutations = createCatalogMutations({ commands: createCatalogCommandsApi(common), transfer: createCatalogTransfer({ ...common, sleep: async () => {}, pollIntervalMs: 1 }), accountId: () => account, refStore: createLocalOperationRefStore(storage), prepareFiles: async (f) => ({ ...f, projectFlags: null }) });
+    const mutations = createCatalogMutations({ commands: createCatalogCommandsApi(common), transfer: createCatalogTransfer({ ...common, direct: h.server.directPort, sleep: async () => {}, pollIntervalMs: 1 }), accountId: () => account, refStore: createLocalOperationRefStore(storage), prepareFiles: async (f) => ({ ...f, projectFlags: null }) });
     const r = await mutations.replaceBeat({ beatId: "g5", expectedVersion: "1", original, updated: { ...original, name: "Beat 5 v2" }, files: { master: blob(2000) } });
     expect(r.status).toBe("conflict"); if (r.status === "conflict") { expect(r.retained).toBe(true); expect(r.error?.code).toBe("VERSION_CONFLICT"); }
     expect(h.server.beats.get("g5")!.name).toBe("Edited elsewhere");

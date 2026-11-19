@@ -206,3 +206,81 @@ describe("catalogQueryStore", () => {
     expect(residentIds(s3)).toEqual(api3.fake.sorted("rating").slice(0, 340));
   });
 });
+
+// E79 — Estado único de la Gallery: un cambio confirmado (beat nuevo, reemplazo, papelera…) actualiza los bloques residentes EN EL SITIO.
+describe("catalogQueryStore: actualización en el sitio (E79)", () => {
+  const newBeat = (id: string, rating: number) => ({ id, name: `Nuevo ${id}`, bpm: "120", key: "Cm", tags: ["even"], rating, manualRank: -1, state: "ACTIVE" as const });
+  const watch = (store: ReturnType<typeof createCatalogQueryStore>) => { const seen: Array<{ status: string; items: number; gen: number }> = []; store.subscribe(() => { const s = store.getSnapshot(); seen.push({ status: s.status, items: s.endOrdinal - s.firstOrdinal, gen: s.queryGeneration }); }); return seen; };
+
+  it("un beat nuevo aparece una sola vez y en su posición según el orden vigente, sin vaciar la Gallery ni cambiar de generación", async () => {
+    const api = createCatalogFakeApi({ n: 100 });
+    const store = createCatalogQueryStore({ api, accountId: "A" });
+    await store.resolve(); await store.loadFirst();
+    const gen = store.getSnapshot().queryGeneration; const seen = watch(store);
+    api.fake.beats.push(newBeat("nuevo", 3)); api.fake.bumpRevision("BEAT_IMPORTED", "nuevo");
+    store.notifyLibraryChanged(); await settle();
+    const s = store.getSnapshot(); const ids = residentIds(store);
+    expect(ids).toEqual(api.fake.sorted("rating")); // el orden lo decide PostgreSQL
+    expect(ids.filter((id) => id === "nuevo")).toHaveLength(1);
+    expect(ids.indexOf("nuevo")).toBeGreaterThan(0); expect(ids.indexOf("nuevo")).toBeLessThan(100); // en medio (rating 3), no al principio ni al final
+    expect([s.status, s.revision, s.totalMatched, s.queryGeneration, s.staleReset]).toEqual(["ready", "2", 101, gen, false]);
+    expect(seen.every((x) => x.status === "ready" && x.items >= 100 && x.gen === gen)).toBe(true); // nunca vacía, cargando ni otra generación
+    expect(api.fake.counters.listBeats).toBe(2);
+    // con otro orden y un filtro que lo excluye, el mismo cambio respeta ambos
+    await store.setQuery({ ...DEFAULT_FILTERS, includeTags: ["odd"] }, "name");
+    api.fake.beats.push(newBeat("otro", 5)); api.fake.bumpRevision();
+    store.notifyLibraryChanged(); await settle();
+    expect(residentIds(store)).toEqual(api.fake.sorted("name", { includeTags: ["odd"] })); expect(residentIds(store)).not.toContain("otro");
+  });
+
+  it("varios bloques residentes se vuelven a pedir completos y se sustituyen de una vez; el scroll continuo sigue con cursores nuevos", async () => {
+    const api = createCatalogFakeApi({ n: 900 });
+    const store = createCatalogQueryStore({ api, accountId: "A" });
+    await store.resolve(); await store.loadFirst(); await store.loadNext(); await store.loadNext();
+    expect(store.getSnapshot().endOrdinal).toBe(720);
+    const seen = watch(store); const before = api.fake.counters.listBeats;
+    api.fake.beats.push(newBeat("nuevo", 5)); api.fake.bumpRevision();
+    store.notifyLibraryChanged(); await settle(12);
+    const s = store.getSnapshot();
+    expect([s.firstOrdinal, s.endOrdinal, s.blocks.length, s.revision]).toEqual([0, 720, 3, "2"]);
+    expect(residentIds(store)).toEqual(api.fake.sorted("rating").slice(0, 720));
+    expect(api.fake.counters.listBeats - before).toBe(3);
+    expect(seen.every((x) => x.items === 720)).toBe(true); // sustitución atómica: ni bloques parciales ni lista vacía
+    await store.loadNext(); await settle();
+    expect([store.getSnapshot().endOrdinal, store.getSnapshot().metrics.staleRecoveries, store.getSnapshot().staleReset]).toEqual([901, 0, false]);
+  });
+
+  it("subidas simultáneas: los cambios que llegan durante una actualización provocan exactamente otra al terminar; ninguno se pierde", async () => {
+    const api = createCatalogFakeApi({ n: 50 });
+    const store = createCatalogQueryStore({ api, accountId: "A" });
+    await store.resolve(); await store.loadFirst();
+    api.fake.hold();
+    api.fake.beats.push(newBeat("uno", 5)); api.fake.bumpRevision(); store.notifyLibraryChanged(); await tick();
+    api.fake.beats.push(newBeat("dos", 4)); api.fake.bumpRevision(); store.notifyLibraryChanged();
+    api.fake.beats.push(newBeat("tres", 0)); api.fake.bumpRevision(); store.notifyLibraryChanged();
+    api.fake.release(); await settle(12);
+    expect(residentIds(store)).toEqual(api.fake.sorted("rating")); expect(store.getSnapshot().totalMatched).toBe(53);
+    expect(api.fake.counters.listBeats).toBe(3); // carga inicial + actualización + una repetición (no una por aviso)
+  });
+
+  it("errores: si la actualización falla se conservan las tarjetas confirmadas; el prefetch no usa cursores que se van a sustituir", async () => {
+    const api = createCatalogFakeApi({ n: 600 });
+    const store = createCatalogQueryStore({ api, accountId: "A" });
+    await store.resolve(); await store.loadFirst();
+    api.fake.setFailure({ kind: "offline" });
+    store.notifyLibraryChanged(); await settle();
+    let s = store.getSnapshot();
+    expect([s.status, s.endOrdinal, s.revision]).toEqual(["ready", 240, "1"]);
+    api.fake.setFailure(null);
+    api.fake.beats.push(newBeat("nuevo", 5)); api.fake.bumpRevision();
+    api.fake.hold(); store.notifyLibraryChanged(); await tick();
+    const during = api.fake.counters.listBeats;
+    store.observeViewport({ firstOrdinal: 200, lastOrdinal: 239, perViewport: 35 }); await tick(); // pediría el bloque siguiente con un cursor viejo
+    expect(api.fake.counters.listBeats).toBe(during);
+    api.fake.release(); await settle(12);
+    s = store.getSnapshot();
+    expect([s.status, s.revision, s.metrics.staleRecoveries, store.itemAt(0)?.id]).toEqual(["ready", "2", 0, api.fake.sorted("rating")[0]]);
+    store.observeViewport({ firstOrdinal: 200, lastOrdinal: 239, perViewport: 35 }); await settle();
+    expect(store.getSnapshot().endOrdinal).toBe(480); // ya con cursores vigentes
+  });
+});

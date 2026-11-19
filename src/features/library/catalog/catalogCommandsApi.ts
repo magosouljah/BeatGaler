@@ -43,7 +43,7 @@ export interface CatalogBulkOperation { operationId: string; kind: CatalogBulkKi
 export interface CatalogRenamePreview { from: string; to: string; countActive: number; countTrash: number; mergesInto: boolean; revision: string; epoch: string; authorityEra: string }
 export type CatalogPurgeStatus = "ENUMERATING" | "DELETING" | "PURGED" | "PARTIAL" | "BLOCKED" | "CANCELLED";
 export interface CatalogPurgeItem { beatId: string; status: "PENDING" | "ENUMERATED" | "DELETING" | "PURGED" | "BLOCKED"; blockReason: string | null; objectsTotal: number; objectsDeleted: number }
-export interface CatalogPurgeOperation { operationId: string; purgeId: string; kind: "PURGE"; status: CatalogPurgeStatus; scope: "ALL_TRASH" | "ITEMS"; baseRevision: string; progress: { total: number; purged: number; blocked: number; pending: number; objects: Record<string, number> }; items: CatalogPurgeItem[]; lastError: string | null; durable: true; created?: boolean; replay?: boolean }
+export interface CatalogPurgeOperation { operationId: string; purgeId: string; kind: "PURGE"; status: CatalogPurgeStatus; scope: "ALL_TRASH" | "ITEMS"; baseRevision: string; progress: { total: number; purged: number; blocked: number; pending: number; objects: Record<string, number> }; /** E81: limpieza física en Telegram, en segundo plano (no afecta a la biblioteca). */ cleanup?: { deleted: number; kept: number; rejected: number; uncertain: number; pending: number }; items: CatalogPurgeItem[]; lastError: string | null; durable: true; created?: boolean; replay?: boolean }
 
 export interface CatalogCommandsOptions {
   fetchImpl?: typeof fetch;

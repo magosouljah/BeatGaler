@@ -45,6 +45,10 @@ export interface CatalogMutationsOptions {
   now?: () => number;
   /** Preparación de archivos del cliente (strip ID3 del MASTER, ZIP del PROJECT); inyectable para pruebas. */
   prepareFiles?: (files: TransferFiles, beatName: string) => Promise<PreparedTransferFiles>;
+  /** E71: el MASTER preparado (bytes originales sin ID3) y su especificación con SHA-256, para guardar el prefijo local sin red. */
+  onMasterPrepared?: (file: Blob, spec: TransferPartSpec) => void;
+  /** E75: inicio/fin de cada transferencia (importación o reemplazo); `committedMasterMp3` = confirmada en PostgreSQL con un MASTER MP3. */
+  onTransferActivity?: (event: { phase: "start" } | { phase: "end"; committedMasterMp3: boolean }) => void;
   signal?: AbortSignal;
 }
 
@@ -61,12 +65,13 @@ export function createLocalOperationRefStore(storage: Pick<Storage, "getItem" | 
 const defaultKey = (): string => (globalThis.crypto && "randomUUID" in globalThis.crypto ? globalThis.crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 /** Beat del modelo compartido a partir del detalle SQL (sin INDEX). Artwork/bytes se resuelven por referencias en T14. */
-export function beatFromCatalogDetail(d: CatalogBeatDto & Partial<CatalogBeatDetail>, artworkDataUrl: string | null = null): Beat {
+/** `artworkFailed`: la portada no pudo cargarse → la carátula vuelve al fondo de «sin portada» en vez de quedarse esperando. */
+export function beatFromCatalogDetail(d: CatalogBeatDto & Partial<CatalogBeatDetail>, artworkDataUrl: string | null = null, artworkFailed = false): Beat {
   const ref = (r: { fileId: string; revision: string } | null, filename: string | null = null): GalerCloudObjectRef | null => (r ? { object_id: `catalog:${r.fileId}`, revision: r.revision, filename } : null);
   const assets: BeatAssets = { master: ref(d.playback, null), wav: d.hasWav ? { object_id: `catalog:${d.id}:WAV`, revision: d.version } : null, artwork: ref(d.artwork), project: d.hasProject ? { object_id: `catalog:${d.id}:PROJECT`, revision: d.version } : null, samples: null, stems: d.hasStems ? { object_id: `catalog:${d.id}:STEMS`, revision: d.version } : null, loop: null };
   return {
     id: d.id, name: d.name, folder_path: "", mp3_path: "", wav_path: null, playback_path: "", bpm: d.bpm, key: d.key, needs_resolution: false, tags: [...d.tags], rating: d.rating,
-    image_base64: artworkDataUrl, image_preview_base64: artworkDataUrl, image_crop: null, has_wav: d.hasWav, has_stems: d.hasStems, has_samples: false, samples_path: null, has_flp: d.hasProject, has_als: false,
+    image_base64: artworkDataUrl, image_preview_base64: artworkDataUrl, artwork_pending: Boolean(d.artwork) && !artworkDataUrl && !artworkFailed, image_crop: null, has_wav: d.hasWav, has_stems: d.hasStems, has_samples: false, samples_path: null, has_flp: d.hasProject, has_als: false,
     stems_path: null, flp_path: null, als_path: null, other_files: [], color: d.color ?? "#666666", color2: d.color2 ?? "#999999", has_loop: false, loop_path: null,
     cloud_status: "SYNCED", telegram_file_id: assets.master?.object_id ?? null, telegram_message_id: null, offline_available: false, assets,
   };
@@ -200,7 +205,7 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
   // ---- import / reemplazo por operaciones C7 ----
   function partSpecs(prepared: PreparedTransferFiles): Array<{ spec: Promise<TransferPartSpec>; file: File; stage: MutationStage; role: TransferRole }> {
     const out: Array<{ spec: Promise<TransferPartSpec>; file: File; stage: MutationStage; role: TransferRole }> = [];
-    if (prepared.master) out.push({ file: prepared.master, stage: "master", role: "MASTER", spec: describePart(prepared.master, { partKey: "MASTER:0", slotKey: "MASTER", role: "MASTER", filename: prepared.master.name, mime: prepared.master.type || "audio/mpeg" }) });
+    if (prepared.master) { const master = prepared.master; out.push({ file: master, stage: "master", role: "MASTER", spec: describePart(master, { partKey: "MASTER:0", slotKey: "MASTER", role: "MASTER", filename: master.name, mime: master.type || "audio/mpeg" }).then((sp) => { try { options.onMasterPrepared?.(master, sp); } catch { /* caché opcional */ } return sp; }) }); }
     if (prepared.wav) out.push({ file: prepared.wav, stage: "wav", role: "WAV", spec: describePart(prepared.wav, { partKey: "FILES:0:0", slotKey: "FILES:0", role: "WAV", filename: prepared.wav.name, mime: prepared.wav.type || "audio/wav" }) });
     if (prepared.artwork) out.push({ file: prepared.artwork, stage: "artwork", role: "ARTWORK", spec: describePart(prepared.artwork, { partKey: "ARTWORK:0", slotKey: "ARTWORK", role: "ARTWORK", filename: prepared.artwork.name, mime: prepared.artwork.type || "image/png" }) });
     if (prepared.project) out.push({ file: prepared.project, stage: "project", role: "PROJECT", spec: describePart(prepared.project, { partKey: "PROJECT:0", slotKey: "PROJECT", role: "PROJECT", filename: prepared.project.name, mime: prepared.project.type || "application/zip" }) });
@@ -212,7 +217,7 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     const map = { CONFLICT: "conflict", BLOCKED: "blocked", FAILED: "failed", CANCELED: "canceled", RECONCILE: "blocked" } as const;
     return { status: map[result.status], operationId, beatId, operation: result.operation, retained: result.status !== "CANCELED", error: result.error };
   }
-  async function runTransfer(intent: TransferIntent, prepared: PreparedTransferFiles, parts: Array<{ file: File; stage: MutationStage; role: TransferRole; spec: TransferPartSpec }>, { onProgress, kind, beatId: knownBeatId, label }: { onProgress?: (p: MutationProgress) => void; kind: "IMPORT" | "REPLACE"; beatId: string | null; label: string }): Promise<TransferOutcome> {
+  async function runTransferInner(intent: TransferIntent, prepared: PreparedTransferFiles, parts: Array<{ file: File; stage: MutationStage; role: TransferRole; spec: TransferPartSpec }>, { onProgress, kind, beatId: knownBeatId, label }: { onProgress?: (p: MutationProgress) => void; kind: "IMPORT" | "REPLACE"; beatId: string | null; label: string }): Promise<TransferOutcome> {
     const totalBytes = parts.reduce((n, p) => n + p.file.size, 0);
     onProgress?.({ stage: "preparing", uploadedBytes: 0, totalBytes });
     const op = await transfer.createOperation(intent, { idempotencyKey: newKey(), signal: options.signal });
@@ -222,9 +227,11 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     let uploaded = 0; const uncertain: string[] = [];
     for (const p of parts) {
       onProgress?.({ stage: p.stage, uploadedBytes: uploaded, totalBytes });
-      const r: UploadPartResult = p.role === "PROJECT"
-        ? await transfer.uploadProject({ operationId: op.operationId, partKey: p.spec.partKey, blob: p.file, filename: p.file.name, signal: options.signal })
-        : await transfer.uploadPart({ operationId: op.operationId, partKey: p.spec.partKey, blob: p.file, signal: options.signal });
+      // E80: avance real DENTRO de cada parte (eventos de bytes de Direct B), monótono: un reintento de la misma parte no hace retroceder el aviso.
+      let partBest = 0; const before = uploaded;
+      const onPartProgress = onProgress ? (bytes: number) => { if (bytes <= partBest) return; partBest = Math.min(p.file.size, bytes); onProgress({ stage: p.stage, uploadedBytes: before + partBest, totalBytes }); } : undefined;
+      // E77: todas las partes (PROJECT incluido) van navegador → Telegram por Direct B; el Cloud no recibe bytes.
+      const r: UploadPartResult = await transfer.uploadPart({ operationId: op.operationId, partKey: p.spec.partKey, blob: p.file, signal: options.signal, onProgress: onPartProgress });
       if (r.state === "UNCERTAIN") uncertain.push(p.spec.partKey);
       uploaded += p.file.size;
       onProgress?.({ stage: p.stage, uploadedBytes: uploaded, totalBytes });
@@ -236,6 +243,14 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     if (outcome.status === "committed") forgetOperation(op.operationId);
     return outcome;
   }
+  // E75: el coordinador del MAIN de prefijos necesita saber cuándo hay transferencias en curso y cuáles confirmaron un MASTER MP3.
+  const runTransfer: typeof runTransferInner = async (intent, prepared, parts, meta) => {
+    const masterMp3 = parts.some((p) => p.role === "MASTER" && (/^audio\/(mpeg|mp3)$/i.test(p.spec.mime ?? "") || /\.mp3$/i.test(p.spec.filename ?? "")));
+    const notify = (event: Parameters<NonNullable<CatalogMutationsOptions["onTransferActivity"]>>[0]) => { try { options.onTransferActivity?.(event); } catch { /* optimización opcional */ } };
+    let committed = false; notify({ phase: "start" });
+    try { const outcome = await runTransferInner(intent, prepared, parts, meta); committed = outcome.status === "committed"; return outcome; }
+    finally { notify({ phase: "end", committedMasterMp3: committed && masterMp3 }); }
+  };
   async function importBeat({ beat, files, onProgress }: { beat: Pick<Beat, "name" | "bpm" | "key" | "tags" | "rating" | "color" | "color2" | "image_base64">; files: TransferFiles; onProgress?: (p: MutationProgress) => void }): Promise<TransferOutcome> {
     if (!files.master) throw new CatalogApiError(400, "INPUT_INVALID", "Add a MASTER MP3 before saving this beat.", { reason: "IMPORT_REQUIRES_MASTER" });
     assertBeatNameWithinLimit(beat.name.trim()); // antes de leer/subir nada: el nombre nunca se recorta ni se toca el archivo original

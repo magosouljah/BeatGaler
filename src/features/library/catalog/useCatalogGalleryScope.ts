@@ -29,6 +29,8 @@ import { appConfirm } from "../../../lib/dialog";
 import type { CatalogStoreSnapshot } from "./catalogQueryStore";
 import { LEGACY_UNRESOLVABLE_COPY, createHistoryWriter, parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
 import { useAppShortcuts } from "../../../app/useAppShortcuts";
+import { noticeTone } from "../../../components/FloatingNotice";
+import { aggregateUploadPercent, uploadPercent } from "./catalogUploadProgress";
 
 export const SEARCH_DEBOUNCE_MS = 250;
 export const KNOWN_BEATS_MAX = 512; // tarjetas conocidas fuera de ventana (Playbar/cola): acotado, nunca la biblioteca entera
@@ -87,15 +89,28 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const toBeat = useCallback((dto: CatalogBeatDto): Beat => {
     remember(dto);
     const url = dto.artwork ? artworkUrls[dto.artwork.fileId] ?? null : null;
-    return beatFromCatalogDetail(dto, url);
+    return beatFromCatalogDetail(dto, url || null, url === "");
   }, [artworkUrls, remember]);
   const beatById = useCallback((id: string): Beat => { const dto = dtoById.current.get(id); return dto ? toBeat(dto) : placeholderBeat(id); }, [toBeat]);
   const noteOrdinal = useCallback((id: string, ordinal: number) => { ordinalById.current.set(id, ordinal); }, []);
-  // Artwork perezoso al montar la tarjeta (media manager con LRU; la concesión se reutiliza mientras no caduque).
-  const onMountCard = useCallback((id: string) => {
+  // Artwork perezoso al montar la tarjeta: memoria → caché persistente de este dispositivo (E79) → Telegram. Solo las tarjetas montadas piden portada.
+  // E80: las portadas que llegan en el mismo fotograma se aplican en UNA actualización (antes, una por portada: con 30 tarjetas, 30 renders
+  // completos de la Gallery en el arranque). "" = la portada no pudo cargarse (la carátula vuelve al fondo de «sin portada»).
+  const artworkBatch = useRef<Map<string, string> | null>(null);
+  const applyArtwork = useCallback((fileId: string, url: string) => {
+    if (artworkBatch.current) { artworkBatch.current.set(fileId, url); return; }
+    artworkBatch.current = new Map([[fileId, url]]);
+    const flush = () => {
+      const batch = artworkBatch.current; artworkBatch.current = null; if (!batch) return;
+      setArtworkUrls((prev) => { let next = prev; for (const [k, v] of batch) if (next[k] !== v) { if (next === prev) next = { ...prev }; next[k] = v; } return next; });
+    };
+    if (typeof requestAnimationFrame === "function" && typeof document !== "undefined" && document.visibilityState === "visible") requestAnimationFrame(flush); else setTimeout(flush, 0);
+  }, []);
+  const onMountCard = useCallback((id: string, ordinal?: number) => {
+    if (ordinal !== undefined) ordinalById.current.set(id, ordinal);
     const dto = dtoById.current.get(id); const ref = dto?.artwork; if (!ref) return;
-    void media.loadArtwork(ref.fileId).then((url) => { setArtworkUrls((prev) => (prev[ref.fileId] === url ? prev : { ...prev, [ref.fileId]: url })); }).catch(() => {});
-  }, [media]);
+    void media.loadArtwork(ref, id).then((url) => applyArtwork(ref.fileId, url), () => applyArtwork(ref.fileId, ""));
+  }, [media, applyArtwork]);
   const onUnmountCard = useCallback((id: string) => { ordinalById.current.delete(id); }, []);
 
   // ---- query global (búsqueda, tags, orden) → store / selección / sesión ----
@@ -370,11 +385,19 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   }, [showReview]);
   const cancelReview = useCallback(() => { setReview((r) => { if (r) platform.importer.releaseBeat(r.beat.id); return null; }); }, []);
   // «Save and finish» (comportamiento del BeatGaler anterior: «Save/next stays immediate; the extracted cloud queue owns upload work»):
-  // la revisión se cierra en cuanto el servidor aceptó la operación (nombre libre, cuota, tamaño) y el beat aparece YA en la Gallery como tarjeta
-  // «cargándose» (overlay de BeatCard por `setBeatCloudUpdateBusy`, el mismo del reemplazo de audio/portada) mientras la subida a Telegram
-  // continúa en segundo plano. Éxito → tarjeta real del servidor; fallo definitivo → la revisión se reabre con lo editado y el archivo intacto;
-  // incierto → aviso persistente y NUNCA reenvío (E5). Ningún beat se publica en la Gallery sin commit en PostgreSQL.
-  const [pendingImports, setPendingImports] = useState<Array<{ id: string; beat: Beat }>>([]);
+  // la revisión se cierra en cuanto el servidor aceptó la operación (nombre libre, cuota, tamaño) y la subida a Telegram continúa en segundo plano.
+  // E79 — una única representación: un beat nuevo NO tiene tarjeta mientras sube (antes aparecía una tarjeta provisional aparte, luego duplicada
+  // junto a la real). Su avance se muestra en el aviso flotante y la tarjeta aparece una sola vez, cuando PostgreSQL lo confirma, ya en su
+  // posición según el orden y los filtros vigentes. Fallo definitivo → la revisión se reabre con lo editado y el archivo intacto;
+  // incierto → aviso persistente y NUNCA reenvío (E5).
+  // E80: el avance es el de los BYTES enviados por Direct B (no por archivo terminado); con varias subidas, el total es bytes enviados / bytes
+  // totales de todas (una subida grande pesa lo que pesa, no lo mismo que una pequeña). El estado solo cambia cuando cambia el % entero.
+  const [uploads, setUploads] = useState<Array<{ id: string; name: string; percent: number; uploadedBytes: number; totalBytes: number }>>([]);
+  const uploadNotice = uploads.length === 0 ? null
+    : uploads.length === 1 ? `Subiendo «${uploads[0].name}»… ${uploads[0].percent} %`
+    : `Subiendo ${uploads.length} beats… ${aggregateUploadPercent(uploads)} %`;
+  // E75: mientras haya una revisión abierta o beats subiendo, el lote sigue en curso: el MAIN de prefijos se reconstruye UNA vez al terminar.
+  useEffect(() => { services.mainPack?.setBatchOpen(Boolean(review) || uploads.length > 0); }, [services.mainPack, review, uploads.length]);
   const saveReview = useCallback(async (updated: Beat, onProgress?: (p: { stage: "preparing" | "master" | "wav" | "artwork" | "project" | "library"; uploadedBytes: number; totalBytes: number }) => void) => {
     const r = review; if (!r) return;
     const original = platform.importer.fileForBeat(r.beat.id);
@@ -382,7 +405,14 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     const plan = await resolveImportPlan({ beat: updated, hydrated: r.hydrated ? r.hydrated.then(() => updated) : null, slotFiles: () => platform.importer.slotFilesForBeat(r.beat.id), originalFile: original });
     let begun: () => void = () => {};
     const begunP = new Promise<"started">((res) => { begun = () => res("started"); });
-    const job = mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress: (p) => { onProgress?.(p); if (p.stage !== "preparing") begun(); } })
+    const uploadId = updated.id; let percent = 0; let bytes = { uploadedBytes: 0, totalBytes: 0 };
+    const job = mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress: (p) => {
+      onProgress?.(p); if (p.stage === "preparing") { bytes = { uploadedBytes: 0, totalBytes: p.totalBytes }; return; }
+      begun();
+      bytes = { uploadedBytes: Math.min(p.uploadedBytes, p.totalBytes), totalBytes: p.totalBytes };
+      const next = uploadPercent(bytes.uploadedBytes, bytes.totalBytes);
+      if (next !== percent) { percent = next; const b = bytes; setUploads((list) => list.map((x) => (x.id === uploadId ? { ...x, percent: next, ...b } : x))); }
+    } })
       .then((outcome) => ({ outcome, error: null as unknown }), (error: unknown) => ({ outcome: null, error }));
     const first = await Promise.race([begunP, job.then(() => "settled" as const)]);
     const uncertainNotice = (name: string) => `La subida de «${name}» no se pudo confirmar. No se reenvía ni se borra nada: el servidor lo revisará y el beat aparecerá si Telegram lo recibió.`;
@@ -399,18 +429,16 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
       setNotice(`«${updated.name}» importado.`); refreshAfterMutation();
       return;
     }
-    const pendingId = updated.id;
-    setPendingImports((list) => [{ id: pendingId, beat: updated }, ...list.filter((x) => x.id !== pendingId)]);
-    setBeatCloudUpdateBusy(pendingId, true);
+    setUploads((list) => [...list.filter((x) => x.id !== uploadId), { id: uploadId, name: updated.name, percent, ...bytes }]);
+    setNotice((n) => (n && noticeTone(n) === "success" ? null : n)); // un «importado» anterior no tapa el avance de esta subida; errores e inciertos sí permanecen
     setReview(null); // cierra la revisión ya: el archivo sigue retenido hasta que termine la subida
     void job.then(({ outcome, error }) => {
-      const dropPending = (delayMs: number) => { window.setTimeout(() => setPendingImports((list) => list.filter((x) => x.id !== pendingId)), delayMs); };
+      setUploads((list) => list.filter((x) => x.id !== uploadId));
       if (outcome && outcome.status === "committed") {
-        platform.importer.releaseBeat(r.beat.id); refreshAfterMutation();
-        setBeatCloudUpdateBusy(pendingId, false, true); setNotice(`«${updated.name}» importado.`); dropPending(1300); // deja ver el «completado» y que llegue la tarjeta real
+        platform.importer.releaseBeat(r.beat.id); refreshAfterMutation(); // PostgreSQL ya lo tiene: la Gallery se actualiza en el sitio con la tarjeta real
+        setNotice((n) => (n && noticeTone(n) === "error" ? n : `«${updated.name}» importado.`));
         return;
       }
-      setBeatCloudUpdateBusy(pendingId, false, false); dropPending(0);
       // §6.1-7: RECONCILE («blocked») y tiempo agotado también pueden confirmarse después: como «uncertain», sin reabrir para reenviar.
       if (outcome && (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout")) { platform.importer.releaseBeat(r.beat.id); setNotice(outcome.status === "uncertain" ? uncertainNotice(updated.name) : pendingTransferNotice(updated.name)); refreshAfterMutation(); return; }
       const reason = error ? importFailureMessage(error) : (outcome as { error?: unknown } | null)?.error ? importFailureMessage((outcome as { error?: unknown }).error) : `quedó en estado ${outcome ? outcome.status : "desconocido"}`;
@@ -478,9 +506,9 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     drawer, setDrawer, updateBeat, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
-    showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, pendingImports, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
+    showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, uploads, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
-    notice: notice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
+    notice: notice ?? uploadNotice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
     accountId, context,
   };
 }
