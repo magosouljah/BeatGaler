@@ -6,11 +6,11 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-User=beatgaler-backup
-Group=beatgaler-backup
+User=root
+Group=root
 EnvironmentFile=/etc/beatgaler/catalog-backup.env
-WorkingDirectory=/opt/beatgaler
-ExecStart=/usr/bin/bash /opt/beatgaler/scripts/backup/pg-backup.sh
+WorkingDirectory=/opt/beatgaler/backup
+ExecStart=/usr/bin/python3 /opt/beatgaler/backup/pg-runtime-env.py
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
