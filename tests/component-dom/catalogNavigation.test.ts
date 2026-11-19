@@ -1,6 +1,6 @@
 // T08 / V05 + C12-B02 — Navegación URL: parser bgPage conservado, parámetros nuevos, historial acotado con debounce.
 import { describe, expect, it, vi } from "vitest";
-import { buildGalleryUrl, createHistoryWriter, parseLegacyBgPage, readNavigationState, HISTORY_LIMIT } from "../../src/features/library/catalog/catalogNavigation";
+import { anchorOfHistoryState, buildGalleryUrl, createHistoryWriter, parseLegacyBgPage, readNavigationState, HISTORY_LIMIT } from "../../src/features/library/catalog/catalogNavigation";
 
 describe("catalogNavigation", () => {
   it("B02: parser legacy bgPage = Number del primer parámetro; inválido/negativo/fracción → 0; no seguro → LEGACY_OFFSET_INVALID; cursor/filtros + bgPage → INPUT_INVALID", () => {
@@ -25,7 +25,10 @@ describe("catalogNavigation", () => {
     expect(url.searchParams.has("bgPage")).toBe(false);
     expect(url.searchParams.get("utm")).toBe("x");
     expect(url.searchParams.getAll("bgInclude")).toEqual(["Trap", "Dark"]);
-    expect(readNavigationState(url.search)).toEqual(s);
+    expect(url.searchParams.has("bgAnchor")).toBe(false); // E-URL: el ancla (largo) ya no va en la URL
+    expect(readNavigationState(url.search)).toEqual({ ...s, anchor: null });
+    expect(readNavigationState(url.search, { catalog: true, anchor: "tok.sig" })).toEqual(s); // se lee de history.state
+    expect(anchorOfHistoryState({ anchor: 5 })).toBeNull(); expect(anchorOfHistoryState(null)).toBeNull();
     // defaults no se escriben
     const plain = new URL(buildGalleryUrl("https://beatgaler.invalid/gallery", { filters: { state: "ACTIVE", q: "", includeTags: [], excludeTags: [], includeMode: "any" }, sort: "rating", anchor: null }));
     expect(plain.search).toBe("");
@@ -35,14 +38,17 @@ describe("catalogNavigation", () => {
     vi.useFakeTimers();
     const calls: Array<[string, string]> = [];
     let href = "https://beatgaler.invalid/gallery";
-    const history = { replaceState: (_d: unknown, _u: string, url?: string | null) => { calls.push(["replace", String(url)]); href = String(url); }, pushState: (_d: unknown, _u: string, url?: string | null) => { calls.push(["push", String(url)]); href = String(url); } };
+    const states: unknown[] = [];
+    const history = { replaceState: (d: unknown, _u: string, url?: string | null) => { states.push(d); calls.push(["replace", String(url)]); href = String(url); }, pushState: (_d: unknown, _u: string, url?: string | null) => { calls.push(["push", String(url)]); href = String(url); } };
     const w = createHistoryWriter({ history, currentHref: () => href, setTimeoutImpl: (fn, ms) => setTimeout(fn, ms) as unknown as number, clearTimeoutImpl: (id) => clearTimeout(id) });
     const base = { filters: { state: "ACTIVE" as const, q: "", includeTags: [], excludeTags: [], includeMode: "any" as const }, sort: "rating" as const };
     for (let i = 0; i < 10; i++) w.replaceAnchor({ ...base, anchor: `a${i}` });
     expect(calls).toEqual([]);
     vi.advanceTimersByTime(299); expect(calls).toEqual([]);
     vi.advanceTimersByTime(1);
-    expect(calls).toEqual([["replace", "https://beatgaler.invalid/gallery?bgAnchor=a9"]]);
+    expect(calls).toEqual([["replace", "https://beatgaler.invalid/gallery"]]); // URL limpia: el ancla va solo en history.state
+    expect(states).toEqual([{ catalog: true, anchor: "a9" }]);
+    w.replaceAnchor({ ...base, anchor: "a9" }); vi.advanceTimersByTime(300); expect(calls.length).toBe(1); // mismo ancla y URL: sin escritura
     for (let i = 0; i < 20; i++) w.pushQuery({ ...base, filters: { ...base.filters, q: `q${i}` }, anchor: "ignored" });
     expect(calls.filter((c) => c[0] === "push").length).toBe(20);
     expect(w.entries().length).toBe(HISTORY_LIMIT);

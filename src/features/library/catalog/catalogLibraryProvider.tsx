@@ -56,10 +56,10 @@ export interface UseLibraryCompositionOptions {
 
 const STARTUP_CACHE_GRACE_MS = 40;
 
-// Consulta de arranque cacheable: solo la del primer bloque (sin bgPage legacy ni bgAnchor de reapertura).
+// Consulta de arranque cacheable: solo la del primer bloque (sin bgPage legacy ni ancla de reapertura, ni en la URL ni en history.state).
 function startupQuery(search: string) {
   if (parseLegacyBgPage(search).kind !== "none") return null;
-  const nav = readNavigationState(search);
+  const nav = readNavigationState(search, typeof window !== "undefined" ? window.history.state : null);
   return nav.anchor ? null : { filters: nav.filters, sort: nav.sort };
 }
 

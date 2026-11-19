@@ -132,7 +132,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     const legacy = parseLegacyBgPage(search);
     if (legacy.kind === "offset") { void store.loadLegacy(legacy.offset); return; }
     if (legacy.kind === "invalid") { setNotice(LEGACY_UNRESOLVABLE_COPY); void store.loadFirst(); return; }
-    const nav = readNavigationState(search);
+    const nav = readNavigationState(search, typeof window !== "undefined" ? window.history.state : null);
     if (nav.filters.q || nav.filters.includeTags.length || nav.filters.excludeTags.length || nav.sort !== snapshot.sort || nav.filters.state !== snapshot.filters.state) {
       setSearchState(nav.filters.q); setIncluded(new Set(nav.filters.includeTags)); setExcluded(new Set(nav.filters.excludeTags));
       void store.setQuery(nav.filters, nav.sort);
@@ -150,7 +150,8 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   }, [snapshot.queryKey, snapshot.status]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!snapshot.resumeCursor || snapshot.status !== "ready" || snapshot.legacy) return;
-    history.replaceAnchor({ filters: snapshot.filters, sort: snapshot.sort, anchor: snapshot.resumeCursor });
+    // Al inicio de la lista no se guarda ancla: una recarga arranca limpia y puede usar la copia local de arranque rápido (E66).
+    history.replaceAnchor({ filters: snapshot.filters, sort: snapshot.sort, anchor: snapshot.firstOrdinal > 0 ? snapshot.resumeCursor : null });
   }, [snapshot.resumeCursor, snapshot.status]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => history.cancelPending(), [history]);
   useEffect(() => {

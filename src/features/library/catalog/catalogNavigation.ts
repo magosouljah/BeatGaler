@@ -1,5 +1,6 @@
 // T08 / V05 — Navegación URL del catálogo (plan B §5.3 y §7; C12 §5.2 B-legacy). Sin pager POSTGRES ni location.assign.
-//  - Parámetros nuevos: bgAnchor (resumeCursor opaco), bgSort, bgQ, bgInclude/bgExclude (repetibles), bgMode, bgState.
+//  - Parámetros: bgSort, bgQ, bgInclude/bgExclude (repetibles), bgMode, bgState. La posición (resumeCursor opaco, largo) NO va en la URL: se guarda en
+//    `history.state` de la entrada actual (sobrevive a recargar y a atrás/adelante en esa pestaña). `bgAnchor` en la URL solo se LEE (enlaces antiguos).
 //  - bgPage legacy: parser actual (Number del primer parámetro, entero >= 0); inválido/negativo/fracción → 0;
 //    entero no seguro → LEGACY_OFFSET_INVALID con acción «primera página»; cursor + bgPage o bgPage + filtros → INPUT_INVALID.
 //  - history.replaceState con debounce (300 ms) al estabilizar; pushState solo para cambios deliberados; historial acotado (16).
@@ -45,7 +46,13 @@ export function parseLegacyBgPage(search: string): LegacyPageRequest {
   return { kind: "offset", offset: n, canonical: String(n) };
 }
 
-export function readNavigationState(search: string): CatalogNavigationState {
+/** Ancla guardada en `history.state` por `createHistoryWriter` (null si no hay). */
+export function anchorOfHistoryState(state: unknown): string | null {
+  const a = state && typeof state === "object" ? (state as { anchor?: unknown }).anchor : null;
+  return typeof a === "string" && a ? a : null;
+}
+
+export function readNavigationState(search: string, historyState: unknown = null): CatalogNavigationState {
   const p = new URLSearchParams(search);
   const sortRaw = p.get(BG_SORT);
   const stateRaw = p.get(BG_STATE);
@@ -59,7 +66,7 @@ export function readNavigationState(search: string): CatalogNavigationState {
       includeMode: modeRaw === "all" ? "all" : ("any" as CatalogIncludeMode),
     },
     sort: SORTS.includes(sortRaw as CatalogSort) ? (sortRaw as CatalogSort) : "rating",
-    anchor: p.get(BG_ANCHOR),
+    anchor: p.get(BG_ANCHOR) ?? anchorOfHistoryState(historyState),
   };
 }
 
@@ -74,7 +81,6 @@ export function buildGalleryUrl(href: string, state: CatalogNavigationState): st
   for (const t of state.filters.includeTags) keep.append(BG_INCLUDE, t);
   for (const t of state.filters.excludeTags) keep.append(BG_EXCLUDE, t);
   if (state.filters.includeMode !== "any") keep.set(BG_MODE, state.filters.includeMode);
-  if (state.anchor) keep.set(BG_ANCHOR, state.anchor);
   url.search = keep.toString() ? `?${keep.toString()}` : "";
   return url.toString();
 }
@@ -98,18 +104,20 @@ export function createHistoryWriter(options: HistoryWriterOptions = {}) {
   const setT = options.setTimeoutImpl ?? ((fn, ms) => (typeof window !== "undefined" ? window.setTimeout(fn, ms) : (setTimeout(fn, ms) as unknown as number)));
   const clearT = options.clearTimeoutImpl ?? ((id) => (typeof window !== "undefined" ? window.clearTimeout(id) : clearTimeout(id as unknown as NodeJS.Timeout)));
   const entries: string[] = [];
+  let lastAnchor: string | null | undefined; // undefined = aún no escrito (la primera escritura también limpia un bgAnchor antiguo de la URL)
   let pending: number | null = null;
   let replaceCount = 0; let pushCount = 0;
   const remember = (url: string) => { entries.push(url); while (entries.length > HISTORY_LIMIT) entries.shift(); };
   return {
-    // Ancla estabilizada: reemplaza la entrada actual, sin crear historial por cada bloque.
+    // Ancla estabilizada: reemplaza la entrada actual (la URL solo lleva filtros/orden; el ancla va en history.state), sin crear historial por bloque.
     replaceAnchor(state: CatalogNavigationState): void {
       if (pending !== null) clearT(pending);
       pending = setT(() => {
         pending = null;
         const url = buildGalleryUrl(currentHref(), state);
-        if (url === currentHref()) return;
-        history?.replaceState({ catalog: true }, "", url);
+        if (url === currentHref() && state.anchor === lastAnchor) return;
+        history?.replaceState({ catalog: true, anchor: state.anchor }, "", url);
+        lastAnchor = state.anchor;
         replaceCount++;
       }, debounceMs);
     },
@@ -117,7 +125,8 @@ export function createHistoryWriter(options: HistoryWriterOptions = {}) {
     pushQuery(state: CatalogNavigationState): void {
       if (pending !== null) { clearT(pending); pending = null; }
       const url = buildGalleryUrl(currentHref(), { ...state, anchor: null });
-      history?.pushState({ catalog: true }, "", url);
+      history?.pushState({ catalog: true, anchor: null }, "", url);
+      lastAnchor = null;
       remember(url);
       pushCount++;
     },
