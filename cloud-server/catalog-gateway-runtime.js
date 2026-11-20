@@ -11,6 +11,7 @@ const { createTelegramGateway, GatewayError } = require('./catalog/transport-gat
 
 const GATEWAY_FLAG = 'BEATGALER_CATALOG_GATEWAY_ENABLED';
 const G2_FLAG = 'BEATGALER_CATALOG_G2_APPROVED';
+const OWNER_EXCEPTION_FLAG = 'BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED';
 const isTrue = (v) => String(v || '').trim().toLowerCase() === 'true';
 const isProduction = (env) => ['production', 'prod'].includes(String(env.BEATGALER_DEPLOYMENT_ENV || env.NODE_ENV || '').trim().toLowerCase());
 
@@ -19,7 +20,12 @@ function gatewayEnabled(env = process.env) { return isTrue(env[GATEWAY_FLAG]); }
 // Guarda de arranque: devuelve null si el gateway está apagado; lanza STOP-* si está encendido sin condiciones.
 function assertGatewayAllowed(env = process.env) {
   if (!gatewayEnabled(env)) return false;
-  if (isProduction(env) && !isTrue(env[G2_FLAG])) throw new Error(`STOP-GATE: ${GATEWAY_FLAG}=true in production requires ${G2_FLAG}=true (independent G2 verdict); refusing to start.`);
+  // Owner-accepted rollout with reused, unrotated bots. This NEVER marks G2 PASS.
+  // The Cloud bootstrap also verifies the SQL activation row records this mode.
+  const exception = isTrue(env[OWNER_EXCEPTION_FLAG]) && isTrue(env.BEATGALER_CATALOG_NATIVE_ENABLED);
+  if (isProduction(env) && !isTrue(env[G2_FLAG]) && !exception) {
+    throw new Error(`STOP-GATE: ${GATEWAY_FLAG}=true in production requires proven G2 or explicitly accepted reused-bot risk; refusing to start.`);
+  }
   return true;
 }
 
@@ -152,4 +158,4 @@ function gatewayFromEnv({ pool, env = process.env, log = null, credentialFor = n
   return createGatewayRuntime({ pool, clientProvider: provider, sdk: sdkReal, log });
 }
 
-module.exports = Object.freeze({ GATEWAY_FLAG, G2_FLAG, gatewayEnabled, assertGatewayAllowed, createGatewayRuntime, createRealBotClientProvider, gatewayFromEnv });
+module.exports = Object.freeze({ GATEWAY_FLAG, G2_FLAG, OWNER_EXCEPTION_FLAG, gatewayEnabled, assertGatewayAllowed, createGatewayRuntime, createRealBotClientProvider, gatewayFromEnv });
