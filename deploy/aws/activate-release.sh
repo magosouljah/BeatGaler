@@ -23,7 +23,8 @@ log "artefactos verificados"
 
 # 2) Release Cloud inmutable (si ya existe con el mismo SHA se reutiliza).
 NEW="$CR/$ID"
-PREV_CLOUD="$(readlink -f "$CR/current" 2>/dev/null || true)"
+PREV_CLOUD=""; [ -L "$CR/current" ] && PREV_CLOUD="$(readlink -f "$CR/current")"
+# Primera activación: la release previa es la que fijaba el script manual (`cd /home/ec2-user/BeatGaler-releases/<dir>`).
 if [ -z "$PREV_CLOUD" ]; then PREV_CLOUD="$(sed -n 's#^cd \(/home/ec2-user/BeatGaler-releases/[^ ]*\)$#\1#p' /usr/local/bin/beatgaler-cloud-start | head -1)"; fi
 [ -d "$PREV_CLOUD/cloud-server" ] || { echo "STOP: previous Cloud release not found" >&2; exit 3; }
 if [ ! -f "$NEW/RELEASE_SHA" ]; then
