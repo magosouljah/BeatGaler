@@ -422,6 +422,43 @@ async function catalogDirectSession({ botId, chatId, sessionId = null }) {
   };
 }
 
+// Native PostgreSQL: establish one assigned bot's membership in its exact
+// existing Telegram storage group. Does NOT rotate tokens, create/delete
+// messages, touch INDEX, or change bot assignments.
+async function ensureCatalogBotMembership({ chatId, botId }) {
+  const chat = String(chatId || '').trim();
+  const id = String(botId || '').trim();
+  if (!/^-100[0-9]+$/.test(chat) || !id) throw new Error('CATALOG_TRANSPORT_TARGET_INVALID');
+  const cred = await catalogBotCredential(id);
+  const identity = await resolveBotIdentityViaHttp(cred.token);
+  if (cred.telegramUserId && String(identity.telegram_user_id) !== String(cred.telegramUserId)) {
+    const e = new Error('CATALOG_TRANSPORT_BOT_IDENTITY_MISMATCH'); e.code = 'BOT_IDENTITY_MISMATCH'; throw e;
+  }
+  if (!identity.telegram_username) throw new Error('CATALOG_TRANSPORT_BOT_USERNAME_MISSING');
+  const master = await masterForVault(chat);
+  try {
+    const botEntity = await master.client.getEntity('@' + identity.telegram_username);
+    await inviteAndPromote(master.client, master.vault, botEntity);
+    const participant = await master.client.invoke(new Api.channels.GetParticipant({
+      channel: master.vault, participant: botEntity,
+    }));
+    if (!participant?.participant) throw new Error('CATALOG_TRANSPORT_MASTER_MEMBERSHIP_UNVERIFIED');
+  } finally {
+    try { await master.client.disconnect(); } catch (_) {}
+  }
+  for (let n = 0; n < 8; n++) {
+    try {
+      const observed = await managerBotApiCall(cred.token, 'getChat', { chat_id: chat });
+      if (String(observed?.id || '') === chat) return { ready: true, botId: id };
+      throw new Error('CATALOG_TRANSPORT_BOT_CHAT_MISMATCH');
+    } catch (error) {
+      if (n === 7 || !botMembershipError(error).absent) throw error;
+      await wait(Math.min(1500, 250 * (n + 1)));
+    }
+  }
+  throw new Error('CATALOG_TRANSPORT_BOT_MEMBERSHIP_NOT_VISIBLE');
+}
+
 function cleanupStaleOperationsDurably(pool) {
   return withPoolLock(() => {
     const state = normalizeState(pool);
@@ -2110,6 +2147,7 @@ module.exports = {
   masterSenderId,
   catalogBotCredential,
   catalogDirectSession,
+  ensureCatalogBotMembership,
   copyLegacyProjectPart,
   copyLegacyProjectPartFromClient,
   directBotAdminRights,
