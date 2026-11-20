@@ -2,6 +2,8 @@
 
 Mapa breve para modificar el catálogo sin releer el historial. Decisiones de producto: [ESTADO](ESTADO.md); pruebas: [EVIDENCIA](EVIDENCIA.md).
 
+> **Estado productivo actualizado al 20 nov 2026:** arquitectura PostgreSQL **LIVE**. [Cierre con evidencia AWS/SQL](CIERRE-LIVE-2026-11-20.md) · [deuda post-live](PENDIENTES-POST-LIVE-2026-11-20.md). Cloud `native-0e86aa42`, Web `native-1ceb9c39`, worker `beatgaler-catalog-worker.service` habilitado. La configuración legacy descrita al final ya **no es el flujo publicado**.
+
 ## Principios (vigentes)
 
 - **PostgreSQL es la única autoridad** de metadatos y estado. Telegram guarda **solo medios**. El catálogo nativo no lee ni escribe INDEX.
