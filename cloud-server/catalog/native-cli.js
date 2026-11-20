@@ -311,6 +311,19 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
       requireText(fence, 'transport_fence_proof_ref', { where: 'credential_fence' });
     }
     const staging = Array.isArray(manifest.staging_libraries) ? manifest.staging_libraries.map(String) : [];
+    // Owner-approved test-only reset: SQL account deletion and activation must
+    // commit atomically. Telegram media is never deleted by this path.
+    const reset = manifest.test_account_reset || null;
+    if (reset) {
+      if (!reuse || reset.owner_approved !== true ||
+          typeof reset.approval_ref !== 'string' || PLACEHOLDER_RE.test(reset.approval_ref) ||
+          reset.expected_users !== 5 || reset.expected_vaults !== 5 ||
+          reset.expected_legacy_beats !== 28 ||
+          typeof reset.user_ids_sha256 !== 'string' || !HEX_RE.test(reset.user_ids_sha256)) {
+        throw stop('STOP-APPROVAL', 'TEST_RESET_NOT_APPROVED',
+          'test_account_reset requires explicit approval, exact 5/5/28 counts and frozen user ID digest');
+      }
+    }
     if (!flags['auth-json']) throw usage('activate requires --auth-json <accounts-data.json> to compare the JSON-compat state with SQL (§3.1)');
     const authJson = loadAuthJson(flags['auth-json']);
     const manifestSha = sha256Hex(canonicalJson(manifest));
@@ -353,17 +366,58 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
         if (!row) throw stop('STOP-ENV', 'TRANSPORT_BOT_UNKNOWN', `transport bot ${bot} is not registered`, { bot });
         if (row.quarantined === true || row.rotation_pending === true) throw stop('STOP-ENV', 'TRANSPORT_BOT_NOT_READY', `transport bot ${bot} is quarantined or has a rotation pending`, { bot });
       }
+      let testResetCounts = null;
+      if (reset) {
+        const countRows = (await client.query(`SELECT
+          (SELECT count(*)::int FROM users) AS users,
+          (SELECT count(*)::int FROM vaults) AS vaults,
+          (SELECT count(*)::int FROM library_beats) AS legacy_beats,
+          (SELECT count(*)::int FROM catalog_libraries) AS native_libraries`)).rows[0];
+        const users = (await client.query('SELECT id FROM users ORDER BY id')).rows.map((r) => String(r.id));
+        const userIdsDigest = sha256Hex(canonicalJson(users));
+        if (countRows.users !== reset.expected_users ||
+            countRows.vaults !== reset.expected_vaults ||
+            countRows.legacy_beats !== reset.expected_legacy_beats ||
+            countRows.native_libraries !== 0 ||
+            users.length !== reset.expected_users ||
+            userIdsDigest !== reset.user_ids_sha256) {
+          throw stop('STOP-DATA', 'TEST_ACCOUNT_SET_CHANGED',
+            'only the frozen five-owner-approved test accounts can be reset', {
+              counts: countRows, user_ids_match: userIdsDigest === reset.user_ids_sha256 });
+        }
+        if (inv.vaults.some((v) => v.counts.direct_operations_live > 0 ||
+          v.counts.trash_purges_open > 0 || v.counts.reservations > 0 ||
+          v.counts.project_uploads > 0)) {
+          throw stop('STOP-DATA', 'TEST_OPERATIONS_IN_FLIGHT',
+            'test vault operations must be quiescent before owner-approved reset');
+        }
+        testResetCounts = { users: countRows.users, vaults: countRows.vaults,
+          legacy_beats: countRows.legacy_beats, telegram_media_deleted: 0 };
+      }
       const plan = {
         environment_id: environmentId, run_id: runId, transport_bot_ids: bots, direct_token_exposure: exposure, manifest_sha256: manifestSha,
         instances: instances.length, staging_libraries: staging, inventory_sha256: inventorySha,
+        test_account_reset: testResetCounts,
         checks: ['NO_PRIOR_ACTIVATION', 'CONTROL_PLANE_POSTGRES', 'JSON_SQL_MATCH', 'NO_QUARANTINE', 'INVENTORY_MATCH', 'NO_R12_DIVERGENCE', 'LIBRARIES_CLEAN', reuse ? 'OLD_ROLE_ZERO_BACKENDS_NOLOGIN_NOT_PROVEN' : 'OLD_ROLE_NOLOGIN_0_BACKENDS', 'BOTS_READY', 'INSTANCES_DRAINED', ...(reuse ? ['UNROTATED_BOT_RISK_ACCEPTED'] : [])],
         remaining_risks: reuse ? ['OLD_DB_ROLE_CAN_LOGIN', 'EXISTING_TELEGRAM_TOKENS_NOT_REVOKED', 'G2_TRANSPORT_NOT_PROVEN'] : [],
       };
       if (!apply) return { exitCode: 0, result: { command: 'activate', mode: 'dry-run', outcome: 'WOULD_ACTIVATE', plan, writes: 0, apply_hint: 'repeat with --apply and the same manifest' } };
+      if (reset) {
+        // All users are pre-approved disposable test accounts. No Telegram calls.
+        // This DELETE cascades SQL-only legacy ledgers and sessions. If activation
+        // fails, PostgreSQL rolls back the DELETE in the same transaction.
+        const gone = await client.query('DELETE FROM users');
+        if (gone.rowCount !== 5) throw stop('STOP-DATA', 'TEST_ACCOUNT_DELETE_COUNT_MISMATCH',
+          'test account reset affected an unexpected number of SQL users', { affected: gone.rowCount });
+        const remaining = (await client.query(
+          'SELECT (SELECT count(*)::int FROM users) AS users, (SELECT count(*)::int FROM vaults) AS vaults')).rows[0];
+        if (remaining.users !== 0 || remaining.vaults !== 0) throw stop(
+          'STOP-DATA', 'TEST_ACCOUNT_DELETE_INCOMPLETE', 'SQL test accounts did not clear completely', remaining);
+      }
       await client.query('INSERT INTO catalog_native_activation(environment_id, run_id, transport_bot_ids, direct_token_exposure, manifest_sha256, instance_inventory) VALUES ($1, $2, $3, $4, $5, $6)',
         [environmentId, runId, JSON.stringify(bots), exposure, manifestSha, canonicalJson(instances)]);
       const activation = await readActivation(client);
-      return { exitCode: 0, result: { command: 'activate', mode: 'apply', outcome: 'ACTIVATED', activation, plan, writes: 1 } };
+      return { exitCode: 0, result: { command: 'activate', mode: 'apply', outcome: 'ACTIVATED', activation, plan, writes: reset ? 6 : 1 } };
     });
   }
 
