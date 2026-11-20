@@ -38,10 +38,18 @@ exp() { echo "$M" | grep -o "\"$1\":[^,}]*" | head -1 | sed 's/.*://; s/"//g'; }
 got() { psql -X -q -At -d "$TARGET_DB" -c "$1"; }
 fail=0; chk() { if [ "$2" != "$3" ]; then echo "VERIFICACIÓN FALLIDA $1: esperado=$2 obtenido=$3" >&2; fail=1; else echo "ok $1=$3"; fi; }
 chk migrations_last "$(exp last)" "$(got 'SELECT max(version) FROM schema_migrations')"
-chk beats_total "$(exp beats_total)" "$(got 'SELECT count(*) FROM catalog_beats')"
-chk beats_active "$(exp beats_active)" "$(got "SELECT count(*) FROM catalog_beats WHERE state='ACTIVE'")"
-chk file_versions "$(exp file_versions)" "$(got 'SELECT count(*) FROM catalog_file_versions')"
-chk row_checksum "$(exp row_checksum)" "$(got "SELECT md5(string_agg(beat_id || ':' || version::text || ':' || coalesce(name_search, ''), ',' ORDER BY beat_id COLLATE \"C\")) FROM catalog_beats")"
+if [ -n "$(exp beats_total)" ]; then
+  chk beats_total "$(exp beats_total)" "$(got 'SELECT count(*) FROM catalog_beats')"
+  chk beats_active "$(exp beats_active)" "$(got "SELECT count(*) FROM catalog_beats WHERE state='ACTIVE'")"
+  chk file_versions "$(exp file_versions)" "$(got 'SELECT count(*) FROM catalog_file_versions')"
+  chk row_checksum "$(exp row_checksum)" "$(got "SELECT md5(string_agg(beat_id || ':' || version::text || ':' || coalesce(name_search, ''), ',' ORDER BY beat_id COLLATE \"C\")) FROM catalog_beats")"
+else
+  # Backups taken before native catalog activation contain users/vaults/legacy
+  # tables, not catalog_beats. Never fabricate an empty native catalog.
+  chk users "$(exp users)" "$(got 'SELECT count(*) FROM users')"
+  chk vaults "$(exp vaults)" "$(got 'SELECT count(*) FROM vaults')"
+  chk legacy_beats "$(exp legacy_beats)" "$(got 'SELECT count(*) FROM library_beats')"
+fi
 [ "$fail" = 0 ] || { echo "restore NO verificado: la base $TARGET_DB queda aislada para inspección; no la uses" >&2; exit 6; }
 psql -X -q -At -d "$TARGET_DB" -c "ANALYZE" >/dev/null
 echo "restore verificado id=$ID base=$TARGET_DB"

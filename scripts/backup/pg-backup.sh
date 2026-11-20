@@ -21,6 +21,9 @@ ID="${BACKUP_ID:-bk-$(date -u +%Y%m%dT%H%M%SZ)}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-35}"; KEEP_MIN="${BACKUP_KEEP_MIN:-3}"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 psqlq() { psql -X -q -At -d "$DB" "$@"; }
+# Pre-activation databases still have the legacy control plane. Back up every table
+# via pg_dump, but never query catalog_* tables that do not yet exist.
+HAS_NATIVE="$(psqlq -c "SELECT to_regclass('public.catalog_libraries') IS NOT NULL")"
 
 put() { # put <archivo local> <nombre remoto>
   case "$TARGET" in
@@ -31,8 +34,16 @@ put() { # put <archivo local> <nombre remoto>
   esac
 }
 
-# 1) volcado consistente (una sola transacción/snapshot) en formato custom comprimido
-pg_dump -Fc -Z 6 --no-owner --no-acl -d "$DB" -f "$WORK/$ID.dump"
+# 1) Un mismo snapshot MVCC para pg_dump y el manifiesto.
+# Sin esto, una escritura concurrente entre pg_dump y el SELECT de recuentos
+# provocaría un manifiesto válido para otro estado (restore falsamente corrupto).
+# Mantener abierta la transacción exportadora hasta terminar ambas lecturas.
+coproc SNAPSHOT_KEEPER { psql -X -qAt -v ON_ERROR_STOP=1 -d "$DB" 2>"$WORK/snapshot-keeper.log"; }
+SNAPSHOT_KEEPER_PID_SAVED="$SNAPSHOT_KEEPER_PID"
+printf 'BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT pg_export_snapshot();\n' >&"${SNAPSHOT_KEEPER[1]}"
+IFS= read -r SNAPSHOT_ID <&"${SNAPSHOT_KEEPER[0]}" || { echo "No se pudo obtener snapshot MVCC" >&2; exit 3; }
+[[ "$SNAPSHOT_ID" =~ ^[A-Za-z0-9-]+$ ]] || { echo "Snapshot MVCC inválido" >&2; exit 3; }
+pg_dump --snapshot="$SNAPSHOT_ID" -Fc -Z 6 --no-owner --no-acl -d "$DB" -f "$WORK/$ID.dump"
 PLAIN_SHA="$(sha256sum "$WORK/$ID.dump" | cut -d' ' -f1)"; PLAIN_BYTES="$(stat -c %s "$WORK/$ID.dump")"
 pg_restore --list "$WORK/$ID.dump" > /dev/null   # el volcado debe ser legible
 
@@ -41,7 +52,10 @@ openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -pass "file:$PASSFILE" -in "
 ENC_SHA="$(sha256sum "$WORK/$ID.dump.enc" | cut -d' ' -f1)"; ENC_BYTES="$(stat -c %s "$WORK/$ID.dump.enc")"
 
 # 3) manifiesto (sin datos personales: versiones, hashes y recuentos del catálogo para verificar el restore)
-psqlq -v id="$ID" -v psha="$PLAIN_SHA" -v pbytes="$PLAIN_BYTES" -v esha="$ENC_SHA" -v ebytes="$ENC_BYTES" -o "$WORK/$ID.manifest.json" <<'SQL'
+if [[ "$HAS_NATIVE" == "t" ]]; then
+psqlq -v ON_ERROR_STOP=1 -v snap="$SNAPSHOT_ID" -v id="$ID" -v psha="$PLAIN_SHA" -v pbytes="$PLAIN_BYTES" -v esha="$ENC_SHA" -v ebytes="$ENC_BYTES" -o "$WORK/$ID.manifest.json" <<'SQL'
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET TRANSACTION SNAPSHOT :'snap';
 SELECT json_build_object(
   'schema', 'beatgaler.pg-backup/1', 'backup_id', :'id', 'taken_at', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
   'server_version', current_setting('server_version'), 'database', current_database(),
@@ -59,7 +73,34 @@ SELECT json_build_object(
     'tombstones', (SELECT count(*) FROM catalog_tombstones),
     'row_checksum', (SELECT md5(string_agg(beat_id || ':' || version::text || ':' || coalesce(name_search, ''), ',' ORDER BY beat_id COLLATE "C")) FROM catalog_beats))
 );
+COMMIT;
 SQL
+else
+  # Pre-native manifest: source counts from the EXACT pg_dump snapshot.
+  psqlq -v ON_ERROR_STOP=1 -v snap="$SNAPSHOT_ID" -v id="$ID" -v psha="$PLAIN_SHA" -v pbytes="$PLAIN_BYTES" -v esha="$ENC_SHA" -v ebytes="$ENC_BYTES" -o "$WORK/$ID.manifest.json" <<'SQL'
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET TRANSACTION SNAPSHOT :'snap';
+SELECT json_build_object(
+  'schema', 'beatgaler.pg-backup/1', 'backup_id', :'id',
+  'taken_at', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+  'server_version', current_setting('server_version'), 'database', current_database(),
+  'coverage', 'POSTGRES_ONLY: Telegram media bytes are NOT in this backup',
+  'dump', json_build_object('format', 'custom', 'sha256', :'psha', 'bytes', (:'pbytes')::bigint),
+  'encrypted', json_build_object('cipher', 'aes-256-cbc/pbkdf2-600000', 'sha256', :'esha', 'bytes', (:'ebytes')::bigint),
+  'migrations', json_build_object('count', (SELECT count(*) FROM schema_migrations),
+                                   'last', (SELECT max(version) FROM schema_migrations)),
+  'native_activation', false,
+  'counts', json_build_object(
+     'users', (SELECT count(*) FROM users),
+     'vaults', (SELECT count(*) FROM vaults),
+     'legacy_beats', (SELECT count(*) FROM library_beats))
+);
+COMMIT;
+SQL
+fi
+# Liberar el snapshot solo después de completar el manifiesto sobre el MISMO estado.
+printf 'COMMIT;\n\\q\n' >&"${SNAPSHOT_KEEPER[1]}"
+wait "$SNAPSHOT_KEEPER_PID_SAVED"
 MSHA="$(sha256sum "$WORK/$ID.manifest.json" | cut -d' ' -f1)"; echo "$MSHA  $ID.manifest.json" > "$WORK/$ID.manifest.json.sha256"
 
 # 4) subida: primero el cifrado, después el manifiesto (marca de commit: sin manifiesto el backup no existe)
@@ -71,4 +112,4 @@ if [[ "$TARGET" == file://* ]]; then
   i=0; for old in "${ids[@]}"; do i=$((i+1)); [ "$i" -le "$KEEP_MIN" ] && continue
     if [ -n "$(find "$dir/$old.manifest.json" -mtime +"$KEEP_DAYS" 2>/dev/null)" ]; then rm -f "$dir/$old.dump.enc" "$dir/$old.manifest.json" "$dir/$old.manifest.json.sha256"; echo "retención: eliminado $old"; fi; done
 fi
-echo "backup OK id=$ID bytes=$ENC_BYTES sha256=$ENC_SHA beats=$(grep -o '"beats_total" *: *[0-9]*' "$WORK/$ID.manifest.json" | grep -o '[0-9]*$')"
+echo "backup OK id=$ID bytes=$ENC_BYTES sha256=$ENC_SHA mode=$([[ "$HAS_NATIVE" == "t" ]] && echo native || echo pre-native)"

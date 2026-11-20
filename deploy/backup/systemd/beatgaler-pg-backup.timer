@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily BeatGaler PostgreSQL catalog backup to S3
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=beatgaler-pg-backup.service
+
+[Install]
+WantedBy=timers.target

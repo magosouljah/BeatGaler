@@ -2,6 +2,8 @@
 
 Mapa breve para modificar el catálogo sin releer el historial. Decisiones de producto: [ESTADO](ESTADO.md); pruebas: [EVIDENCIA](EVIDENCIA.md).
 
+> **Estado productivo actualizado al 20 nov 2026:** arquitectura PostgreSQL **LIVE**. [Cierre con evidencia AWS/SQL](CIERRE-LIVE-2026-11-20.md) · [deuda post-live](PENDIENTES-POST-LIVE-2026-11-20.md). Cloud `native-0e86aa42`, Web `native-1ceb9c39`, worker `beatgaler-catalog-worker.service` habilitado. La configuración legacy descrita al final ya **no es el flujo publicado**.
+
 ## Principios (vigentes)
 
 - **PostgreSQL es la única autoridad** de metadatos y estado. Telegram guarda **solo medios**. El catálogo nativo no lee ni escribe INDEX.
@@ -47,4 +49,13 @@ Dependencias: `routes` → módulos de dominio → `authority`/`contract`. Ning�
 
 ## Legacy que permanece (temporal)
 
-La composición LEGACY (INDEX) sigue siendo la de producción mientras `VITE_CATALOG_API_ENABLED` esté apagado: `src/app/WebLegacyWorkspace.tsx` y `src/features/cloud/*`, y en el Cloud las rutas INDEX/transporte (`POST /transport/project/upload`, `POST /transport/index/publish` y sus módulos). Su retirada es **obligatoria en T25** (punto 4) y no puede hacerse antes de activar PostgreSQL en producción sin romper beatgaler.com.
+El build público de producción tiene **`VITE_CATALOG_API_ENABLED=true`** y usa Gallery PostgreSQL; la composición antigua (`src/app/WebLegacyWorkspace.tsx`, `src/features/cloud/*`) y las rutas Cloud de INDEX/transporte (`POST /transport/project/upload`, `POST /transport/index/publish`) **siguen en el repositorio, pero no son el flujo nativo publicado**. Eran necesarias para la fase anterior al corte; **ahora se pueden planificar para retirada en T25**, después de inventariar dependencias y probar compatibilidad. No ejecutar retirada a ciegas ni volver a INDEX.
+
+### Conexión del transporte en la instalación LIVE
+
+- `catalog/native-transport-provisioning.js`: valida chat y activación, asigna un bot existente de forma durable, usa lock por vault, verifica membresía en Telegram y marca `ready` solamente con prueba.
+- `direct-vault-assignment.js`, `direct-persistent-membership-runtime.js`, `direct-transport-control.js`: persistencia del bot, operación MASTER de membresía y proveedor Telegram.
+- `catalog-worker.js` y `catalog/worker.js`: servicio **independiente del Cloud HTTP**, debe estar habilitado para hacer `TRANSFER_VERIFY` y `TRANSFER_COMMIT`. Su ausencia fue la causa del spinner tras las primeras 2 subidas; al arrancarlo se procesaron las 6 tareas sin reenvío de medios.
+- `catalog-gateway-runtime.js`: resuelve bot por `vaults.transport_bot_id` con control de cuarentena/rotación; la activación de producción tiene modo `REUSED_UNROTATED` con riesgo residual expresamente aceptado, **no G2 PASS**.
+
+Para diagnóstico actual usar [CIERRE-LIVE-2026-11-20.md](CIERRE-LIVE-2026-11-20.md), no asumir que Cloud HTTP 200 significa que el worker esté activo.

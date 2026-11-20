@@ -1,5 +1,9 @@
 # Catálogo PostgreSQL por beat: plan de ejecución
 
+> **ESTADO VIGENTE — 20 NOV 2026: PostgreSQL LIVE en producción, cierre operativo confirmado.** Las 42 migraciones están aplicadas y hay 2 beats reales `ACTIVE`, 2 `IMPORT` confirmados y worker durable con 0 trabajos pendientes. [Acta de cierre y prueba AWS](CIERRE-LIVE-2026-11-20.md) · [Pendientes post-live](PENDIENTES-POST-LIVE-2026-11-20.md).
+>
+> **Los párrafos fechados en 7–8 noviembre que indican «propuesta no aprobada», «sin implementación» o «T00 no PASS» son antecedentes de planificación y NO describen la producción actual.** La salida a producción no convierte los gates G2/G3 ni la limpieza T25 en PASS; ver acta.
+
 **Rediseño nativo (2026-11-08, PROPUESTA pendiente de aprobación):** [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md). Sin usuarios reales: las bibliotecas nacen en PostgreSQL, sin import, sombra, corte ni reversión a INDEX. Telegram queda solo para medios. Se redefinen las tareas y los gates T05–T25 (§9–§10). El estado vigente está en [ESTADO](ESTADO.md).
 
 **Vigencia C12-r4 (2026-11-07):** [cierre C12-r4](C12-V00-CIERRE-20261107.md) integra el [acta I1/I2/I3 aprobada](C12-V00-INTERACCIONES-APROBADAS-20261107.md) de `c6d7b7cf4455623ab2da7bfbdadabb0b4b3e3b81` y las respuestas explícitas del usuario de este encargo. **A1/A2/B-legacy e I1/I2/I3 aprobados; decisiones C12/V00 cerradas para diseño.** Shuffle sin repetición por ronda, aviso de selección solo si existía y rename también en papelera sin alterar su estado. Las menciones pendientes r2/r3 quedan como antecedentes, sustituidas por r4. **T00/G0 no PASS; T01 bloqueada; T02 no iniciada.** No hay autorización de implementar.
