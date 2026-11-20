@@ -1,5 +1,9 @@
 # Tareas para ejecución controlada
 
+> **VIGENCIA 20 nov 2026:** corte productivo **T23 aplicado / LIVE**. Confirmados el catálogo nativo, 2 subidas con commit y 6 jobs de transferencia finalizados. **T24 y T25 permanecen pendientes**, junto con dictámenes no demostrados G2/G3; T17 formal omitido por decisión del propietario. [Acta de cierre vigente](CIERRE-LIVE-2026-11-20.md) y [backlog post-live](PENDIENTES-POST-LIVE-2026-11-20.md).
+>
+> Las secciones históricas que indican «sin implementación» o «sin autorización de ejecución» se refieren a 7–9 nov y quedan **superadas** por el despliegue documentado, sin eliminar su valor de auditoría.
+
 **Rediseño nativo (2026-11-08, PROPUESTA pendiente de aprobación):** [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md) §9 fija la disposición de T05–T25 sin renumerar. Una vez aprobado, prevalece sobre las fichas T05–T25 de este documento:
 
 - **Redefinidas:** T05 (autoridad nativa, inicialización y cerco del INDEX), T17 (CLI `inspect`/`activate`/`reset`) y T23 (activación de un entorno).
