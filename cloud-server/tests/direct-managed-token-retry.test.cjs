@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const https = require('node:https');
+const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const Module = require('node:module');
 
@@ -190,4 +192,52 @@ test('a fetched managed token serves concurrent and later sessions until credent
   });
   assert.equal(await direct.__test.tokenForCredentialVersion(bot, 78), `${returnedSecret}-rotated`);
   assert.equal(calls, 2);
+});
+
+test('native Telegram Bot API transport uses IPv4 HTTPS, keeps fetch-shaped result, and does not leak paths in errors', async () => {
+  resetHarness();
+  const original = https.request;
+  let called = 0;
+  try {
+    https.request = (options, callback) => {
+      called++;
+      assert.equal(options.hostname, 'api.telegram.org');
+      assert.equal(options.family, 4);
+      assert.equal(options.method, 'POST');
+      assert.ok(options.path.startsWith('/bottest-credential/getManagedBotToken'));
+      const req = new EventEmitter();
+      req.end = body => {
+        assert.equal(JSON.parse(body).user_id, 12345);
+        queueMicrotask(() => {
+          const response = new EventEmitter();
+          response.statusCode = 200;
+          callback(response);
+          response.emit('data', Buffer.from('{"ok":true,"result":"synthetic-value"}'));
+          response.emit('end');
+        });
+      };
+      return req;
+    };
+    const res = await direct.__test.nativeTelegramBotFetch(
+      'https://api.telegram.org/bottest-credential/getManagedBotToken',
+      { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{"user_id":12345}' },
+    );
+    assert.equal(res.ok, true);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {ok:true,result:'synthetic-value'});
+    assert.equal(called, 1);
+    await assert.rejects(() => direct.__test.nativeTelegramBotFetch('https://not-telegram.example.com/'), /destination rejected/);
+
+    https.request = () => {
+      const req = new EventEmitter();
+      req.end = () => queueMicrotask(() => req.emit('error', Object.assign(
+        new Error('secret in /bottest-credential/getManagedBotToken'), {code:'ECONNRESET'})));
+      return req;
+    };
+    await assert.rejects(() => direct.__test.nativeTelegramBotFetch(
+      'https://api.telegram.org/bottest-credential/getManagedBotToken', {body:'{}'}),
+      error => error.code === 'ECONNRESET' && !error.message.includes('test-credential'));
+  } finally {
+    https.request = original;
+  }
 });
