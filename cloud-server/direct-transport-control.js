@@ -722,7 +722,7 @@ function transientManagedTokenFetchError(error) {
   ].map(value => String(value || '').toUpperCase()));
   if ([
     'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN',
-    'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT',
+    'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'ABORT_ERR',
   ].some(code => codes.has(code))) return true;
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return true;
   const message = `${error?.message || ''} ${cause?.message || ''}`;
