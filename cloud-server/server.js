@@ -58,6 +58,7 @@ const catalogPlayback = require("./catalog/playback");
 const catalogMedia = require("./catalog/media");
 const catalogPurge = require("./catalog/purge");
 const catalogDirect = require("./catalog/direct");
+const catalogNativeTransport = require("./catalog/native-transport-provisioning");
 const catalogPrefixPacks = require("./catalog/prefix-packs");
 const catalogSessionGuard = require("./catalog/session-guard");
 const catalogGateway = require("./catalog-gateway-runtime");
@@ -134,6 +135,12 @@ async function start() {
     resolveProjectAccess: catalogDirect.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }),
     sessionSource: ({ botId, chatId }) => require("./direct-transport-control").catalogDirectSession({ botId, chatId }),
     bindBuilder: (session, metadata) => require("./productive-temp-auth-boundary").transformSession(session, metadata), log: console.warn } : null);
+  // The native catalog requires an actual existing bot in the vault before
+  // Direct sessions or transfer operations may begin. Its membership is
+  // established lazily and verified by both MASTER and the bot.
+  catalogNativeTransport.configureNativeTransportProvisioner(
+    nativeAuthority?.config.nativeEnabled && directFlag && mediaGateway
+      ? { pool, log: console.warn } : null);
   // E73 (C): precalentamiento en segundo plano de los bots con bibliotecas nativas; nunca bloquea el arranque ni /readyz.
   // BEATGALER_CATALOG_DIRECT_PREWARM_BOTS (por defecto 3, máximo 8; 0 lo apaga).
   { const d = catalogDirect.currentCatalogDirect(); const raw = process.env.BEATGALER_CATALOG_DIRECT_PREWARM_BOTS; const n = raw === undefined || raw === '' ? 3 : Number(raw);
