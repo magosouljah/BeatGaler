@@ -102,6 +102,18 @@ async function start() {
   // T16 (capa 2 + montaje): sesión con protocolo catalog-v1 para dueños nativos; rondas, medios, purge y transferencias montados SIN gateway
   // real (fail-closed: 503 TRANSFER_UNAVAILABLE / jobs en reintento) hasta que T11 fase B lo autorice. El journal de borrados en disco solo si
   // el propietario fija su destino (BEATGALER_CATALOG_JOURNAL_DIR); sin él, ningún delete puede ejecutarse (C9).
+  // Owner-authorized reduced-fencing rollout: distinct from a G2 PASS.
+  const reusedBotRiskAccepted = String(process.env.BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED || '').trim().toLowerCase() === 'true';
+  if (reusedBotRiskAccepted) {
+    if (!pool || !nativeAuthority || !nativeAuthority.config.nativeEnabled) {
+      throw new Error('STOP-GATE: reused bot risk acceptance requires an enabled native PostgreSQL authority');
+    }
+    const activation = (await pool.query('SELECT transport_bot_ids, direct_token_exposure FROM catalog_native_activation')).rows;
+    if (activation.length !== 1 || activation[0].direct_token_exposure !== 'REUSED_UNROTATED') {
+      throw new Error('STOP-GATE: reused bot risk acceptance requires REUSED_UNROTATED SQL activation');
+    }
+    console.warn('[catalog] OWNER_RISK_ACCEPTED: unrotated Telegram tokens reused; G2 NOT_PROVEN; E8 residual risk');
+  }
   // Gateway real de medios (§8.6): apagado por defecto. Encendido exige el plano nativo montado; en producción exige además el dictamen G2
   // (BEATGALER_CATALOG_G2_APPROVED=true). Las sesiones de bot se abren perezosamente; sin flag, todo sigue fail-closed (503 / reintento).
   catalogGatewayRuntime = catalogGateway.gatewayFromEnv({ pool: nativeAuthority ? pool : null, env: process.env, log: console });
@@ -115,7 +127,7 @@ async function start() {
   catalogPurge.configureCatalogPurge(nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, journal: journalDir ? createFileDeletionJournal({ dir: journalDir }) : null } : null);
   // Direct B (E70): apagado por defecto. En producción exige el dictamen G2 (misma regla que el gateway); G2 sigue NOT_PROVEN.
   const directProd = ['production', 'prod'].includes(String(process.env.BEATGALER_DEPLOYMENT_ENV || process.env.NODE_ENV || '').trim().toLowerCase());
-  if (directFlag && directProd && String(process.env.BEATGALER_CATALOG_G2_APPROVED || '').trim().toLowerCase() !== 'true') throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires BEATGALER_CATALOG_G2_APPROVED=true; refusing to start.');
+  if (directFlag && directProd && String(process.env.BEATGALER_CATALOG_G2_APPROVED || '').trim().toLowerCase() !== 'true' && !reusedBotRiskAccepted) throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires proven G2 or owner-accepted unrotated-bot risk; refusing to start.');
   // E75: MAIN de prefijos (solo metadatos). El gateway se usa únicamente para COMPROBAR el mensaje publicado por el navegador (sin bytes).
   catalogPrefixPacks.configurePrefixPacks(String(process.env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, directReads: directFlag, log: console.warn } : null);
   catalogDirect.configureCatalogDirect(directFlag && nativeAuthority && nativeOperations ? { pool, authority: nativeAuthority, operations: nativeOperations,
