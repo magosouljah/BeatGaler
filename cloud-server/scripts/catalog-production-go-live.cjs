@@ -69,7 +69,18 @@ async function status(pool,auth){
   const b=(await c.query('SELECT id,quarantined,rotation_pending FROM transport_bots WHERE id=ANY($1::text[])',[BOTS])).rows;
   assert(b.length===3&&b.every(x=>!x.quarantined&&!x.rotation_pending),'STOP_BOT_POOL');
   const comp=await compareJsonCompat(c,auth);
-  if(!comp.match)console.log('AUTH_JSON_SQL_DIAGNOSTIC',JSON.stringify(comp));
+  if(!comp.match){
+    console.log('AUTH_JSON_SQL_DIAGNOSTIC',JSON.stringify(comp));
+    const difference=await inventory(c,{authJson:auth});
+    const {deterministicId}=require('../legacy-import-executor.js');
+    const grouped={chat_stale:0,stored_vault_id_mismatch:0,vault_id_inconsistent_with_sql_chat:0};
+    for(const v of difference.vaults){
+      if(v.json_compat.chat_diverges)grouped.chat_stale++;
+      if(v.json_compat.vault_id_diverges)grouped.stored_vault_id_mismatch++;
+      if(v.vault_id!==deterministicId('vlt',v.user_id,v.chat_id))grouped.vault_id_inconsistent_with_sql_chat++;
+    }
+    console.log('VAULT_MISMATCH_DIAGNOSTIC',JSON.stringify(grouped));
+  }
   assert(comp.match,'STOP_AUTH_JSON_SQL_MISMATCH');
   const cut=(await c.query("SELECT state FROM control_plane_cutovers WHERE id='legacy-json-v1'")).rows[0];
   assert(cut?.state==='READY','STOP_CONTROL_PLANE');
