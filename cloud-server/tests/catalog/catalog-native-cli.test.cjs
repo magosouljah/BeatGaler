@@ -191,6 +191,53 @@ test('test_account_reset: five approved SQL accounts deleted atomically with act
   assert.ok(writes.findIndex(q=>/^DELETE FROM users/.test(q)) < writes.findIndex(q=>/^INSERT INTO catalog_native_activation/.test(q)));
 });
 
+test('one legacy test vault ID mismatch: only accepted when five disposable SQL accounts are atomically reset', async () => {
+  const {deterministicId}=require('../../legacy-import-executor.js');
+  const {canonicalJson}=require('../../catalog/authority.js');
+  const crypto=require('node:crypto');
+  const ids=['id1','id2','id3','id4','id5'];
+  const all=ids.map((id,n)=>VAULT_ROW({
+    id: n===2?'legacy-foreign-vault-id':deterministicId('vlt',id,String(-11001-n)),
+    user_id:id,telegram_chat_id:String(-11001-n),library_beats:n===0?28:0,
+    direct_operations_live:0,quarantined:false,
+  }));
+  const json=write('one-legacy-id.json',{users:ids.map((id,n)=>({id,storageChatId:String(-11001-n)}))});
+  const respond=(q)=>{
+    if(/has_table_privilege/.test(q))return {rows:[{role:'beatgaler_catalog_rt',can_write:true}]};
+    if(/FROM pg_roles/.test(q))return {rows:[{rolcanlogin:true}]};
+    if(/AS legacy_beats/.test(q))return {rows:[{users:5,vaults:5,legacy_beats:28,native_libraries:0}]};
+    if(/^SELECT id FROM users ORDER BY id/.test(q))return {rows:ids.map(id=>({id}))};
+    return undefined;
+  };
+  async function run(vaults,exceptionCount){
+    const pool=fakePool({activation:null,vaults,respond});
+    const client=cli.createNativeCli({pool});
+    const inv=(await client.run(['inspect','--environment','lab','--allow-write-role'])).result;
+    const act={
+      environment_id:'lab',run_id:'legacy-one-id',transport_bot_ids:['Bot20'],
+      direct_token_exposure:'REUSED_UNROTATED',reuse_risk_accepted:true,
+      owner_decision_ref:'owner-approved',instance_inventory:[{id:'old-stopped',stopped:true}],
+      inspect:{inventory_sha256:inv.inventory_sha256,approval_ref:'owner-approved'},
+      credential_fence:{old_db_role:'galer_admin'},
+      test_account_reset:{
+        owner_approved:true,approval_ref:'five-test-accounts',
+        expected_users:5,expected_vaults:5,expected_legacy_beats:28,
+        user_ids_sha256:crypto.createHash('sha256').update(canonicalJson(ids)).digest('hex'),
+        approved_vault_id_mismatch_count:exceptionCount,
+      },
+    };
+    return client.run(['activate','--manifest',write('known-one-id-'+exceptionCount+'.json',act),'--auth-json',json]);
+  }
+  const accepted=(await run(all,1)).result;
+  assert.equal(accepted.outcome,'WOULD_ACTIVATE');
+  assert.equal(accepted.plan.approved_test_vault_id_mismatch,1);
+  assert.ok(accepted.plan.checks.includes('ONE_LEGACY_TEST_VAULT_ID_TO_BE_DELETED'));
+  await rejects(run(all,0),'JSON_SQL_MISMATCH','STOP-DATA');
+  const two=all.map(x=>({...x}));
+  two[3].id='second-foreign-vault-id';
+  await rejects(run(two,1),'JSON_SQL_MISMATCH','STOP-DATA');
+});
+
 test('inspect: transacción READ ONLY, rol con escritura rechazado salvo --allow-write-role, Telegram NOT_QUERIED, hash determinista, divergencia R12 informada y 0 escrituras', async () => {
   await rejects(cli.createNativeCli({ pool: fakePool({ canWrite: true }) }).run(['inspect', '--environment', 'lab']), 'INSPECT_ROLE_CAN_WRITE', 'STOP-ENV');
   await rejects(cli.createNativeCli({ pool: fakePool({ activation: { ...ACTIVATION, environment_id: 'other' } }) }).run(['inspect', '--environment', 'lab']), 'ENVIRONMENT_MISMATCH', 'STOP-ENV');
