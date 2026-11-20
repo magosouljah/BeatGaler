@@ -33,7 +33,7 @@ async function main() {
     console.log('READ_ONLY_BOT_IDENTITY_PASS=' + ok + '/3');
     console.log('G2_MEDIA_SMOKE=NOT_PROVEN');
   } finally {
-    await provider.close();
+    await Promise.race([provider.close(), new Promise(resolve => setTimeout(resolve, 5000))]);
   }
 }
 main().then(() => process.exit(0), e => { console.error('STOP:', e.message); process.exit(3); });
