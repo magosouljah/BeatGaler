@@ -226,7 +226,7 @@ test('native Telegram Bot API transport uses IPv4 HTTPS, keeps fetch-shaped resu
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {ok:true,result:'synthetic-value'});
     assert.equal(called, 1);
-    await assert.rejects(() => direct.__test.nativeTelegramBotFetch('https://not-telegram.example.com/'), /destination rejected/);
+    assert.throws(() => direct.__test.nativeTelegramBotFetch('https://not-telegram.example.com/'), /destination rejected/);
 
     https.request = () => {
       const req = new EventEmitter();
