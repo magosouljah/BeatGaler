@@ -149,7 +149,10 @@ async function main(){
   if(process.argv[2]==='--dry-run'){console.log('CUTOVER_DRY_RUN_READY_NO_SQL_WRITES');return}
   stopped=true; // even if systemctl stop times out, the recovery path must run
   shell('systemctl',['stop','beatgaler-cloud.service'],190000);
-  assert(shell('systemctl',['show','-p','ActiveState','--value','beatgaler-cloud.service'])==='inactive','STOP_OLD_CLOUD_STILL_RUNNING');
+  const drainState=shell('systemctl',['show','-p','ActiveState','--value','beatgaler-cloud.service']);
+  const drainPid=Number(shell('systemctl',['show','-p','MainPID','--value','beatgaler-cloud.service']));
+  console.log('CLOUD_STOP_STATE',JSON.stringify({state:drainState,main_pid:drainPid}));
+  assert(drainPid===0 && ['inactive','failed'].includes(drainState),'STOP_OLD_CLOUD_STILL_RUNNING');
   const now=await status(pool,auth);
   assert(now.digest===baseline.digest&&now.inventory_sha256===baseline.inventory_sha256,'STOP_STATE_CHANGED_AFTER_DRAIN');
   const tmp=fs.mkdtempSync('/run/beatgaler-cutover-');
