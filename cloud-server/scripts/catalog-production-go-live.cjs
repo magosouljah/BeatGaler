@@ -69,6 +69,7 @@ async function status(pool,auth){
   const b=(await c.query('SELECT id,quarantined,rotation_pending FROM transport_bots WHERE id=ANY($1::text[])',[BOTS])).rows;
   assert(b.length===3&&b.every(x=>!x.quarantined&&!x.rotation_pending),'STOP_BOT_POOL');
   const comp=await compareJsonCompat(c,auth);
+  if(!comp.match)console.log('AUTH_JSON_SQL_DIAGNOSTIC',JSON.stringify(comp));
   assert(comp.match,'STOP_AUTH_JSON_SQL_MISMATCH');
   const cut=(await c.query("SELECT state FROM control_plane_cutovers WHERE id='legacy-json-v1'")).rows[0];
   assert(cut?.state==='READY','STOP_CONTROL_PLANE');
