@@ -848,7 +848,7 @@ export default function AccountGate({ children }: { children: React.ReactNode })
       <h1 className="bg-account-title">BeatGaler</h1>
       <p className="bg-account-subtitle">{registerMode ? "Create your BeatGaler account" : "Sign in to your BeatGaler account"}</p>
 
-      {!registerMode && <>
+      <>
         <div className="bg-account-social">
           <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void social("google")}>Continue with Google</UiButton>
           <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void social("x")}>Continue with X</UiButton>
