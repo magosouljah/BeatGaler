@@ -49,3 +49,14 @@ Acción técnica nueva: diseñar/aplicar una **vía de activación simplificada 
 4. Confirmar subida/lectura y salud Cloud; conservar ruta de reversión de arranque y snapshot. Las pruebas de piloto manual fueron dispensadas por el propietario; esto no sustituye los controles de integridad necesarios.
 
 **Resumen:** G4 externo del PostgreSQL realizado; esquema y Cloud nuevos en producción, Web preparada; **T23 activación nativa de producto pendiente**, por credenciales/cerco y transporte Telegram.
+
+## Estado comprobado tras aplicar 0042 (continuación, 20 nov UTC)
+
+- El propietario ejecutó manualmente la migración adicional **0042_catalog_reused_bots.sql** en RDS: `MIGRATION_0042_APPLIED`. La deprecación de `pg` provino de consultas concurrentes en un solo `Client`; se corrigió el helper (consultas secuenciales).
+- Se desplegó el Cloud candidato commit `541212df` en `/home/ec2-user/BeatGaler-releases/native-541212df`, con reversión automática en caso de fallo de salud. Estado verificado: servicio `active`, endpoint `/readyz` HTTP 200.
+- Se preparó versión Cloud anterior `native-1ceb9c39` para reconocer esquema 0042 en caso de reversión: migración 0042 copiada al directorio de migraciones. El script de arranque activo apunta a `native-541212df`; su copia anterior es `/usr/local/bin/beatgaler-cloud-start.pre-541212df`.
+- Backup S3 adicional comprobado: `bk-20261120T053050-29892` (dump + manifest + sha256), con manifiesto leído desde S3: **42 migraciones; 5 users, 5 vaults, 28 legacy_beats, 0 native catalog libraries y 0 native catalog beats**.
+- La Web pública sigue en release `20261027T024107Z-a8418223527f`; no publicar Web nativa hasta tener activación + transporte funcional. `BEATGALER_CATALOG_NATIVE_ENABLED` continúa apagado.
+- La vía `REUSED_UNROTATED` (reutilización del token sin alegar rotación) pasó las **6 pruebas unitarias del CLI**; en esa vía exige rol SQL dedicado, 0 backends viejos, decisión explícita del propietario e informa los riesgos residuales. **No es un PASS de G2**, no prueba Telegram, no migra chats ni reinicia automáticamente las 5 bibliotecas legacy.
+- Falta el corte final: activación real con inventario y compatibilidad JSON/SQL, gestión coherente de las 5 cuentas descartables, transporte comprobado y Web nueva. No declarar terminada la migración ni borrar datos hasta resolver ese flujo.
+
