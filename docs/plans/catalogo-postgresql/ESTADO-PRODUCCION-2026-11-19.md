@@ -95,3 +95,28 @@ Acción técnica nueva: diseñar/aplicar una **vía de activación simplificada 
 - Recuperación: `POST /auth/password/reset/request` con dirección de dominio reservado inexistente devolvió HTTP 202, `delivery_configured=true`; no se ha verificado recepción ni consumo de un token real.
 - Registro Google/X: botones añadidos al código de `AuthExperienceGate.tsx` y `AccountGate.tsx`, **NO desplegados** porque `vite build --mode web` se quedó sin memoria en la EC2 de 913 MiB; proceso de compilación cancelado y memoria recuperada, producción estable. Compilación TS llegó a Vite. Proponer construir fuera de la EC2 o con recursos aislados.
 - Perfil X: tanto SQL como el archivo runtime tienen `username` y proveedor X, pero la UI puede estar desincronizada; pendiente confirmar respuesta autenticada del cliente. Landing con portadas reales y ampliación de bots por encima de Bot01–03 siguen pendientes.
+
+## Cierre de las 2 subidas reales y worker permanente — 20 nov 2026 ~07:47–07:54 UTC
+
+**Síntoma reportado:** dos beats se veían ya en Telegram, mientras la Web seguía cargando.
+
+**Diagnóstico SQL antes de intervenir:**
+- `catalog_transfer_operations`: `IMPORT / VERIFYING = 2`.
+- `catalog_operation_parts`: `RECEIPT = 4`.
+- `catalog_jobs`: `TRANSFER_VERIFY / QUEUED = 4`; `TRANSFER_COMMIT / QUEUED = 2`, todos con `attempts=0`, sin `last_error`.
+- `catalog_libraries`: una biblioteca con `pending_count=2`; `catalog_beats` todavía sin `ACTIVE`.
+- Causa: **no existía proceso `catalog-worker.js` arrancado**, aunque Cloud y gateway daban HTTP 200. No era un problema de subir a Telegram ni de reasignación de bots.
+
+**Corrección aplicada:**
+- Nuevo wrapper `/usr/local/bin/beatgaler-catalog-worker-start` con flags `BEATGALER_CATALOG_WORKER_ENABLED=true` y `BEATGALER_CATALOG_WORKER_POLL_MS=1000`; reutiliza el entorno operativo productivo, fuente PostgreSQL y el gateway existente.
+- Nuevo servicio `beatgaler-catalog-worker.service` con `User=ec2-user`, `LoadCredential` de DB, `Restart=on-failure`, límite de memoria y arranque junto a Cloud. `systemctl enable --now` aplicado (SSM `7e2eef2c-8a11-4b9d-8fe5-4338a2907dcd`). Worker lanzó sesión perezosa de Telegram sin reenviar ni borrar bytes.
+- Hubo reintentos **transitorios** `LIBRARY_BUSY` / `NOT_READY` durante la primera ejecución, sin bloqueos permanentes. El worker terminó los 6 jobs.
+- **SQL POSTERIOR PASS:** `2 IMPORT COMMITTED`, `4 parts VERIFIED`, `4 TRANSFER_VERIFY DONE + 2 TRANSFER_COMMIT DONE`, `2 beats ACTIVE`, `0 PENDING`. Health del worker: `running=0, backlog=0, leased=0, blocked=0, expiredLeases=0`, servicio `enabled/active`. Cloud y Web siguen HTTP 200.
+- El propietario confirmó que el flujo ya quedó funcional. **No se ejecutó en este cierre una prueba independiente de reproducción/descarga.**
+
+**Respaldo de producción posterior a los beats (más reciente):**
+- `systemctl start beatgaler-pg-backup.service` = `Result=success`; `BACKUP_UPLOADED id=bk-20261120T075417-26296`.
+- S3: tres objetos comprobados (`.dump` 448.708 bytes, `.manifest.json` 685 bytes, `.manifest.json.sha256` 105 bytes). Manifiesto: `schema_migrations=42`, `users=2`, `vaults=2`, `catalog_libraries=2`, `catalog_beats=2`, `catalog_beats_active=2`, `catalog_file_versions=4`, `catalog_media_objects=4`. No contiene bytes de Telegram.
+- Timer diario de backups `enabled/active` (03:15 UTC); backups pre-corte preservados. El backup nuevo no ha sido restaurado en un entorno aislado.
+
+**Documento normativo del cierre:** [CIERRE-LIVE-2026-11-20.md](CIERRE-LIVE-2026-11-20.md); [pendientes y limitaciones](PENDIENTES-POST-LIVE-2026-11-20.md). **Estado actual: PostgreSQL LIVE; T25 / G2 / G3 no se falsifican como PASS.**
