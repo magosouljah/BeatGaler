@@ -1,5 +1,7 @@
 # Migración, reversión y recuperación
 
+> **AVISO VIGENTE (20 nov 2026):** ya se ejecutó el corte productivo al catálogo PostgreSQL nativo; no volver a ejecutar el runbook histórico M0–M6 sobre producción. [Cierre LIVE ejecutado, evidencias y backup actualizado](CIERRE-LIVE-2026-11-20.md) · [pendientes y controles post-live](PENDIENTES-POST-LIVE-2026-11-20.md). **No existe retorno seguro automático a INDEX**, ni el backup SQL incluye bytes de Telegram. Las instrucciones y manifestos que siguen describen fases anteriores, no operaciones pendientes de aplicar.
+
 **Rediseño nativo (2026-11-08, PROPUESTA pendiente de aprobación):** según [NATIVO-POSTGRES-20261108.md](NATIVO-POSTGRES-20261108.md) §8, M0–M6, R1 y R2 quedan **sin objeto** porque no hay import ni reversión a INDEX. R3 sigue vigente y pasa a T19. El runbook pasa a ser inventario, activación y reset de vaults de prueba, sin borrados (§3–§4). Este documento se conserva como antecedente.
 
 Runbook de destino. Los comandos exactos se generan y ensayan en T17/T21; **no ejecutar estos pasos sobre servicios o datos reales desde el encargo actual**. No usar helpers legacy `recover` para capturar evidencia: pueden cambiar el pin, borrar documentos y migrar proyectos.
