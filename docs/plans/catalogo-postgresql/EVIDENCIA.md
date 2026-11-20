@@ -1,5 +1,7 @@
 # Evidencia y límites
 
+> **ACTUALIZACIÓN 20 nov 2026:** [CIERRE-LIVE-2026-11-20.md](CIERRE-LIVE-2026-11-20.md) registra la **evidencia productiva más reciente**: esquema 42, activación `REUSED_UNROTATED`, 2 beats `ACTIVE`, 2 `IMPORT` `COMMITTED`, 4 partes `VERIFIED`, 6 jobs `DONE`, worker activo sin cola y backup S3 actualizado tras las subidas. [Pendientes y gates sin prueba formal](PENDIENTES-POST-LIVE-2026-11-20.md). Los apartados E01–E86 se preservan como evidencia y contexto **históricos**, no se reinterpretan como certificaciones nuevas.
+
 **Cierre T00/G0 LOCAL (2026-11-08):** registrado por dictamen GPT-6 sobre `G0-REVISION-FINAL-v2.zip` (48/48 hashes, baseline 68/68, smoke rutas 6/6, smoke autenticado simulado 5/5, PostgreSQL G0 verificado, C12-r4 cerrado). No se repitieron pruebas ni se generó nuevo ZIP/informe. El smoke simulado no prueba transporte real, Telegram ni producción. Evidencia T01 en `consumer-map.md` / `contract-map.json`.
 
 
