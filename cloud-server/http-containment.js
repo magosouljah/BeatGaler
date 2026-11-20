@@ -88,7 +88,15 @@ function createHttpContainment(options = {}) {
   }
 
   function linkedAccount(installationId) {
-    return cloudData().linkedAccounts?.[String(installationId || "")] || null;
+    const link = cloudData().linkedAccounts?.[String(installationId || "")] || null;
+    if (!link) return null;
+    // An owner-approved SQL account reset can leave old installation bindings
+    // in the persistent compatibility snapshot. Those records do not establish
+    // ownership once their BeatGaler account no longer exists. Never let an
+    // orphaned link block new X/Google sign-in or an installation claim.
+    const ownerId = String(link.beatgalerAccountId || "");
+    if (!ownerId || !(accountsData().users || []).some(user => String(user?.id || "") === ownerId)) return null;
+    return link;
   }
 
   function findLoginUser(req) {
