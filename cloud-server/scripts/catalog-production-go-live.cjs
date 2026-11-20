@@ -56,7 +56,8 @@ function stage(){
    }
    shell('chown',['-R','ec2-user:ec2-user',dir],150000);
  }
- assert(fs.existsSync(dir+'/cloud-server/migrations/0042_catalog_reused_bots.sql'),'STOP_RELEASE_SCHEMA');
+ assert(fs.existsSync(dir+'/cloud-server/migrations/0042_catalog_reused_bots.sql') &&
+   fs.existsSync(dir+'/cloud-server/node_modules/pg'),'STOP_RELEASE_SCHEMA_OR_MODULES');
  return dir;
 }
 async function status(pool,auth){
@@ -137,8 +138,8 @@ async function main(){
  try{
   const baseline=await status(pool,auth);
   console.log('FIVE_TEST_ACCOUNTS_BOT_POOL_SQL_PASS');
+  stopped=true; // even if systemctl stop times out, the recovery path must run
   shell('systemctl',['stop','beatgaler-cloud.service'],190000);
-  stopped=true;
   assert(shell('systemctl',['show','-p','ActiveState','--value','beatgaler-cloud.service'])==='inactive','STOP_OLD_CLOUD_STILL_RUNNING');
   const now=await status(pool,auth);
   assert(now.digest===baseline.digest&&now.inventory_sha256===baseline.inventory_sha256,'STOP_STATE_CHANGED_AFTER_DRAIN');
