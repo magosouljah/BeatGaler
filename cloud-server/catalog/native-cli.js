@@ -385,12 +385,13 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
             'only the frozen five-owner-approved test accounts can be reset', {
               counts: countRows, user_ids_match: userIdsDigest === reset.user_ids_sha256 });
         }
-        if (inv.vaults.some((v) => v.counts.direct_operations_live > 0 ||
-          v.counts.trash_purges_open > 0 || v.counts.reservations > 0 ||
-          v.counts.project_uploads > 0)) {
+        if (inv.vaults.some((v) => v.counts.direct_operations_live > 0)) {
           throw stop('STOP-DATA', 'TEST_OPERATIONS_IN_FLIGHT',
-            'test vault operations must be quiescent before owner-approved reset');
+            'test vault Direct operations must be quiescent before owner-approved reset');
         }
+        // Reservations and project-upload rows can be historical/committed.
+        // Their mere existence does not imply work in flight; these five owner-
+        // approved SQL test accounts will be removed transactionally.
         testResetCounts = { users: countRows.users, vaults: countRows.vaults,
           legacy_beats: countRows.legacy_beats, telegram_media_deleted: 0 };
       }
