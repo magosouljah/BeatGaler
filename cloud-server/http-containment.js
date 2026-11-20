@@ -223,12 +223,12 @@ function createHttpContainment(options = {}) {
     next();
   }
 
-  function rememberOAuthGuard(state, flowId, installationId, expectedOwnerId) {
+  function rememberOAuthGuard(state, flowId, installationId, expectedOwnerId, existingProviderLogin = false) {
     const bindings = authzData();
     const record = {
       installationId: String(installationId),
       expectedOwnerId: expectedOwnerId ? String(expectedOwnerId) : null,
-      providerReauthentication: Boolean(expectedOwnerId),
+      existingProviderLogin: Boolean(existingProviderLogin),
       flowId: String(flowId || ""),
       state: String(state || ""),
       expiresAt: now() + OAUTH_GUARD_TTL_MS,
@@ -249,6 +249,7 @@ function createHttpContainment(options = {}) {
     const installationId = String(req.body?.beatgalerUserId || "").trim();
     const current = linkedAccount(installationId);
     let expectedOwnerId = null;
+    let existingProviderLogin = false;
     const token = bearerToken(req);
     if (token) {
       const auth = authenticate(req, res);
@@ -264,13 +265,14 @@ function createHttpContainment(options = {}) {
         return sendJson(res, 403, "This installation is already linked. Sign in using its connected provider.");
       }
       expectedOwnerId = String(owner.id);
+      existingProviderLogin = true;
     }
     const originalJson = res.json.bind(res);
     res.json = payload => {
       if (Number(res.statusCode || 200) < 300 && payload?.authorization_url && payload?.flow_id && installationId) {
         try {
           const state = new URL(payload.authorization_url).searchParams.get("state");
-          if (state) rememberOAuthGuard(state, payload.flow_id, installationId, expectedOwnerId);
+          if (state) rememberOAuthGuard(state, payload.flow_id, installationId, expectedOwnerId, existingProviderLogin);
         } catch {}
       }
       return originalJson(payload);
@@ -297,7 +299,7 @@ function createHttpContainment(options = {}) {
     }
     // Secure re-login: OAuth provider identity MUST map to the same owner.
     // The actual identity is not known until the provider callback completes.
-    if (guard.expectedOwnerId && guard.providerReauthentication) {
+    if (guard.expectedOwnerId && guard.existingProviderLogin) {
       req.beatgalerOAuthExpectedOwnerId = String(guard.expectedOwnerId);
     }
     if (!current && !(await reserveInstallationClaim(res, guard.installationId, guard.expectedOwnerId || `oauth:${guard.flowId}`))) {
