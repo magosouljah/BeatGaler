@@ -91,6 +91,46 @@ test('manifiestos: placeholders, formatos, secretos y WAIVED_TEST_ONLY se rechaz
   assert.equal(pool.statements.length, 0, 'ninguna consulta antes de validar el manifiesto');
 });
 
+test('REUSED_UNROTATED: exige aprobación real, rol dedicado, cero backends legacy y reporta riesgos sin alegar rotación', async () => {
+  const { deterministicId } = require('../../legacy-import-executor.js');
+  const vault = VAULT_ROW({ id: deterministicId('vlt', 'u1', '-1001') });
+  const auth = write('auth-reused.json', { users: [{ id: 'u1', storageChatId: '-1001' }] });
+  const respond = (sql) => {
+    if (/has_table_privilege/.test(sql)) return { rows: [{ role: 'beatgaler_catalog_rt', can_write: true }] };
+    if (/FROM pg_roles/.test(sql)) return { rows: [{ rolcanlogin: true }] };
+    return undefined;
+  };
+  const pool = fakePool({ activation: null, vaults: [vault], respond });
+  const client = cli.createNativeCli({ pool });
+  const hash = (await client.run(['inspect', '--environment', 'lab', '--allow-write-role'])).result.inventory_sha256;
+  const manifest = {
+    environment_id: 'lab', run_id: 'reuse-1', transport_bot_ids: ['Bot20'],
+    direct_token_exposure: 'REUSED_UNROTATED',
+    instance_inventory: [{ id: 'old-cloud', stopped: true }],
+    inspect: { inventory_sha256: hash, approval_ref: 'owner-inspected' },
+    credential_fence: { old_db_role: 'galer_admin' },
+    owner_decision_ref: 'owner-no-rotation-2026-11-19',
+  };
+  const exec = async (obj, targetPool = pool) => cli.createNativeCli({ pool: targetPool }).run([
+    'activate', '--manifest', write('reuse.json', obj), '--auth-json', auth,
+  ]);
+  await rejects(exec(manifest), 'UNROTATED_BOTS_NOT_APPROVED', 'STOP-APPROVAL');
+  const approved = { ...manifest, reuse_risk_accepted: true };
+  const result = (await exec(approved)).result;
+  assert.equal(result.outcome, 'WOULD_ACTIVATE');
+  assert.equal(result.writes, 0);
+  assert.ok(result.plan.checks.includes('UNROTATED_BOT_RISK_ACCEPTED'));
+  assert.ok(result.plan.checks.includes('OLD_ROLE_ZERO_BACKENDS_NOLOGIN_NOT_PROVEN'));
+  assert.ok(result.plan.remaining_risks.includes('EXISTING_TELEGRAM_TOKENS_NOT_REVOKED'));
+  assert.ok(!result.plan.checks.includes('OLD_ROLE_NOLOGIN_0_BACKENDS'));
+  assert.equal(pool.writes().length, 0);
+  const wrongRole = fakePool({ activation: null, vaults: [vault] });
+  await rejects(exec(approved, wrongRole), 'NEW_RUNTIME_ROLE_REQUIRED', 'STOP-ENV');
+  const activeOld = fakePool({ activation: null, vaults: [vault],
+    respond: (s) => /FROM pg_stat_activity/.test(s) ? { rows: [{ n: 1 }] } : respond(s) });
+  await rejects(exec(approved, activeOld), 'OLD_ROLE_BACKENDS_ALIVE', 'STOP-ENV');
+});
+
 test('inspect: transacción READ ONLY, rol con escritura rechazado salvo --allow-write-role, Telegram NOT_QUERIED, hash determinista, divergencia R12 informada y 0 escrituras', async () => {
   await rejects(cli.createNativeCli({ pool: fakePool({ canWrite: true }) }).run(['inspect', '--environment', 'lab']), 'INSPECT_ROLE_CAN_WRITE', 'STOP-ENV');
   await rejects(cli.createNativeCli({ pool: fakePool({ activation: { ...ACTIVATION, environment_id: 'other' } }) }).run(['inspect', '--environment', 'lab']), 'ENVIRONMENT_MISMATCH', 'STOP-ENV');
