@@ -73,6 +73,19 @@ test('graceful shutdown marks readiness draining and closes HTTP server', async 
   assert.equal((await runtime.readinessSnapshot({ config: runtime.runtimeConfig({ NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test' }) })).status, 'draining');
 });
 
+test('graceful shutdown exits after grace even if background handles keep the process alive', async () => {
+  const processLike = new EventEmitter(); processLike.exitCode = 0; let exited = null;
+  processLike.exit = (code) => { exited = code; };
+  const server = { close(cb) { cb(); }, closeIdleConnections() {}, closeAllConnections() {} };
+  runtime.installGracefulShutdown(server, { processLike, config: runtime.runtimeConfig({ NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test', BEATGALER_SHUTDOWN_GRACE_MS: '1000' }), logger: { log() {}, error() {} } });
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    processLike.emit('SIGTERM');
+    await new Promise((r) => setTimeout(r, 6300));
+    assert.equal(exited, 0);
+  } finally { clearInterval(keepAlive); }
+});
+
 test('express patch installs routes/proxy and wraps listen without server-core edits', () => {
   const routes = [];
   const processLike = new EventEmitter();

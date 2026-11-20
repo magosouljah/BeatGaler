@@ -119,6 +119,10 @@ function installGracefulShutdown(server, { processLike = process, config = runti
     logger.log?.(`[runtime] ${signal} received; draining HTTP connections.`);
     const forceTimer = setTimeout(() => server.closeAllConnections?.(), config.shutdownGraceMs);
     forceTimer.unref?.();
+    // Clientes Telegram persistentes, workers e intervalos mantienen vivo el proceso tras drenar HTTP y cerrar PostgreSQL:
+    // sin esto systemd espera su TimeoutStopSec (90 s) y termina con SIGKILL. Salida acotada después del periodo de gracia.
+    const exitTimer = setTimeout(() => processLike.exit?.(processLike.exitCode ?? 0), config.shutdownGraceMs + 5000);
+    exitTimer.unref?.();
     server.close(error => {
       clearTimeout(forceTimer);
       if (error) {
