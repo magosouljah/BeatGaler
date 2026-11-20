@@ -1,5 +1,7 @@
 # BeatGaler — Instrucciones para Claude Code
 
+> **ESTADO ACTUALIZADO 2026-11-20 (precedencia sobre el resumen histórico del 9 nov debajo):** el catálogo PostgreSQL está **LIVE** en `beatgaler.com`; Cloud, Web y worker están desplegados. **2 beats reales ACTIVE / 2 importaciones COMMITTED / 4 partes VERIFIED / 0 jobs pendientes**. El resumen de evidencia, versiones y respaldo S3 está en [CIERRE-LIVE-2026-11-20.md](docs/plans/catalogo-postgresql/CIERRE-LIVE-2026-11-20.md), y el backlog en [PENDIENTES-POST-LIVE-2026-11-20.md](docs/plans/catalogo-postgresql/PENDIENTES-POST-LIVE-2026-11-20.md). Las afirmaciones siguientes «sin implementación», «no tocar producción» o «T23 fuera de autorización» describen el **estado de 9 nov**, superado por autorizaciones expresas posteriores; **no son permiso genérico para nuevas modificaciones en producción**. Para el siguiente trabajo, revisar el estado real, respetar `main` protegida y no reiniciar la migración de INDEX. G2/G3 y T25 **siguen pendientes**, sin declarar PASS.
+
 **Actualizado:** 2026-11-09  
 **Proyecto:** `magosouljah/BeatGaler`  
 **Rama exclusiva:** `local/landing-gallery-unificada`  
