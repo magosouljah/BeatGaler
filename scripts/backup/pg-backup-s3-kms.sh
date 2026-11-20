@@ -18,7 +18,34 @@ pg_dump --snapshot="$SNAP" -Fc -Z 6 --no-owner --no-acl -d "$DB" -f "$WORK/$ID.d
 pg_restore --list "$WORK/$ID.dump" >/dev/null
 SHA="$(sha256sum "$WORK/$ID.dump" | cut -d' ' -f1)"
 SIZE="$(stat -c %s "$WORK/$ID.dump")"
-psql -X -qAt -v ON_ERROR_STOP=1 -v snap="$SNAP" -v id="$ID" -v sha="$SHA" -v size="$SIZE" -d "$DB" -o "$WORK/$ID.manifest.json" <<'SQL'
+# Determine whether this same MVCC snapshot contains the native catalog.
+# Never assume pre-native counts prove a native restore.
+HAS_NATIVE="$(psql -X -qAt -v ON_ERROR_STOP=1 -v snap="$SNAP" -d "$DB" <<'SQL'
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET TRANSACTION SNAPSHOT :'snap';
+SELECT to_regclass('public.catalog_libraries') IS NOT NULL;
+COMMIT;
+SQL
+)"
+[[ "$HAS_NATIVE" == "t" || "$HAS_NATIVE" == "f" ]] || { echo "STOP: cannot determine catalog schema" >&2; exit 4; }
+NATIVE_COUNTS='null'
+if [[ "$HAS_NATIVE" == "t" ]]; then
+  NATIVE_COUNTS="$(psql -X -qAt -v ON_ERROR_STOP=1 -v snap="$SNAP" -d "$DB" <<'SQL'
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET TRANSACTION SNAPSHOT :'snap';
+SELECT json_build_object(
+ 'catalog_libraries', (SELECT count(*) FROM public.catalog_libraries),
+ 'catalog_beats', (SELECT count(*) FROM public.catalog_beats),
+ 'catalog_beats_active', (SELECT count(*) FROM public.catalog_beats WHERE state='ACTIVE'),
+ 'catalog_file_versions', (SELECT count(*) FROM public.catalog_file_versions),
+ 'catalog_media_objects', (SELECT count(*) FROM public.catalog_media_objects)
+);
+COMMIT;
+SQL
+)"
+  [[ "$NATIVE_COUNTS" == \{*\} ]] || { echo "STOP: malformed native counts" >&2; exit 4; }
+fi
+psql -X -qAt -v ON_ERROR_STOP=1 -v snap="$SNAP" -v id="$ID" -v sha="$SHA" -v size="$SIZE" -v native_counts="$NATIVE_COUNTS" -d "$DB" -o "$WORK/$ID.manifest.json" <<'SQL'
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET TRANSACTION SNAPSHOT :'snap';
 SELECT json_build_object(
@@ -29,6 +56,7 @@ SELECT json_build_object(
  'dump',json_build_object('sha256', :'sha', 'bytes', (:'size')::bigint, 'format','pg_dump custom'),
  'encryption','SSE-KMS (AWS-managed at rest); TLS in transit',
  'coverage','PostgreSQL ONLY; NO Telegram media',
+ 'catalog_counts', (:'native_counts')::jsonb,
  'counts',json_build_object(
     'users',(SELECT count(*) FROM public.users),
     'vaults',(SELECT count(*) FROM public.vaults),
