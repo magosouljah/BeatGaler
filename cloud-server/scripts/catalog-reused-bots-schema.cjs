@@ -44,11 +44,9 @@ async function main() {
     await client.connect();
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['beatgaler:postgres-migrations:v1']);
-    const [role, versions, native] = await Promise.all([
-      client.query('SELECT current_user'),
-      client.query("SELECT version, checksum_sha256 FROM schema_migrations WHERE version IN ('0041','0042') ORDER BY version"),
-      client.query('SELECT (SELECT count(*) FROM catalog_native_activation)::int AS activations'),
-    ]);
+    const role = await client.query('SELECT current_user');
+    const versions = await client.query("SELECT version, checksum_sha256 FROM schema_migrations WHERE version IN ('0041','0042') ORDER BY version");
+    const native = await client.query('SELECT (SELECT count(*) FROM catalog_native_activation)::int AS activations');
     if (role.rows[0].current_user !== 'galer_admin') throw Error('STOP_WRONG_DB_ROLE');
     if (!versions.rows.some(r => r.version === '0041')) throw Error('STOP_BASELINE_0041_MISSING');
     if (native.rows[0].activations !== 0) throw Error('STOP_ALREADY_NATIVE_ACTIVE');
