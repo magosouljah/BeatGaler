@@ -78,6 +78,10 @@ test.after(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
+test('native HTTPS abort remains a retryable timeout', () => {
+  assert.equal(direct.__test.transientManagedTokenFetchError(Object.assign(new Error('Telegram Bot API HTTPS request failed'), { code: 'ABORT_ERR' })), true);
+});
+
 test('managed token fetch retries a transient network failure and then succeeds', async () => {
   resetHarness();
   let calls = 0;
