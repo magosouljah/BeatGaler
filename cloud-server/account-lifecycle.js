@@ -149,7 +149,7 @@ function normalizeState(input) {
 }
 
 function createAccountLifecycleRuntime({
-  dataDir = __dirname,
+  dataDir = require('./state-dir').STATE_DIR,
   env = process.env,
   now = () => Date.now(),
   randomBytes = size => crypto.randomBytes(size),

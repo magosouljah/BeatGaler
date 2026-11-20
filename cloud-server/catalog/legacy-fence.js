@@ -18,9 +18,15 @@ class CatalogLegacyFenceError extends Error {
   }
 }
 
-const USER_SQL = 'SELECT 1 FROM catalog_libraries WHERE user_id=$1 /* catalog-legacy-fence */';
+// Pre-provision native vaults must also be fenced: otherwise the legacy INDEX
+// can be published between signup and POST /library/provision.
+const USER_SQL = `SELECT 1 FROM catalog_libraries WHERE user_id=$1
+  UNION ALL SELECT 1 FROM vaults WHERE user_id=$1 AND catalog_native_eligible=true
+  /* catalog-legacy-fence */`;
 const CHAT_SQL = `SELECT 1 FROM catalog_libraries l JOIN vaults v ON v.user_id=l.user_id WHERE v.telegram_chat_id=$1
-  UNION ALL SELECT 1 FROM catalog_library_chats c WHERE c.chat_id=$1 /* catalog-legacy-fence */`;
+  UNION ALL SELECT 1 FROM catalog_library_chats c WHERE c.chat_id=$1
+  UNION ALL SELECT 1 FROM vaults v WHERE v.telegram_chat_id=$1 AND v.catalog_native_eligible=true
+  /* catalog-legacy-fence */`;
 
 function normalize(value) {
   return String(value ?? '').trim();

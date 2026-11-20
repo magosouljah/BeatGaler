@@ -45,7 +45,7 @@ function eraHeaders(req) {
 }
 const body = (req) => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
 
-function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, direct = null, playback = null, media = null, purge = null, prefixPacks = null, authenticate, log = () => {} } = {}) {
+function createCatalogRouter({ authority = null, queries = null, commands = null, operations = null, direct = null, transportProvisioner = null, playback = null, media = null, purge = null, prefixPacks = null, authenticate, log = () => {} } = {}) {
   if (typeof authenticate !== 'function') throw new Error('createCatalogRouter requires authenticate(req, res) → user | null');
   const router = express.Router();
   router.use(CATALOG_PREFIX, (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
@@ -74,6 +74,7 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
   }));
   router.post(`${CATALOG_PREFIX}/library/provision`, handle(async (_req, _res, userId) => {
     const r = await authority.provisionLibrary({ userId });
+    if (transportProvisioner) await transportProvisioner.ensureForUser({ userId });
     return { status: r.created ? 201 : 200, body: { created: r.created, context: r.context } };
   }));
   router.get(`${CATALOG_PREFIX}/beats`, handle(async (req, _res, userId) => ({ body: await queries.listBeats({ userId, query: req.query }) })));
@@ -128,7 +129,9 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
       }
       if (['IMPORT', 'REPLACE'].includes(b.kind)) {
         if (!operations) return { status: 501, body: { error: 'transfer operations are not mounted', code: 'NOT_IMPLEMENTED' } };
-        const r = await operations.createOperation({ userId, ...writeHeaders(req), intent: b });
+        const headers = writeHeaders(req);
+        if (transportProvisioner) await transportProvisioner.ensureForUser({ userId });
+        const r = await operations.createOperation({ userId, ...headers, intent: b });
         return { status: r.created ? 201 : 200, body: r };
       }
       if (!['BULK_PATCH', 'BULK_TRASH', 'BULK_RESTORE', 'TAG_RENAME'].includes(b.kind)) return { status: 400, body: { error: `unknown operation kind ${String(b.kind)}`, code: 'INPUT_INVALID', detail: { reason: 'OPERATION_KIND' } } };
@@ -174,7 +177,11 @@ function createCatalogRouter({ authority = null, queries = null, commands = null
     router.post(`${CATALOG_PREFIX}/prefix-packs/main/:packId/cancel`, handle(async (req, _res, userId) => ({ body: await prefixPacks.cancelMain({ userId, ...eraHeaders(req), packId: req.params.packId, code: body(req).code ?? null }) })));
   }
   if (direct) {
-    router.post(`${CATALOG_PREFIX}/direct/session`, handle(async (req, _res, userId) => { const b = body(req); return { body: await direct.startSession({ userId, tempAuthMetadata: b.tempAuthMetadata ?? null }) }; }));
+    router.post(`${CATALOG_PREFIX}/direct/session`, handle(async (req, _res, userId) => {
+      if (transportProvisioner) await transportProvisioner.ensureForUser({ userId });
+      const b = body(req);
+      return { body: await direct.startSession({ userId, tempAuthMetadata: b.tempAuthMetadata ?? null }) };
+    }));
     // La clave temporal no se puede revocar en el servidor: caduca sola (≤15 min). Parar solo reconoce el cierre; no hay estado durable.
     router.post(`${CATALOG_PREFIX}/direct/session/stop`, handle(async () => ({ body: { ok: true } })));
   }

@@ -42,6 +42,7 @@ const { currentCatalogDirect } = require("./catalog/direct");
 const { currentPrefixPacks } = require("./catalog/prefix-packs");
 const { assertCatalogSessionProtocolIfConfigured } = require("./catalog/session-guard");
 const { createCatalogRouter } = require("./catalog/routes");
+const { currentNativeTransportProvisioner } = require("./catalog/native-transport-provisioning");
 const { createProjectUploadHandlers } = require('./project-upload-route');
 const { verifyAuthorizedCapability } = require("./direct-capability-boundary");
 const { wrapWebTransportSession } = require("./web-transport-envelope");
@@ -133,7 +134,7 @@ app.use('/catalog/v1/prefix-packs/main', express.json({ limit: '6mb' }));
 app.use(express.json({ limit: "256kb" }));
 // T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
 // T16: rondas, medios, purge y transferencias montados; sin gateway real responden 503 TRANSFER_UNAVAILABLE / jobs en reintento (fail-closed).
-app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), direct: currentCatalogDirect(), prefixPacks: currentPrefixPacks(), playback: currentCatalogPlayback(), media: currentCatalogMedia(), purge: currentCatalogPurge(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
+app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), direct: currentCatalogDirect(), transportProvisioner: currentNativeTransportProvisioner(), prefixPacks: currentPrefixPacks(), playback: currentCatalogPlayback(), media: currentCatalogMedia(), purge: currentCatalogPurge(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
 const upload = multer({
   dest: "uploads-tmp/",
   limits: {
@@ -143,8 +144,9 @@ const upload = multer({
     fileSize: TELEGRAM_MAX_UPLOAD_BYTES,
   },
 });
-const DATA_FILE = path.join(__dirname, "cloud-data.json");
-const AUTH_DATA_FILE = path.join(__dirname, "accounts-data.json");
+const { statePath } = require("./state-dir");
+const DATA_FILE = statePath("cloud-data.json");
+const AUTH_DATA_FILE = statePath("accounts-data.json");
 const MASTER_STORAGE_GROUP_LIMIT = Math.max(1, Math.min(450, Number(process.env.BEATGALER_MASTER_GROUP_LIMIT || 450)));
 const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_FLOW_TTL_MS = 10 * 60 * 1000;
@@ -1725,6 +1727,17 @@ app.get("/auth/oauth/:provider/callback", async (req, res) => {
     }
     const tokenBody = await postForm(cfg.tokenUrl, form, headers);
     const identity = await fetchOAuthIdentity(provider, tokenBody.access_token);
+    // Installation ownership is not proof of account ownership. When a
+    // returning browser signs in without a live session, require the provider's
+    // verified identity to resolve to exactly the existing installation owner
+    // BEFORE any account mutation or installation binding.
+    const expectedOwnerId = String(req.beatgalerOAuthExpectedOwnerId || "");
+    if (expectedOwnerId) {
+      const verifiedAccount = findUserByProvider(provider, identity.id);
+      if (!verifiedAccount || String(verifiedAccount.id) !== expectedOwnerId) {
+        throw new Error("This X or Google identity does not match the account already linked to this installation.");
+      }
+    }
     let user;
     if (flow.linkUserId) {
       user = beatGalerUsersById.get(flow.linkUserId);

@@ -83,7 +83,7 @@ try {
     const have = await beats(); rec('UPLOAD-LIST', 'INFO', { names: have.map((b) => b.name), idbEntries: await idbEntries() });
   }
 
-  if (phase === 'upload-one') { const D = Buffer.concat([mp3.subarray(0, 200000), Buffer.from('E72-D')]); const r = await importBeat('E72 Beat D', D); rec('UPLOAD-D', r.saved ? 'PASS' : 'FAIL', r); }
+  if (phase === 'upload-one') { const N = process.env.UPLOAD_NAME || 'E72 Beat D'; const D = Buffer.concat([mp3.subarray(0, 200000), Buffer.from('E72-' + N)]); const r = await importBeat(N, D); rec('UPLOAD-D', r.saved ? 'PASS' : 'FAIL', r); }
   const find = async (k) => (await beats()).find((b) => b.name === nameOf[k]);
   const argv = (k, d) => { const i = args.rest.indexOf(k); return i >= 0 ? args.rest[i + 1] : d; };
   const manifestBrief = async () => { const m = (await api('/prefix-packs/manifest')).body || {}; return { main: m.main ? { version: m.main.version, sizeBytes: m.main.sizeBytes } : null, entries: (m.entries || []).length, pendingCount: m.pendingCount, rebuild: m.rebuild, building: m.building, current: m.current }; };

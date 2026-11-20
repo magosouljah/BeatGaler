@@ -4,6 +4,7 @@ require('dotenv').config({ quiet: true });
 const express = require("express");
 const { installLegacyMediaUploadDisable } = require("./legacy-media-upload-disable");
 const { installHttpContainment } = require("./http-containment");
+const { STATE_DIR, assertProductionStateDir } = require("./state-dir");
 const { installDirectCapabilityBoundary } = require("./direct-capability-boundary");
 const { installSensitiveAuthCapabilityRevocation } = require("./sensitive-auth-capability-revocation");
 const { installSessionSecurity } = require("./session-security");
@@ -58,6 +59,7 @@ const catalogPlayback = require("./catalog/playback");
 const catalogMedia = require("./catalog/media");
 const catalogPurge = require("./catalog/purge");
 const catalogDirect = require("./catalog/direct");
+const catalogNativeTransport = require("./catalog/native-transport-provisioning");
 const catalogPrefixPacks = require("./catalog/prefix-packs");
 const catalogSessionGuard = require("./catalog/session-guard");
 const catalogGateway = require("./catalog-gateway-runtime");
@@ -68,6 +70,7 @@ installSecurityHeaders(express);
 installLegacyMediaUploadDisable(express);
 
 async function start() {
+  assertProductionStateDir();
   const pgConfig = postgresConfig(process.env);
   let pool = null;
   let authDeliveryWorker = null;
@@ -102,6 +105,18 @@ async function start() {
   // T16 (capa 2 + montaje): sesión con protocolo catalog-v1 para dueños nativos; rondas, medios, purge y transferencias montados SIN gateway
   // real (fail-closed: 503 TRANSFER_UNAVAILABLE / jobs en reintento) hasta que T11 fase B lo autorice. El journal de borrados en disco solo si
   // el propietario fija su destino (BEATGALER_CATALOG_JOURNAL_DIR); sin él, ningún delete puede ejecutarse (C9).
+  // Owner-authorized reduced-fencing rollout: distinct from a G2 PASS.
+  const reusedBotRiskAccepted = String(process.env.BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED || '').trim().toLowerCase() === 'true';
+  if (reusedBotRiskAccepted) {
+    if (!pool || !nativeAuthority || !nativeAuthority.config.nativeEnabled) {
+      throw new Error('STOP-GATE: reused bot risk acceptance requires an enabled native PostgreSQL authority');
+    }
+    const activation = (await pool.query('SELECT transport_bot_ids, direct_token_exposure FROM catalog_native_activation')).rows;
+    if (activation.length !== 1 || activation[0].direct_token_exposure !== 'REUSED_UNROTATED') {
+      throw new Error('STOP-GATE: reused bot risk acceptance requires REUSED_UNROTATED SQL activation');
+    }
+    console.warn('[catalog] OWNER_RISK_ACCEPTED: unrotated Telegram tokens reused; G2 NOT_PROVEN; E8 residual risk');
+  }
   // Gateway real de medios (§8.6): apagado por defecto. Encendido exige el plano nativo montado; en producción exige además el dictamen G2
   // (BEATGALER_CATALOG_G2_APPROVED=true). Las sesiones de bot se abren perezosamente; sin flag, todo sigue fail-closed (503 / reintento).
   catalogGatewayRuntime = catalogGateway.gatewayFromEnv({ pool: nativeAuthority ? pool : null, env: process.env, log: console });
@@ -115,13 +130,19 @@ async function start() {
   catalogPurge.configureCatalogPurge(nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, journal: journalDir ? createFileDeletionJournal({ dir: journalDir }) : null } : null);
   // Direct B (E70): apagado por defecto. En producción exige el dictamen G2 (misma regla que el gateway); G2 sigue NOT_PROVEN.
   const directProd = ['production', 'prod'].includes(String(process.env.BEATGALER_DEPLOYMENT_ENV || process.env.NODE_ENV || '').trim().toLowerCase());
-  if (directFlag && directProd && String(process.env.BEATGALER_CATALOG_G2_APPROVED || '').trim().toLowerCase() !== 'true') throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires BEATGALER_CATALOG_G2_APPROVED=true; refusing to start.');
+  if (directFlag && directProd && String(process.env.BEATGALER_CATALOG_G2_APPROVED || '').trim().toLowerCase() !== 'true' && !reusedBotRiskAccepted) throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires proven G2 or owner-accepted unrotated-bot risk; refusing to start.');
   // E75: MAIN de prefijos (solo metadatos). El gateway se usa únicamente para COMPROBAR el mensaje publicado por el navegador (sin bytes).
   catalogPrefixPacks.configurePrefixPacks(String(process.env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, directReads: directFlag, log: console.warn } : null);
   catalogDirect.configureCatalogDirect(directFlag && nativeAuthority && nativeOperations ? { pool, authority: nativeAuthority, operations: nativeOperations,
     resolveProjectAccess: catalogDirect.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }),
     sessionSource: ({ botId, chatId }) => require("./direct-transport-control").catalogDirectSession({ botId, chatId }),
     bindBuilder: (session, metadata) => require("./productive-temp-auth-boundary").transformSession(session, metadata), log: console.warn } : null);
+  // The native catalog requires an actual existing bot in the vault before
+  // Direct sessions or transfer operations may begin. Its membership is
+  // established lazily and verified by both MASTER and the bot.
+  catalogNativeTransport.configureNativeTransportProvisioner(
+    nativeAuthority?.config.nativeEnabled && directFlag && mediaGateway
+      ? { pool, assignmentStore: require('./direct-vault-assignment').createDirectVaultAssignmentStore(pool), transport: require('./direct-transport-control'), log: console.warn } : null);
   // E73 (C): precalentamiento en segundo plano de los bots con bibliotecas nativas; nunca bloquea el arranque ni /readyz.
   // BEATGALER_CATALOG_DIRECT_PREWARM_BOTS (por defecto 3, máximo 8; 0 lo apaga).
   { const d = catalogDirect.currentCatalogDirect(); const raw = process.env.BEATGALER_CATALOG_DIRECT_PREWARM_BOTS; const n = raw === undefined || raw === '' ? 3 : Number(raw);
@@ -223,7 +244,7 @@ async function start() {
     },
   });
   const accountLifecycle = installAccountLifecycle(express, {
-    dataDir: __dirname,
+    dataDir: STATE_DIR,
     env: d8LifecycleEnv(process.env),
     emailNotifier: accountEmailNotifier,
     pool: cutover.authority === 'postgres' ? pool : null,
@@ -264,13 +285,13 @@ async function start() {
   installSensitiveAuthContainment(express, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
   applyD8RoResolutions(express, accountLifecycle, { env: process.env });
   installSessionSecurity(express, {
-    dataDir: __dirname,
+    dataDir: STATE_DIR,
     pool: cutover.authority === 'postgres' ? pool : null,
     getCapabilityStore: () => directCapabilities?.store || null,
   });
   installLifecycleRequestGuard(express, accountLifecycle);
-  installHttpContainment(express, { dataDir: __dirname, installationClaimCoordinator });
-  directCapabilities = installDirectCapabilityBoundary(express, { dataDir: __dirname, pool });
+  installHttpContainment(express, { dataDir: STATE_DIR, installationClaimCoordinator });
+  directCapabilities = installDirectCapabilityBoundary(express, { dataDir: STATE_DIR, pool });
   installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
   // PostgreSQL is mandatory in production. These shared buckets therefore
   // coordinate auth abuse controls across every production process/restart;
@@ -279,7 +300,7 @@ async function start() {
   installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
   installAtomicLibraryIndexBootstrap(express);
-  installStartupRoutingIndex(express, { pool, dataDir: __dirname });
+  installStartupRoutingIndex(express, { pool, dataDir: STATE_DIR });
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"} pending-signup=${pendingSignupEnabled ? 'configured' : 'disabled'}`);
 
   // Install a one-shot loader only for server-core so activation can reuse its

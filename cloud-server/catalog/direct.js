@@ -126,7 +126,7 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
       if (i) await sleep(gapMs);
       const botId = String(rows[i].bot_id); const t0 = Date.now();
       try { await bindBuilder(await sessionSource({ botId, chatId: String(rows[i].chat_id) }), null); metrics.prewarmed++; out.push({ botId, ok: true, ms: Date.now() - t0 }); }
-      catch (error) { out.push({ botId, ok: false, ms: Date.now() - t0, code: String((error && (error.code || error.name)) || 'ERROR').slice(0, 60) }); break; }
+      catch (error) { out.push({ botId, ok: false, ms: Date.now() - t0, code: String((error && (error.code || error.name)) || 'ERROR').slice(0, 60), detail: String((error && error.message) || '').replace(/\d{6,12}:[A-Za-z0-9_-]{30,}/g, '<token>').slice(0, 160) }); break; }
     }
     log(`[catalog-direct] prewarm ${JSON.stringify(out)}`);
     return out;

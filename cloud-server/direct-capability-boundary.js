@@ -456,7 +456,7 @@ function installDirectCapabilityBoundary(express, options = {}) {
   if (express.application.__beatgalerDirectCapabilitiesInstalled) return installedRuntime;
   express.application.__beatgalerDirectCapabilitiesInstalled = true;
   const env = options.env || process.env;
-  const dataDir = options.dataDir || __dirname;
+  const dataDir = options.dataDir || require("./state-dir").STATE_DIR;
   const now = options.now || (() => Date.now());
   const ttlMs = Math.max(30_000, Math.min(30 * 60 * 1000, Number(env.BEATGALER_DIRECT_CAPABILITY_TTL_MS || DEFAULT_CAPABILITY_TTL_MS)));
   const clockSkewMs = Math.max(0, Math.min(30_000, Number(env.BEATGALER_DIRECT_CAPABILITY_CLOCK_SKEW_MS || DEFAULT_CLOCK_SKEW_MS)));

@@ -164,7 +164,8 @@ function createLibraryIndexPublication({ pool, transport, readIndex, fence = nul
     const rows = (await pool.query(`SELECT s.user_id,v.telegram_chat_id,s.index_message_id,
       p.predecessor_message_id FROM library_quota_state s JOIN vaults v ON v.user_id=s.user_id
       LEFT JOIN vault_index_pointers p ON p.vault_id=v.id
-      WHERE NOT EXISTS (SELECT 1 FROM catalog_libraries l WHERE l.user_id=s.user_id)`)).rows;
+      WHERE NOT v.catalog_native_eligible
+        AND NOT EXISTS (SELECT 1 FROM catalog_libraries l WHERE l.user_id=s.user_id)`)).rows;
     let recovered = 0;
     for (const row of rows) {
       try {
@@ -184,6 +185,7 @@ function createLibraryIndexPublication({ pool, transport, readIndex, fence = nul
     }
     const uninitialized = (await pool.query(`SELECT v.user_id,v.telegram_chat_id FROM vaults v
       LEFT JOIN library_quota_state s ON s.user_id=v.user_id WHERE s.user_id IS NULL
+      AND NOT v.catalog_native_eligible
       AND NOT EXISTS (SELECT 1 FROM catalog_libraries l WHERE l.user_id=v.user_id)`)).rows;
     for (const row of uninitialized) {
       try { await migrateLegacyProjects({ userId: row.user_id, chatId: row.telegram_chat_id }); recovered += 1; }

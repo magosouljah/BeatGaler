@@ -50,6 +50,18 @@ test('guardas de arranque: apagado por defecto; encendido exige plano PG; produc
   assert.equal(rt.gatewayFromEnv({ pool: fakePool({}), env: { BEATGALER_CATALOG_GATEWAY_ENABLED: 'true', NODE_ENV: 'development' }, clientProvider: provider(createFakeTelegramServer()), sdk }).gateway.verifyMessage.constructor.name, 'AsyncFunction');
 });
 
+test('owner-risk exception is explicit and never equals G2 approval', () => {
+  const base = {
+    NODE_ENV: 'production', BEATGALER_CATALOG_GATEWAY_ENABLED: 'true',
+    BEATGALER_CATALOG_G2_APPROVED: 'false',
+    BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED: 'true',
+  };
+  assert.throws(() => rt.assertGatewayAllowed(base), /STOP-GATE/);
+  assert.equal(rt.assertGatewayAllowed({ ...base, BEATGALER_CATALOG_NATIVE_ENABLED: 'true' }), true);
+  assert.equal(rt.G2_FLAG, 'BEATGALER_CATALOG_G2_APPROVED');
+  assert.equal(rt.OWNER_EXCEPTION_FLAG, 'BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED');
+});
+
 test('cliente perezoso y enrutado por chat: cada biblioteca usa la sesión de SU bot; sin proveUniqueMatch; interfaz SOLO de metadatos (E77)', async () => {
   const server = createFakeTelegramServer(); const prov = provider(server);
   const pool = fakePool({ '-1001': vault('Bot20'), '-1002': vault('Bot21') });

@@ -153,7 +153,7 @@ function normalizePersistentState(input) {
 }
 
 function createSessionSecurityRuntime({
-  dataDir = __dirname,
+  dataDir = require("./state-dir").STATE_DIR,
   pool = null,
   now = () => Date.now(),
   randomBytes = size => crypto.randomBytes(size),

@@ -289,7 +289,12 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
     if (!Array.isArray(bots) || !bots.length || bots.some((b) => typeof b !== 'string' || !ID_RE.test(b))) throw stop('STOP-CONTRACT', 'MANIFEST_FIELD_INVALID', 'transport_bot_ids must be a non-empty list of bot ids', { field: 'transport_bot_ids' });
     const exposure = manifest.direct_token_exposure;
     if (exposure === 'WAIVED_TEST_ONLY') throw stop('STOP-CONTRACT', 'TOKEN_EXPOSURE_WAIVED', 'WAIVED_TEST_ONLY was removed by NATIVO r2.1 §5.0: rotate the tokens or use fresh bots');
-    if (!['ROTATED', 'FRESH_BOTS'].includes(exposure)) throw stop('STOP-CONTRACT', 'MANIFEST_FIELD_INVALID', 'direct_token_exposure must be ROTATED or FRESH_BOTS', { field: 'direct_token_exposure' });
+    if (!['ROTATED', 'FRESH_BOTS', 'REUSED_UNROTATED'].includes(exposure)) throw stop('STOP-CONTRACT', 'MANIFEST_FIELD_INVALID', 'direct_token_exposure must be ROTATED, FRESH_BOTS or REUSED_UNROTATED', { field: 'direct_token_exposure' });
+    const reuse = exposure === 'REUSED_UNROTATED';
+    // Explicit owner-approved reduced-fencing path. Never report existing tokens as rotated.
+    if (reuse && (manifest.reuse_risk_accepted !== true || !manifest.owner_decision_ref || typeof manifest.owner_decision_ref !== 'string')) {
+      throw stop('STOP-APPROVAL', 'UNROTATED_BOTS_NOT_APPROVED', 'reusing unrotated bot tokens requires reuse_risk_accepted=true and owner_decision_ref');
+    }
     const instances = manifest.instance_inventory;
     if (!Array.isArray(instances) || !instances.length) throw stop('STOP-ENV', 'INSTANCES_NOT_INVENTORIED', 'instance_inventory must list every pre-T05 Cloud instance and worker (R14)');
     for (const instance of instances) {
@@ -301,9 +306,25 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
     requireText(inspectRef, 'approval_ref', { where: 'inspect' });
     const fence = manifest.credential_fence || {};
     const oldRole = requireText(fence, 'old_db_role', { where: 'credential_fence' });
-    requireText(fence, 'token_rotation_proof_ref', { where: 'credential_fence' });
-    requireText(fence, 'transport_fence_proof_ref', { where: 'credential_fence' });
+    if (!reuse) {
+      requireText(fence, 'token_rotation_proof_ref', { where: 'credential_fence' });
+      requireText(fence, 'transport_fence_proof_ref', { where: 'credential_fence' });
+    }
     const staging = Array.isArray(manifest.staging_libraries) ? manifest.staging_libraries.map(String) : [];
+    // Owner-approved test-only reset: SQL account deletion and activation must
+    // commit atomically. Telegram media is never deleted by this path.
+    const reset = manifest.test_account_reset || null;
+    if (reset) {
+      if (!reuse || reset.owner_approved !== true ||
+          typeof reset.approval_ref !== 'string' || PLACEHOLDER_RE.test(reset.approval_ref) ||
+          reset.expected_users !== 5 || reset.expected_vaults !== 5 ||
+          reset.expected_legacy_beats !== 28 ||
+          ![0, 1].includes(reset.approved_vault_id_mismatch_count ?? 0) ||
+          typeof reset.user_ids_sha256 !== 'string' || !HEX_RE.test(reset.user_ids_sha256)) {
+        throw stop('STOP-APPROVAL', 'TEST_RESET_NOT_APPROVED',
+          'test_account_reset requires explicit approval, exact 5/5/28 counts and frozen user ID digest');
+      }
+    }
     if (!flags['auth-json']) throw usage('activate requires --auth-json <accounts-data.json> to compare the JSON-compat state with SQL (§3.1)');
     const authJson = loadAuthJson(flags['auth-json']);
     const manifestSha = sha256Hex(canonicalJson(manifest));
@@ -319,22 +340,36 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
       }
       const role = (await client.query(ROLE_SQL)).rows[0];
       if (role.role === oldRole) throw stop('STOP-ENV', 'OLD_ROLE_IN_USE', 'activate is running with the old DB role; use the new runtime role (§5.0.2)', { role: role.role });
+      if (reuse && role.role !== 'beatgaler_catalog_rt') throw stop('STOP-ENV', 'NEW_RUNTIME_ROLE_REQUIRED', 'unrotated bot activation requires the dedicated beatgaler_catalog_rt role', { role: role.role });
       const cutover = (await client.query(CUTOVER_SQL)).rows[0] || null;
       if (!cutover || cutover.state !== 'READY') throw stop('STOP-ENV', 'CONTROL_PLANE_NOT_POSTGRES', 'the control-plane is not in postgres mode (no READY cutover)', { cutover_state: cutover ? cutover.state : null });
       const compat = await compareJsonCompat(client, authJson);
-      if (!compat.match) throw stop('STOP-DATA', 'JSON_SQL_MISMATCH', 'JSON-compat state and SQL differ in users or vaults', compat);
       const quarantined = (await client.query(OPEN_QUARANTINE_SQL)).rows[0].n;
       if (quarantined > 0) throw stop('STOP-DATA', 'VAULTS_PENDING_FLUSH', 'there are users in flush quarantine (vaults pending)', { quarantined_users: quarantined });
       const inv = await inventory(client, { authJson });
       if (inv.inventory_sha256 !== inventorySha) throw stop('STOP-DATA', 'INVENTORY_CHANGED', 'the inventory differs from the approved inspect manifest (TOCTOU)', { expected: inventorySha, actual: inv.inventory_sha256 });
       const diverging = inv.vaults.filter((v) => v.json_compat.vault_id_diverges || v.json_compat.chat_diverges || !v.json_compat.present);
-      if (diverging.length) throw stop('STOP-DATA', 'VAULT_ID_DIVERGENCE', 'vaults.id or chat diverge between JSON and SQL (R12): resolve before activating', { users: diverging.map((v) => v.user_id) });
+      // Exception only when ALL five owner-approved disposable test accounts
+      // are deleted in the very same transaction as activation. The single
+      // known legacy vault ID discrepancy cannot survive the commit. A changed
+      // chat, absent account, mismatched user set or extra discrepancy still STOP.
+      const idException = reset && reset.approved_vault_id_mismatch_count === 1 &&
+        compat.users.json === 5 && compat.users.sql === 5 &&
+        compat.users.json_sha256 === compat.users.sql_sha256 &&
+        compat.vaults.json === 5 && compat.vaults.sql === 5 &&
+        diverging.length === 1 &&
+        diverging.every((v) => v.json_compat.vault_id_diverges &&
+          !v.json_compat.chat_diverges && v.json_compat.present);
+      if (!compat.match && !idException) throw stop('STOP-DATA', 'JSON_SQL_MISMATCH', 'JSON-compat state and SQL differ in users or vaults', compat);
+      if (diverging.length && !idException) throw stop('STOP-DATA', 'VAULT_ID_DIVERGENCE', 'vaults.id or chat diverge between JSON and SQL (R12): resolve before activating', { users: diverging.map((v) => v.user_id) });
       const libs = (await client.query('SELECT user_id, authority FROM catalog_libraries ORDER BY user_id')).rows;
       const unexpected = libs.filter((l) => !staging.includes(String(l.user_id)) || l.authority !== 'LEGACY');
       if (unexpected.length) throw stop('STOP-DATA', 'CATALOG_LIBRARIES_PRESENT', 'catalog_libraries must be empty except the LEGACY staging listed in the manifest', { users: unexpected.map((l) => l.user_id) });
       const roleRow = (await client.query('SELECT rolcanlogin FROM pg_roles WHERE rolname = $1', [oldRole])).rows[0];
       if (!roleRow) throw stop('STOP-ENV', 'OLD_ROLE_MISSING', 'the old DB role does not exist in this cluster: the credential fence cannot be verified', { role: oldRole });
-      if (roleRow.rolcanlogin === true) throw stop('STOP-ENV', 'OLD_ROLE_CAN_LOGIN', 'the old DB role must be NOLOGIN before activation (§5.0.2)', { role: oldRole });
+      // RDS master role cannot be disabled. In REUSED_UNROTATED mode, require zero
+      // old-role backends and record that the SQL credential fence is incomplete.
+      if (!reuse && roleRow.rolcanlogin === true) throw stop('STOP-ENV', 'OLD_ROLE_CAN_LOGIN', 'the old DB role must be NOLOGIN before activation (§5.0.2)', { role: oldRole });
       const backends = (await client.query('SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = $1', [oldRole])).rows[0].n;
       if (backends > 0) throw stop('STOP-ENV', 'OLD_ROLE_BACKENDS_ALIVE', 'the old DB role still has backends; terminate them before activation (§5.0.2)', { role: oldRole, backends });
       const botRows = (await client.query('SELECT id, quarantined, rotation_pending FROM transport_bots WHERE id = ANY($1::text[])', [bots])).rows;
@@ -343,16 +378,60 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
         if (!row) throw stop('STOP-ENV', 'TRANSPORT_BOT_UNKNOWN', `transport bot ${bot} is not registered`, { bot });
         if (row.quarantined === true || row.rotation_pending === true) throw stop('STOP-ENV', 'TRANSPORT_BOT_NOT_READY', `transport bot ${bot} is quarantined or has a rotation pending`, { bot });
       }
+      let testResetCounts = null;
+      if (reset) {
+        const countRows = (await client.query(`SELECT
+          (SELECT count(*)::int FROM users) AS users,
+          (SELECT count(*)::int FROM vaults) AS vaults,
+          (SELECT count(*)::int FROM library_beats) AS legacy_beats,
+          (SELECT count(*)::int FROM catalog_libraries) AS native_libraries`)).rows[0];
+        const users = (await client.query('SELECT id FROM users ORDER BY id')).rows.map((r) => String(r.id));
+        const userIdsDigest = sha256Hex(canonicalJson(users));
+        if (countRows.users !== reset.expected_users ||
+            countRows.vaults !== reset.expected_vaults ||
+            countRows.legacy_beats !== reset.expected_legacy_beats ||
+            countRows.native_libraries !== 0 ||
+            users.length !== reset.expected_users ||
+            userIdsDigest !== reset.user_ids_sha256) {
+          throw stop('STOP-DATA', 'TEST_ACCOUNT_SET_CHANGED',
+            'only the frozen five-owner-approved test accounts can be reset', {
+              counts: countRows, user_ids_match: userIdsDigest === reset.user_ids_sha256 });
+        }
+        if (inv.vaults.some((v) => v.counts.direct_operations_live > 0)) {
+          throw stop('STOP-DATA', 'TEST_OPERATIONS_IN_FLIGHT',
+            'test vault Direct operations must be quiescent before owner-approved reset');
+        }
+        // Reservations and project-upload rows can be historical/committed.
+        // Their mere existence does not imply work in flight; these five owner-
+        // approved SQL test accounts will be removed transactionally.
+        testResetCounts = { users: countRows.users, vaults: countRows.vaults,
+          legacy_beats: countRows.legacy_beats, telegram_media_deleted: 0 };
+      }
       const plan = {
         environment_id: environmentId, run_id: runId, transport_bot_ids: bots, direct_token_exposure: exposure, manifest_sha256: manifestSha,
         instances: instances.length, staging_libraries: staging, inventory_sha256: inventorySha,
-        checks: ['NO_PRIOR_ACTIVATION', 'CONTROL_PLANE_POSTGRES', 'JSON_SQL_MATCH', 'NO_QUARANTINE', 'INVENTORY_MATCH', 'NO_R12_DIVERGENCE', 'LIBRARIES_CLEAN', 'OLD_ROLE_NOLOGIN_0_BACKENDS', 'BOTS_READY', 'INSTANCES_DRAINED'],
+        test_account_reset: testResetCounts,
+        approved_test_vault_id_mismatch: idException ? 1 : 0,
+        checks: ['NO_PRIOR_ACTIVATION', 'CONTROL_PLANE_POSTGRES', idException ? 'OWNER_TEST_ACCOUNT_VAULT_ID_EXCEPTION' : 'JSON_SQL_MATCH', 'NO_QUARANTINE', 'INVENTORY_MATCH', idException ? 'ONE_LEGACY_TEST_VAULT_ID_TO_BE_DELETED' : 'NO_R12_DIVERGENCE', 'LIBRARIES_CLEAN', reuse ? 'OLD_ROLE_ZERO_BACKENDS_NOLOGIN_NOT_PROVEN' : 'OLD_ROLE_NOLOGIN_0_BACKENDS', 'BOTS_READY', 'INSTANCES_DRAINED', ...(reuse ? ['UNROTATED_BOT_RISK_ACCEPTED'] : [])],
+        remaining_risks: reuse ? ['OLD_DB_ROLE_CAN_LOGIN', 'EXISTING_TELEGRAM_TOKENS_NOT_REVOKED', 'G2_TRANSPORT_NOT_PROVEN'] : [],
       };
       if (!apply) return { exitCode: 0, result: { command: 'activate', mode: 'dry-run', outcome: 'WOULD_ACTIVATE', plan, writes: 0, apply_hint: 'repeat with --apply and the same manifest' } };
+      if (reset) {
+        // All users are pre-approved disposable test accounts. No Telegram calls.
+        // This DELETE cascades SQL-only legacy ledgers and sessions. If activation
+        // fails, PostgreSQL rolls back the DELETE in the same transaction.
+        const gone = await client.query('DELETE FROM users');
+        if (gone.rowCount !== 5) throw stop('STOP-DATA', 'TEST_ACCOUNT_DELETE_COUNT_MISMATCH',
+          'test account reset affected an unexpected number of SQL users', { affected: gone.rowCount });
+        const remaining = (await client.query(
+          'SELECT (SELECT count(*)::int FROM users) AS users, (SELECT count(*)::int FROM vaults) AS vaults')).rows[0];
+        if (remaining.users !== 0 || remaining.vaults !== 0) throw stop(
+          'STOP-DATA', 'TEST_ACCOUNT_DELETE_INCOMPLETE', 'SQL test accounts did not clear completely', remaining);
+      }
       await client.query('INSERT INTO catalog_native_activation(environment_id, run_id, transport_bot_ids, direct_token_exposure, manifest_sha256, instance_inventory) VALUES ($1, $2, $3, $4, $5, $6)',
         [environmentId, runId, JSON.stringify(bots), exposure, manifestSha, canonicalJson(instances)]);
       const activation = await readActivation(client);
-      return { exitCode: 0, result: { command: 'activate', mode: 'apply', outcome: 'ACTIVATED', activation, plan, writes: 1 } };
+      return { exitCode: 0, result: { command: 'activate', mode: 'apply', outcome: 'ACTIVATED', activation, plan, writes: reset ? 6 : 1 } };
     });
   }
 

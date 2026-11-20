@@ -268,7 +268,7 @@ function createStartupRoutingStore({ pool, dataDir }) {
   return pool ? createPostgresRoutingStore(pool) : createFileRoutingStore(dataDir);
 }
 
-function installStartupRoutingIndex(express, { pool, dataDir = __dirname } = {}) {
+function installStartupRoutingIndex(express, { pool, dataDir = require("./state-dir").STATE_DIR } = {}) {
   const application = express?.application;
   if (!application || application.__beatgalerStartupRoutingPatchInstalled) return;
   application.__beatgalerStartupRoutingPatchInstalled = true;
