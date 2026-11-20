@@ -171,6 +171,21 @@ function uploadRequest({ token = "", headers = {}, body = {}, ip = "127.0.0.1", 
       BEATGALER_UPLOAD_CONCURRENCY: "1",
     }});
 
+    // After an owner-approved account reset, installation bindings left behind
+    // by deleted accounts must not block X OAuth or be treated as owned.
+    {
+      const staleReq = { headers: {}, body: { provider: "x", beatgalerUserId: "tenant_b" } };
+      const staleRes = responseRecorder();
+      let nextCalled = false;
+      containment.guardOAuthStart(staleReq, staleRes, () => { nextCalled = true; });
+      assert.equal(nextCalled, true, "orphaned installation may start fresh OAuth");
+      assert.equal(staleRes.statusCode, 200);
+      const ownedRes = responseRecorder();
+      containment.guardOAuthStart({ headers: {}, body: { provider: "x", beatgalerUserId: installationId } },
+        ownedRes, () => assert.fail("currently owned installation must remain protected"));
+      assert.equal(ownedRes.statusCode, 403);
+    }
+
     // 401 unauthenticated, before multipart parsing.
     {
       const res = responseRecorder();
