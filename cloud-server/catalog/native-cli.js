@@ -319,6 +319,7 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
           typeof reset.approval_ref !== 'string' || PLACEHOLDER_RE.test(reset.approval_ref) ||
           reset.expected_users !== 5 || reset.expected_vaults !== 5 ||
           reset.expected_legacy_beats !== 28 ||
+          ![0, 1].includes(reset.approved_vault_id_mismatch_count ?? 0) ||
           typeof reset.user_ids_sha256 !== 'string' || !HEX_RE.test(reset.user_ids_sha256)) {
         throw stop('STOP-APPROVAL', 'TEST_RESET_NOT_APPROVED',
           'test_account_reset requires explicit approval, exact 5/5/28 counts and frozen user ID digest');
@@ -343,13 +344,24 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
       const cutover = (await client.query(CUTOVER_SQL)).rows[0] || null;
       if (!cutover || cutover.state !== 'READY') throw stop('STOP-ENV', 'CONTROL_PLANE_NOT_POSTGRES', 'the control-plane is not in postgres mode (no READY cutover)', { cutover_state: cutover ? cutover.state : null });
       const compat = await compareJsonCompat(client, authJson);
-      if (!compat.match) throw stop('STOP-DATA', 'JSON_SQL_MISMATCH', 'JSON-compat state and SQL differ in users or vaults', compat);
       const quarantined = (await client.query(OPEN_QUARANTINE_SQL)).rows[0].n;
       if (quarantined > 0) throw stop('STOP-DATA', 'VAULTS_PENDING_FLUSH', 'there are users in flush quarantine (vaults pending)', { quarantined_users: quarantined });
       const inv = await inventory(client, { authJson });
       if (inv.inventory_sha256 !== inventorySha) throw stop('STOP-DATA', 'INVENTORY_CHANGED', 'the inventory differs from the approved inspect manifest (TOCTOU)', { expected: inventorySha, actual: inv.inventory_sha256 });
       const diverging = inv.vaults.filter((v) => v.json_compat.vault_id_diverges || v.json_compat.chat_diverges || !v.json_compat.present);
-      if (diverging.length) throw stop('STOP-DATA', 'VAULT_ID_DIVERGENCE', 'vaults.id or chat diverge between JSON and SQL (R12): resolve before activating', { users: diverging.map((v) => v.user_id) });
+      // Exception only when ALL five owner-approved disposable test accounts
+      // are deleted in the very same transaction as activation. The single
+      // known legacy vault ID discrepancy cannot survive the commit. A changed
+      // chat, absent account, mismatched user set or extra discrepancy still STOP.
+      const idException = reset && reset.approved_vault_id_mismatch_count === 1 &&
+        compat.users.json === 5 && compat.users.sql === 5 &&
+        compat.users.json_sha256 === compat.users.sql_sha256 &&
+        compat.vaults.json === 5 && compat.vaults.sql === 5 &&
+        diverging.length === 1 &&
+        diverging.every((v) => v.json_compat.vault_id_diverges &&
+          !v.json_compat.chat_diverges && v.json_compat.present);
+      if (!compat.match && !idException) throw stop('STOP-DATA', 'JSON_SQL_MISMATCH', 'JSON-compat state and SQL differ in users or vaults', compat);
+      if (diverging.length && !idException) throw stop('STOP-DATA', 'VAULT_ID_DIVERGENCE', 'vaults.id or chat diverge between JSON and SQL (R12): resolve before activating', { users: diverging.map((v) => v.user_id) });
       const libs = (await client.query('SELECT user_id, authority FROM catalog_libraries ORDER BY user_id')).rows;
       const unexpected = libs.filter((l) => !staging.includes(String(l.user_id)) || l.authority !== 'LEGACY');
       if (unexpected.length) throw stop('STOP-DATA', 'CATALOG_LIBRARIES_PRESENT', 'catalog_libraries must be empty except the LEGACY staging listed in the manifest', { users: unexpected.map((l) => l.user_id) });
@@ -399,7 +411,8 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
         environment_id: environmentId, run_id: runId, transport_bot_ids: bots, direct_token_exposure: exposure, manifest_sha256: manifestSha,
         instances: instances.length, staging_libraries: staging, inventory_sha256: inventorySha,
         test_account_reset: testResetCounts,
-        checks: ['NO_PRIOR_ACTIVATION', 'CONTROL_PLANE_POSTGRES', 'JSON_SQL_MATCH', 'NO_QUARANTINE', 'INVENTORY_MATCH', 'NO_R12_DIVERGENCE', 'LIBRARIES_CLEAN', reuse ? 'OLD_ROLE_ZERO_BACKENDS_NOLOGIN_NOT_PROVEN' : 'OLD_ROLE_NOLOGIN_0_BACKENDS', 'BOTS_READY', 'INSTANCES_DRAINED', ...(reuse ? ['UNROTATED_BOT_RISK_ACCEPTED'] : [])],
+        approved_test_vault_id_mismatch: idException ? 1 : 0,
+        checks: ['NO_PRIOR_ACTIVATION', 'CONTROL_PLANE_POSTGRES', idException ? 'OWNER_TEST_ACCOUNT_VAULT_ID_EXCEPTION' : 'JSON_SQL_MATCH', 'NO_QUARANTINE', 'INVENTORY_MATCH', idException ? 'ONE_LEGACY_TEST_VAULT_ID_TO_BE_DELETED' : 'NO_R12_DIVERGENCE', 'LIBRARIES_CLEAN', reuse ? 'OLD_ROLE_ZERO_BACKENDS_NOLOGIN_NOT_PROVEN' : 'OLD_ROLE_NOLOGIN_0_BACKENDS', 'BOTS_READY', 'INSTANCES_DRAINED', ...(reuse ? ['UNROTATED_BOT_RISK_ACCEPTED'] : [])],
         remaining_risks: reuse ? ['OLD_DB_ROLE_CAN_LOGIN', 'EXISTING_TELEGRAM_TOKENS_NOT_REVOKED', 'G2_TRANSPORT_NOT_PROVEN'] : [],
       };
       if (!apply) return { exitCode: 0, result: { command: 'activate', mode: 'dry-run', outcome: 'WOULD_ACTIVATE', plan, writes: 0, apply_hint: 'repeat with --apply and the same manifest' } };
