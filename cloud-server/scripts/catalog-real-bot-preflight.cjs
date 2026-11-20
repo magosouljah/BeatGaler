@@ -36,4 +36,4 @@ async function main() {
     await provider.close();
   }
 }
-main().catch(e => { console.error('STOP:', e.message); process.exitCode=3; });
+main().then(() => process.exit(0), e => { console.error('STOP:', e.message); process.exit(3); });
