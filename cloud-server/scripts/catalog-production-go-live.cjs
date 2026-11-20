@@ -166,7 +166,7 @@ async function main(){
   switchWeb(previousWeb);
   console.log('NATIVE_WEB_PUBLISHED');
   try{shell('systemctl',['start','beatgaler-pg-backup.service'],190000);console.log('POST_CUTOVER_BACKUP_PASS')}catch(_){console.log('POST_CUTOVER_BACKUP_UNVERIFIED')}
-  console.log('GO_LIVE_SUCCESS;G2_MEDIA_SMOKE=NOT_PROVEN;REUSED_BOT_RISK_ACCEPTED;TELEGRAM_MEDIA_DELETED=0;TOKEN_ROTATIONS=0');
+  console.log('NATIVE_WEB_AND_CLOUD_PUBLISHED;G2_MEDIA_SMOKE=NOT_PROVEN;REUSED_BOT_RISK_ACCEPTED;TELEGRAM_MEDIA_DELETED=0;TOKEN_ROTATIONS=0');
  }catch(e){
   console.error('GO_LIVE_STOP:',String(e.code||e.message).replace(/postgres(?:ql)?:\/\/[^\s]+/g,'[HIDDEN]'));
   if(stopped){
