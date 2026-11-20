@@ -30,7 +30,7 @@ function cred(){
 }
 function safety(){
  assert(process.getuid()===0,'STOP_ROOT_REQUIRED');
- assert(process.argv.length===3&&process.argv[2]==='--apply','USAGE_RUN_WITH_APPLY');
+ assert(process.argv.length===3&&['--apply','--dry-run'].includes(process.argv[2]),'USAGE_RUN_WITH_APPLY_OR_DRY_RUN');
  assert(shell('systemctl',['is-active','beatgaler-cloud.service'])==='active','STOP_CLOUD_INACTIVE');
  assert(shell('curl',['-s','--max-time','6','-o','/dev/null','-w','%{http_code}','http://127.0.0.1:4000/readyz'])==='200','STOP_CLOUD_NOT_READY');
  assert(fs.existsSync(NATIVE_WEB+'/index.html'),'STOP_WEB_NOT_STAGED');
@@ -138,6 +138,7 @@ async function main(){
  try{
   const baseline=await status(pool,auth);
   console.log('FIVE_TEST_ACCOUNTS_BOT_POOL_SQL_PASS');
+  if(process.argv[2]==='--dry-run'){console.log('CUTOVER_DRY_RUN_READY_NO_SQL_WRITES');return}
   stopped=true; // even if systemctl stop times out, the recovery path must run
   shell('systemctl',['stop','beatgaler-cloud.service'],190000);
   assert(shell('systemctl',['show','-p','ActiveState','--value','beatgaler-cloud.service'])==='inactive','STOP_OLD_CLOUD_STILL_RUNNING');
