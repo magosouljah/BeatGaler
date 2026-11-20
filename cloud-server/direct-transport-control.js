@@ -3,7 +3,6 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const https = require('node:https');
 const { performance } = require('perf_hooks');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
@@ -35,10 +34,10 @@ const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DA
 // INDEX locks are renewable leases.  A dead tab therefore releases quickly,
 // while a deliberately paused but still-live Worker keeps renewing its lease.
 const INDEX_OPERATION_LIVENESS_TIMEOUT_MS = Math.max(5_000, Number(process.env.DIRECT_INDEX_OPERATION_LIVENESS_TIMEOUT_MS || 15_000));
-const MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS = Math.max(1, Math.min(3, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS || 2)));
+const MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS = Math.max(1, Math.min(3, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS || 3)));
 const MANAGED_TOKEN_FETCH_RETRY_BASE_MS = Math.max(25, Math.min(500, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_BASE_MS || 150)));
 const MANAGED_TOKEN_FETCH_RETRY_MAX_MS = Math.max(MANAGED_TOKEN_FETCH_RETRY_BASE_MS, Math.min(1_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_MAX_MS || 500)));
-const MANAGED_TOKEN_FETCH_TIMEOUT_MS = Math.max(500, Math.min(9_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_TIMEOUT_MS || 7_000)));
+const MANAGED_TOKEN_FETCH_TIMEOUT_MS = Math.max(500, Math.min(5_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_TIMEOUT_MS || 3_000)));
 const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
@@ -53,61 +52,7 @@ let monotonicNowImpl = () => performance.now();
 const busyOperationDiagnostics = new Map();
 let resolverBootstrapPromise = null;
 let maintenanceStarted = false;
-// Native HTTPS avoids intermittent undici/fetch timeouts seen on the EC2
-// Telegram Bot API path; IPv4 is the independently observed working route.
-// Keep response shape compatible with fetch for isolated transport tests.
-// Never place token-bearing URLs in errors, diagnostics or logs.
-function nativeTelegramBotFetch(rawUrl, options = {}) {
-  const target = new URL(rawUrl);
-  if (target.protocol !== 'https:' || target.hostname !== 'api.telegram.org' || target.port) {
-    throw new Error('Telegram Bot API destination rejected');
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const safeReject = (code = 'HTTPS_FAILURE') => {
-      if (settled) return;
-      settled = true;
-      const err = new Error('Telegram Bot API HTTPS request failed');
-      err.code = code;
-      reject(err);
-    };
-    const request = https.request({
-      protocol: 'https:', hostname: 'api.telegram.org',
-      path: target.pathname + target.search,
-      method: options.method || 'POST',
-      headers: options.headers || {},
-      family: 4,
-      ...(options.signal ? { signal: options.signal } : {}),
-    }, response => {
-      const chunks = [];
-      let total = 0;
-      response.on('data', chunk => {
-        total += chunk.length;
-        if (total > 1024 * 1024) {
-          request.destroy();
-          safeReject('HTTPS_RESPONSE_TOO_LARGE');
-          return;
-        }
-        chunks.push(chunk);
-      });
-      response.on('error', error => safeReject(error?.code || 'HTTPS_RESPONSE_ERROR'));
-      response.on('end', () => {
-        if (settled) return;
-        settled = true;
-        const text = Buffer.concat(chunks).toString('utf8');
-        resolve({
-          ok: Number(response.statusCode) >= 200 && Number(response.statusCode) < 300,
-          status: Number(response.statusCode) || 0,
-          async json() { try { return JSON.parse(text); } catch { return {}; } },
-        });
-      });
-    });
-    request.on('error', error => safeReject(error?.code || error?.name || 'HTTPS_SOCKET_ERROR'));
-    request.end(options.body);
-  });
-}
-const defaultManagerBotFetch = nativeTelegramBotFetch;
-let managerBotFetch = defaultManagerBotFetch;
+let managerBotFetch = (...args) => fetch(...args);
 let managedTokenFetchRetryPolicy = {
   attempts: MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS,
   baseMs: MANAGED_TOKEN_FETCH_RETRY_BASE_MS,
@@ -722,7 +667,7 @@ function transientManagedTokenFetchError(error) {
   ].map(value => String(value || '').toUpperCase()));
   if ([
     'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN',
-    'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'ABORT_ERR',
+    'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT',
   ].some(code => codes.has(code))) return true;
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError') return true;
   const message = `${error?.message || ''} ${cause?.message || ''}`;
@@ -2237,23 +2182,22 @@ module.exports = {
     resolveManagedToken,
     tokenForCredentialVersion,
     transientManagedTokenFetchError,
-    nativeTelegramBotFetch,
     setManagerBotFetch(fn) {
-      managerBotFetch = typeof fn === 'function' ? fn : defaultManagerBotFetch;
+      managerBotFetch = typeof fn === 'function' ? fn : (...args) => fetch(...args);
     },
     setManagedTokenFetchRetryPolicy(policy = {}) {
       managedTokenFetchRetryPolicy = {
         attempts: Math.max(1, Math.min(3, Number(policy.attempts || MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS))),
         baseMs: Math.max(0, Math.min(500, Number(policy.baseMs ?? MANAGED_TOKEN_FETCH_RETRY_BASE_MS))),
         maxMs: Math.max(0, Math.min(1_000, Number(policy.maxMs ?? MANAGED_TOKEN_FETCH_RETRY_MAX_MS))),
-        timeoutMs: Math.max(1, Math.min(9_000, Number(policy.timeoutMs ?? MANAGED_TOKEN_FETCH_TIMEOUT_MS))),
+        timeoutMs: Math.max(1, Math.min(5_000, Number(policy.timeoutMs ?? MANAGED_TOKEN_FETCH_TIMEOUT_MS))),
       };
       if (managedTokenFetchRetryPolicy.maxMs < managedTokenFetchRetryPolicy.baseMs) {
         managedTokenFetchRetryPolicy.maxMs = managedTokenFetchRetryPolicy.baseMs;
       }
     },
     resetManagedTokenFetchTestHooks() {
-      managerBotFetch = defaultManagerBotFetch;
+      managerBotFetch = (...args) => fetch(...args);
       managedTokenFetchRetryPolicy = {
         attempts: MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS,
         baseMs: MANAGED_TOKEN_FETCH_RETRY_BASE_MS,
