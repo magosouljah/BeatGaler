@@ -228,6 +228,7 @@ function createHttpContainment(options = {}) {
     const record = {
       installationId: String(installationId),
       expectedOwnerId: expectedOwnerId ? String(expectedOwnerId) : null,
+      providerReauthentication: Boolean(expectedOwnerId),
       flowId: String(flowId || ""),
       state: String(state || ""),
       expiresAt: now() + OAUTH_GUARD_TTL_MS,
@@ -255,7 +256,14 @@ function createHttpContainment(options = {}) {
       expectedOwnerId = String(auth.user.id);
       if (current && String(current.beatgalerAccountId || "") !== expectedOwnerId) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
     } else if (current) {
-      return sendJson(res, 403, "This installation is already linked. Resume its authenticated session before changing sign-in providers.");
+      // A returning user's previous session may have expired. Let the same
+      // provider prove account ownership again, never a different provider.
+      const provider = String(req.body?.provider || "").trim().toLowerCase();
+      const owner = (accountsData().users || []).find(u => String(u?.id || "") === String(current.beatgalerAccountId || ""));
+      if (!owner || !owner.providers?.[provider]?.id) {
+        return sendJson(res, 403, "This installation is already linked. Sign in using its connected provider.");
+      }
+      expectedOwnerId = String(owner.id);
     }
     const originalJson = res.json.bind(res);
     res.json = payload => {
@@ -286,6 +294,11 @@ function createHttpContainment(options = {}) {
     } else if (current) {
       markOAuthFlowBlocked(guard.flowId);
       return res.status(403).send("This BeatGaler installation was claimed during sign-in. Start again.");
+    }
+    // Secure re-login: OAuth provider identity MUST map to the same owner.
+    // The actual identity is not known until the provider callback completes.
+    if (guard.expectedOwnerId && guard.providerReauthentication) {
+      req.beatgalerOAuthExpectedOwnerId = String(guard.expectedOwnerId);
     }
     if (!current && !(await reserveInstallationClaim(res, guard.installationId, guard.expectedOwnerId || `oauth:${guard.flowId}`))) {
       markOAuthFlowBlocked(guard.flowId);
