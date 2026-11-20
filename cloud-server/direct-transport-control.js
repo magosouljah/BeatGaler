@@ -2237,6 +2237,7 @@ module.exports = {
     resolveManagedToken,
     tokenForCredentialVersion,
     transientManagedTokenFetchError,
+    nativeTelegramBotFetch,
     setManagerBotFetch(fn) {
       managerBotFetch = typeof fn === 'function' ? fn : defaultManagerBotFetch;
     },
