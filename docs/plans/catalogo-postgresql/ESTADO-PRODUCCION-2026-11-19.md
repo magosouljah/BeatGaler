@@ -25,6 +25,14 @@ Registro de acciones **ejecutadas y verificadas** en la cuenta AWS aprobada por 
 - 5 usuarios, 5 vaults y 28 beats legacy de pruebas: propietario autorizó descarte, pero **no se eliminaron** ni se alteraron medios de Telegram.
 - La nueva versión de Cloud usa los cinco archivos de estado JSON persistentes copiados al directorio de release; evitar sobreescritura o divergencia entre SQL y JSON-compat.
 
+## Rol PostgreSQL y seguridad de credenciales (continuación)
+
+- El propietario creó el rol `beatgaler_catalog_rt`, concedió permisos sobre tablas, secuencias, y CREATE en schema public. La prueba `startPostgresControlPlane` con ese rol confirmó 0 migraciones pendientes.
+- **Cloud cambió a `beatgaler_catalog_rt` y está activo con HTTP 200**. Credenciales root-only en `/etc/beatgaler/catalog-runtime-db.env`, entregadas mediante systemd `LoadCredential` y sobreescritas inmediatamente antes de ejecutar Node. Script anterior respaldado en `/usr/local/bin/beatgaler-cloud-start.pre-catalog-role`; drop-in `/etc/systemd/system/beatgaler-cloud.service.d/catalog-runtime-db.conf`.
+- **Backup S3 post-cambio del rol PASS**: `bk-20261120T040436-30319` (dump 445719 bytes, manifest y SHA-256), tres objetos verificados en S3.
+- **Cerco T17-N todavía pendiente**: `galer_admin` es rol administrador master RDS y NO se desactivó; `activate` exige un *old_db_role* con NOLOGIN/0 backends y evidencia de fencing de tokens. No falsificar el rol ni desactivar el administrador RDS. Se necesita resolver la protección del rol administrador antes de declarar T17 PASS.
+- Los bots registrados (3) aún no tienen demostrada condición `ROTATED`/`FRESH_BOTS`; no se activó el gateway. Las cuentas de prueba siguen existentes.
+
 ## Bloqueos antes de activar Gallery en producción (T23)
 
 1. Obtener acceso SQL de migración **autorizado**, sin extraer credenciales en chat. Los controles de seguridad de la conexión bloquearon los intentos de operar directamente con credenciales de proceso. **No eludir el bloqueo**.
