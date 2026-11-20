@@ -33,6 +33,14 @@ Registro de acciones **ejecutadas y verificadas** en la cuenta AWS aprobada por 
 - **Cerco T17-N todavía pendiente**: `galer_admin` es rol administrador master RDS y NO se desactivó; `activate` exige un *old_db_role* con NOLOGIN/0 backends y evidencia de fencing de tokens. No falsificar el rol ni desactivar el administrador RDS. Se necesita resolver la protección del rol administrador antes de declarar T17 PASS.
 - Los bots registrados (3) aún no tienen demostrada condición `ROTATED`/`FRESH_BOTS`; no se activó el gateway. Las cuentas de prueba siguen existentes.
 
+## Decisión del propietario: no ejecutar T17 (posterior)
+
+El propietario decidió **ignorar el procedimiento T17** y **reutilizar Bot01/Bot02/Bot03 sin rotar sus tokens**. Bot20 permanece intacto. Esta decisión elimina el procedimiento T17 como requisito de producto, pero **no constituye evidencia de que el catálogo esté activado ni de que G2 esté aprobado**.
+
+La implementación actual **no permite activar sin T17**: `catalog_native_activation` es obligatoria; la migración 0027 restringe `direct_token_exposure` a `ROTATED` o `FRESH_BOTS`, y el CLI `activate` exige rol legacy NOLOGIN, inventario y pruebas de cerco. **Prohibido afirmar que hubo rotación o usar `ROTATED` para tokens no rotados.**
+
+Acción técnica nueva: diseñar/aplicar una **vía de activación simplificada real** con clasificación explícita de credenciales reutilizadas y riesgo aceptado, dejando capas de integridad (guardas SQL, no mezclar chats nuevos con INDEX, no borrar Telegram, no habilitar gateway sin validar subida/lectura). Es un cambio de código y esquema que aún no se ha implementado. El arranque actual mantiene `native=flag-off` y la Web antigua.
+
 ## Bloqueos antes de activar Gallery en producción (T23)
 
 1. Obtener acceso SQL de migración **autorizado**, sin extraer credenciales en chat. Los controles de seguridad de la conexión bloquearon los intentos de operar directamente con credenciales de proceso. **No eludir el bloqueo**.
