@@ -2,6 +2,8 @@
 
 Registro de acciones **ejecutadas y verificadas** en la cuenta AWS aprobada por el propietario. No sustituye los gates ni autoriza fingir evidencias.
 
+> **AVISO DE VIGENCIA:** este documento preserva el estado histórico desde el 19 nov y las reparaciones del 20 nov. El estado final posterior a las **2 subidas confirmadas**, activación del **worker permanente** y backup S3 con 2 beats está en [CIERRE-LIVE-2026-11-20.md](CIERRE-LIVE-2026-11-20.md). La deuda técnica y de producto se controla en [PENDIENTES-POST-LIVE-2026-11-20.md](PENDIENTES-POST-LIVE-2026-11-20.md). Las frases antiguas «catálogo no activado» o «Web antigua» son fotos cronológicas, **no el estado presente**.
+
 ## Infraestructura de respaldo (G4 PostgreSQL)
 
 - AWS: `us-east-2`; RDS PostgreSQL 18, instancia `galer-cloud-prod`.
