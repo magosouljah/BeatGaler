@@ -1726,6 +1726,17 @@ app.get("/auth/oauth/:provider/callback", async (req, res) => {
     }
     const tokenBody = await postForm(cfg.tokenUrl, form, headers);
     const identity = await fetchOAuthIdentity(provider, tokenBody.access_token);
+    // Installation ownership is not proof of account ownership. When a
+    // returning browser signs in without a live session, require the provider's
+    // verified identity to resolve to exactly the existing installation owner
+    // BEFORE any account mutation or installation binding.
+    const expectedOwnerId = String(req.beatgalerOAuthExpectedOwnerId || "");
+    if (expectedOwnerId) {
+      const verifiedAccount = findUserByProvider(provider, identity.id);
+      if (!verifiedAccount || String(verifiedAccount.id) !== expectedOwnerId) {
+        throw new Error("This X or Google identity does not match the account already linked to this installation.");
+      }
+    }
     let user;
     if (flow.linkUserId) {
       user = beatGalerUsersById.get(flow.linkUserId);
