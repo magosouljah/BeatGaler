@@ -289,7 +289,12 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
     if (!Array.isArray(bots) || !bots.length || bots.some((b) => typeof b !== 'string' || !ID_RE.test(b))) throw stop('STOP-CONTRACT', 'MANIFEST_FIELD_INVALID', 'transport_bot_ids must be a non-empty list of bot ids', { field: 'transport_bot_ids' });
     const exposure = manifest.direct_token_exposure;
     if (exposure === 'WAIVED_TEST_ONLY') throw stop('STOP-CONTRACT', 'TOKEN_EXPOSURE_WAIVED', 'WAIVED_TEST_ONLY was removed by NATIVO r2.1 §5.0: rotate the tokens or use fresh bots');
-    if (!['ROTATED', 'FRESH_BOTS'].includes(exposure)) throw stop('STOP-CONTRACT', 'MANIFEST_FIELD_INVALID', 'direct_token_exposure must be ROTATED or FRESH_BOTS', { field: 'direct_token_exposure' });
+    if (!['ROTATED', 'FRESH_BOTS', 'REUSED_UNROTATED'].includes(exposure)) throw stop('STOP-CONTRACT', 'MANIFEST_FIELD_INVALID', 'direct_token_exposure must be ROTATED, FRESH_BOTS or REUSED_UNROTATED', { field: 'direct_token_exposure' });
+    const reuse = exposure === 'REUSED_UNROTATED';
+    // Explicit owner-approved reduced-fencing path. Never report existing tokens as rotated.
+    if (reuse && (manifest.reuse_risk_accepted !== true || !manifest.owner_decision_ref || typeof manifest.owner_decision_ref !== 'string')) {
+      throw stop('STOP-APPROVAL', 'UNROTATED_BOTS_NOT_APPROVED', 'reusing unrotated bot tokens requires reuse_risk_accepted=true and owner_decision_ref');
+    }
     const instances = manifest.instance_inventory;
     if (!Array.isArray(instances) || !instances.length) throw stop('STOP-ENV', 'INSTANCES_NOT_INVENTORIED', 'instance_inventory must list every pre-T05 Cloud instance and worker (R14)');
     for (const instance of instances) {
@@ -301,8 +306,10 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
     requireText(inspectRef, 'approval_ref', { where: 'inspect' });
     const fence = manifest.credential_fence || {};
     const oldRole = requireText(fence, 'old_db_role', { where: 'credential_fence' });
-    requireText(fence, 'token_rotation_proof_ref', { where: 'credential_fence' });
-    requireText(fence, 'transport_fence_proof_ref', { where: 'credential_fence' });
+    if (!reuse) {
+      requireText(fence, 'token_rotation_proof_ref', { where: 'credential_fence' });
+      requireText(fence, 'transport_fence_proof_ref', { where: 'credential_fence' });
+    }
     const staging = Array.isArray(manifest.staging_libraries) ? manifest.staging_libraries.map(String) : [];
     if (!flags['auth-json']) throw usage('activate requires --auth-json <accounts-data.json> to compare the JSON-compat state with SQL (§3.1)');
     const authJson = loadAuthJson(flags['auth-json']);
@@ -319,6 +326,7 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
       }
       const role = (await client.query(ROLE_SQL)).rows[0];
       if (role.role === oldRole) throw stop('STOP-ENV', 'OLD_ROLE_IN_USE', 'activate is running with the old DB role; use the new runtime role (§5.0.2)', { role: role.role });
+      if (reuse && role.role !== 'beatgaler_catalog_rt') throw stop('STOP-ENV', 'NEW_RUNTIME_ROLE_REQUIRED', 'unrotated bot activation requires the dedicated beatgaler_catalog_rt role', { role: role.role });
       const cutover = (await client.query(CUTOVER_SQL)).rows[0] || null;
       if (!cutover || cutover.state !== 'READY') throw stop('STOP-ENV', 'CONTROL_PLANE_NOT_POSTGRES', 'the control-plane is not in postgres mode (no READY cutover)', { cutover_state: cutover ? cutover.state : null });
       const compat = await compareJsonCompat(client, authJson);
@@ -334,7 +342,9 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
       if (unexpected.length) throw stop('STOP-DATA', 'CATALOG_LIBRARIES_PRESENT', 'catalog_libraries must be empty except the LEGACY staging listed in the manifest', { users: unexpected.map((l) => l.user_id) });
       const roleRow = (await client.query('SELECT rolcanlogin FROM pg_roles WHERE rolname = $1', [oldRole])).rows[0];
       if (!roleRow) throw stop('STOP-ENV', 'OLD_ROLE_MISSING', 'the old DB role does not exist in this cluster: the credential fence cannot be verified', { role: oldRole });
-      if (roleRow.rolcanlogin === true) throw stop('STOP-ENV', 'OLD_ROLE_CAN_LOGIN', 'the old DB role must be NOLOGIN before activation (§5.0.2)', { role: oldRole });
+      // RDS master role cannot be disabled. In REUSED_UNROTATED mode, require zero
+      // old-role backends and record that the SQL credential fence is incomplete.
+      if (!reuse && roleRow.rolcanlogin === true) throw stop('STOP-ENV', 'OLD_ROLE_CAN_LOGIN', 'the old DB role must be NOLOGIN before activation (§5.0.2)', { role: oldRole });
       const backends = (await client.query('SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = $1', [oldRole])).rows[0].n;
       if (backends > 0) throw stop('STOP-ENV', 'OLD_ROLE_BACKENDS_ALIVE', 'the old DB role still has backends; terminate them before activation (§5.0.2)', { role: oldRole, backends });
       const botRows = (await client.query('SELECT id, quarantined, rotation_pending FROM transport_bots WHERE id = ANY($1::text[])', [bots])).rows;
@@ -346,7 +356,8 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
       const plan = {
         environment_id: environmentId, run_id: runId, transport_bot_ids: bots, direct_token_exposure: exposure, manifest_sha256: manifestSha,
         instances: instances.length, staging_libraries: staging, inventory_sha256: inventorySha,
-        checks: ['NO_PRIOR_ACTIVATION', 'CONTROL_PLANE_POSTGRES', 'JSON_SQL_MATCH', 'NO_QUARANTINE', 'INVENTORY_MATCH', 'NO_R12_DIVERGENCE', 'LIBRARIES_CLEAN', 'OLD_ROLE_NOLOGIN_0_BACKENDS', 'BOTS_READY', 'INSTANCES_DRAINED'],
+        checks: ['NO_PRIOR_ACTIVATION', 'CONTROL_PLANE_POSTGRES', 'JSON_SQL_MATCH', 'NO_QUARANTINE', 'INVENTORY_MATCH', 'NO_R12_DIVERGENCE', 'LIBRARIES_CLEAN', reuse ? 'OLD_ROLE_ZERO_BACKENDS_NOLOGIN_NOT_PROVEN' : 'OLD_ROLE_NOLOGIN_0_BACKENDS', 'BOTS_READY', 'INSTANCES_DRAINED', ...(reuse ? ['UNROTATED_BOT_RISK_ACCEPTED'] : [])],
+        remaining_risks: reuse ? ['OLD_DB_ROLE_CAN_LOGIN', 'EXISTING_TELEGRAM_TOKENS_NOT_REVOKED', 'G2_TRANSPORT_NOT_PROVEN'] : [],
       };
       if (!apply) return { exitCode: 0, result: { command: 'activate', mode: 'dry-run', outcome: 'WOULD_ACTIVATE', plan, writes: 0, apply_hint: 'repeat with --apply and the same manifest' } };
       await client.query('INSERT INTO catalog_native_activation(environment_id, run_id, transport_bot_ids, direct_token_exposure, manifest_sha256, instance_inventory) VALUES ($1, $2, $3, $4, $5, $6)',
