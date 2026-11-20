@@ -1,6 +1,6 @@
 # Backups del catálogo PostgreSQL de BeatGaler (G4)
 
-> **Estado:** scripts y plantilla **probados en el LAB aislado** (PostgreSQL 18 efímero, destino `file://`). **No se ha accedido ni modificado AWS.** El despliegue del bucket y la programación en producción requieren autorización del propietario.
+> **Estado AWS verificado (2026-11-19):** bucket S3 cifrado y protegido desplegado; timer diario activo en EC2; backup real y restauración aislada desde S3 **PASS**; PostgreSQL ahora tiene 41 migraciones. Los medios Telegram siguen sin segundo respaldo (riesgo aceptado). **El catálogo nativo de la aplicación todavía NO está activado**. Véase [registro de despliegue](../docs/plans/catalogo-postgresql/ESTADO-PRODUCCION-2026-11-19.md).
 
 ## Qué respalda y qué NO respalda
 
