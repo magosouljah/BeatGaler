@@ -103,3 +103,32 @@ jobs:
         env:
           BEATGALER_CLOUD_TEST_ADMIN_URL: postgres://bg_ci_admin:bg-ci-ephemeral@127.0.0.1:5432/postgres
         run: node scripts/run-cloud-tests.mjs --integration
+
+  metrics:
+    name: Métricas de solo lectura (informativo, no bloquea)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Generar tablas de métricas
+        continue-on-error: true
+        run: |
+          mkdir -p metrics-out
+          node scripts/metrics/metrics.mjs . > metrics-out/metrics.tsv
+          node scripts/metrics/classify-tests.mjs . summary > metrics-out/classify-tests.tsv
+          node scripts/metrics/cloud-reach.mjs . summary > metrics-out/cloud-reach.tsv
+          node scripts/metrics/src-reach.mjs . summary > metrics-out/src-reach.tsv
+      - name: Publicar métricas
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: metrics
+          path: metrics-out/
+          if-no-files-found: ignore

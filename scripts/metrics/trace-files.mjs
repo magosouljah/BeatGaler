@@ -1,0 +1,100 @@
+// trace-files.mjs <repo> [list]
+// "Files a reader must open to follow one request end to end" for 3 fixed scenarios.
+// Each hop is [file, anchor]: the hop is only counted if the file exists AND contains the anchor string that proves
+// it takes part in the path at this SHA. The lists were derived by static reading/grep at 3f009a7 (no runtime trace),
+// so they are LOWER BOUNDS: generic interposers that do not name the route are included only where an anchor shows
+// they wrap every request. After a refactor: hops whose anchor disappeared are reported as STALE -> re-derive.
+// Read-only.
+import { repoArg, tracked, read, lines, head } from './lib.mjs';
+const repo = repoArg();
+const all = new Set(tracked(repo));
+const SC = {
+  'A  POST /auth/login (Web form -> session)': [
+    ['src/components/AccountGate.tsx', '/auth/login'],
+    ['src/features/auth/webCsrfFetchCoordinator.ts', 'window.fetch ='],
+    ['cloud-server/server.js', 'require("./server-core")'],
+    ['cloud-server/server-core-auth-bridge-loader.js', 'installServerCoreAuthBridgeLoader'],
+    ['cloud-server/runtime-operability.js', 'application.use = function'],
+    ['cloud-server/security-headers.js', 'express.application.use = function'],
+    ['cloud-server/http-containment.js', '/auth/login'],
+    ['cloud-server/auth-abuse-controls.js', '/auth/login'],
+    ['cloud-server/auth-durable-abuse-controls.js', '/auth/login'],
+    ['cloud-server/auth-public-registration-hardening.js', '/auth/login'],
+    ['cloud-server/pending-signup-boundary.js', '/auth/login'],
+    ['cloud-server/session-security.js', '/auth/login'],
+    ['cloud-server/account-lifecycle.js', '/auth/login'],
+    ['cloud-server/server-core.js', 'app.post("/auth/login"'],
+    ['cloud-server/stage1-critical-path-trace.js', '/auth/login'],
+    ['cloud-server/password-kdf.js', 'verifyPassword'],
+    ['cloud-server/user-storage-lifecycle.js', 'createUserStorageLifecycle'],
+    ['cloud-server/access-consumer-handlers.js', 'accountPublicPayload'],
+    ['cloud-server/control-plane-json-compat.js', 'response.send = function'],
+  ],
+  'B  Edit a beat\'s metadata (Drawer Save -> SQL UPDATE)': [
+    ['src/components/Drawer.tsx', 'onCatalogSave'],
+    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.saveDrawerToCatalog'],
+    ['src/features/library/catalog/useCatalogGalleryScope.ts', 'saveDrawerToCatalog'],
+    ['src/features/library/catalog/catalogDrawerSave.ts', 'patchBeat'],
+    ['src/features/library/catalog/catalogMutations.ts', 'async function patchBeat'],
+    ['src/features/library/catalog/catalogCommandsApi.ts', 'patchBeat:'],
+    ['src/features/library/catalog/catalogHttp.ts', 'fetch'],
+    ['src/features/auth/webCsrfFetchCoordinator.ts', 'window.fetch ='],
+    ['cloud-server/server.js', 'catalogCommands'],
+    ['cloud-server/server-core.js', 'createCatalogRouter'],
+    ['cloud-server/session-security.js', 'application.use = function'],
+    ['cloud-server/http-containment.js', 'express.application.post = function'],
+    ['cloud-server/catalog/routes.js', '/beats/:id`'],
+    ['cloud-server/catalog/session-guard.js', 'configureCatalogSessionGuard'],
+    ['cloud-server/catalog/authority.js', 'configureCatalogAuthority'],
+    ['cloud-server/catalog/commands.js', 'async function mutationTx'],
+    ['cloud-server/catalog/metadata-rules.js', ''],
+    ['cloud-server/catalog/beat-projection.js', ''],
+    ['cloud-server/catalog/facets.js', ''],
+  ],
+  'C  Upload a beat (Add beat -> Direct B -> worker commit)': [
+    ['src/components/AddBeatModal.tsx', 'onAdd'],
+    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.addBeatsAndReview'],
+    ['src/features/library/catalog/useCatalogGalleryScope.ts', 'saveReview'],
+    ['src/features/library/catalog/catalogFilePrep.ts', ''],
+    ['src/features/library/catalog/catalogMainPack.ts', ''],
+    ['src/features/library/catalog/catalogMutations.ts', 'async function importBeat'],
+    ['src/features/library/catalog/catalogTransfer.ts', './catalogDirectCore'],
+    ['src/features/library/catalog/catalogCommandsApi.ts', ''],
+    ['src/features/library/catalog/catalogHttp.ts', 'fetch'],
+    ['src/features/library/catalog/catalogDirectPort.ts', 'webTransportWorkerClient'],
+    ['src/features/library/catalog/catalogDirectCore.ts', ''],
+    ['src/features/library/catalog/catalogUploadProgress.ts', ''],
+    ['src/features/cloud/webTransportWorkerClient.ts', 'Worker'],
+    ['src/features/cloud/webTransportController.ts', ''],
+    ['src/features/cloud/webTransportSession.ts', ''],
+    ['src/features/cloud/webTransportWorkerProtocol.ts', ''],
+    ['src/features/cloud/webTransport.worker.ts', ''],
+    ['src/features/auth/webCsrfFetchCoordinator.ts', 'window.fetch ='],
+    ['cloud-server/server.js', 'catalogOperations'],
+    ['cloud-server/server-core.js', 'createCatalogRouter'],
+    ['cloud-server/catalog/routes.js', '/operations`'],
+    ['cloud-server/catalog/session-guard.js', ''],
+    ['cloud-server/catalog/authority.js', ''],
+    ['cloud-server/catalog/operations.js', 'INSERT INTO catalog_jobs'],
+    ['cloud-server/catalog/direct.js', 'submitReceipt'],
+    ['cloud-server/catalog/transport-gateway.js', ''],
+    ['cloud-server/catalog-gateway-runtime.js', './direct-transport-control'],
+    ['cloud-server/direct-transport-control.js', 'catalogDirectSession'],
+    ['cloud-server/productive-temp-auth-boundary.js', 'transformSession'],
+    ['cloud-server/catalog-worker.js', './catalog/worker'],
+    ['cloud-server/catalog/worker.js', ''],
+    ['cloud-server/catalog/commands.js', ''],
+  ],
+};
+console.log('HEAD ' + head(repo));
+console.log(['scenario', 'files', 'lines', 'web_files', 'cloud_files', 'stale_hops'].join('\t'));
+for (const [name, hops] of Object.entries(SC)) {
+  let n = 0, L = 0, web = 0, cloud = 0; const stale = [];
+  for (const [f, anchor] of hops) {
+    const ok = all.has(f) && (anchor === '' || read(repo, f).includes(anchor));
+    if (!ok) { stale.push(f + (all.has(f) ? ' (anchor gone: ' + anchor + ')' : ' (file gone)')); continue; }
+    n++; L += lines(read(repo, f)); if (f.startsWith('src/')) web++; else cloud++;
+  }
+  console.log([name, n, L, web, cloud, stale.length ? stale.join(' | ') : '-'].join('\t'));
+  if (process.argv[3] === 'list') for (const [f] of hops) console.log('    ' + f);
+}
