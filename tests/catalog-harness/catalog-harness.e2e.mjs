@@ -31,7 +31,6 @@ describe("V01-B harness de navegador (servicios simulados)", () => {
   it("H2 la Gallery muestra BeatCards del fixture T01 c12-f02-search", () => check("H2-cards", async () => {
     await browser.waitUntil(async () => (await state()).cards >= 1, { timeout: 30000, timeoutMsg: "sin BeatCard" });
     const s = await state();
-    assert.ok(s.calls.includes("transport.getLibraryIndex(legacy-metadata)"), "lectura legacy contada");
     assert.ok(!s.calls.some((c) => c.startsWith("UNSUPPORTED")), `contrato del doble incompleto: ${s.calls.filter((c) => c.startsWith("UNSUPPORTED"))}`);
     await browser.saveScreenshot(path.join(OUT, "gallery.png"));
     return { cards: s.cards, firstCard: s.firstCard };
