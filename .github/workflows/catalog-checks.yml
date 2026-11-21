@@ -57,7 +57,7 @@ concurrency:
 
 jobs:
   catalog-checks:
-    if: github.repository == 'magosouljah/BeatGaler' && github.ref == 'refs/heads/local/landing-gallery-unificada'
+    if: github.repository == 'magosouljah/BeatGaler' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/local/landing-gallery-unificada')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     container:

@@ -30,3 +30,10 @@ condition = "AND"
 regexTarget = "line"
 paths = ['''^scripts/step15-isolated-env-guard\.mjs$''']
 regexes = ['''^\s*key\.startsWith\('BILLING_E2E_'\) \|\| key === '[A-Z0-9_]{16}' \|\| key === 'STAGE1_COHORT_PASSWORD'\);$''']
+
+[[allowlists]]
+description = "Catalog contract map lists fixture IDs (names, not credentials)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^docs[\/]plans[\/]catalogo-postgresql[\/]contract-map.json$''']
+regexes = ['''^t01-[a-z0-9-]+$''']
