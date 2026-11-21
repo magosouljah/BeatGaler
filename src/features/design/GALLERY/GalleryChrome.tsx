@@ -2,11 +2,38 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import StudioToolbar from "../MASTER/StudioToolbarCandidate";
 import TagNavigation from "./TagNavigation";
 import { clearUploadPreviewCache } from "../../library/libraryPresentationCache";
+import type { SortKey } from "../../library/components/SortMenu";
+import type { Beat } from "../../../types";
 import "../shared/tokens.css";
 import "./gallery.css";
 import "./product-gallery.css";
 
-export default function GalleryChrome({scope}: {scope: Record<string, any>}) {
+export interface GalleryChromeScope {
+  includedTags: ReadonlySet<string>;
+  excludedTags: ReadonlySet<string>;
+  allTags: readonly string[];
+  tagColors: Record<string, string>;
+  handleTagClick: (tag: string, event: { altKey: boolean }) => void;
+  clearTagFilters: () => void;
+  openTagRename: (tag: string) => void;
+  search: string;
+  setSearch: (search: string) => void;
+  sortBy: SortKey;
+  setSortBy: (sort: SortKey) => void;
+  selectMode: boolean;
+  finishSelection: () => void;
+  toggleSelection: (beat: Beat | null, shiftKey: boolean, displayedBeats: Beat[]) => void;
+  displayedBeats: Beat[];
+  rejectOfflineMutation: (action: string) => boolean;
+  setShowAdd: (show: boolean) => void;
+  reloadLibrary: () => void;
+  loading?: boolean;
+  libraryRefreshing?: boolean;
+  setShowSettings: (show: boolean) => void;
+  handleDisconnectTelegramAccount: () => void;
+}
+
+export default function GalleryChrome({scope}: {scope: GalleryChromeScope}) {
   const [open, setOpen] = useState(() => window.matchMedia("(hover: none), (pointer: coarse)").matches);
   const [hintSeen, setHintSeen] = useState(() => { try { return sessionStorage.getItem("beatgaler:tags-hint-seen") === "yes"; } catch { return false; } });
   const { includedTags, excludedTags, allTags, tagColors, handleTagClick, clearTagFilters, openTagRename } = scope;

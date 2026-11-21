@@ -3,7 +3,7 @@
 // virtualizadas de V05 en lugar del grid plano. Ningún nodo nuevo visible: las clases y el orden de los bloques son los del AppShell;
 // el track virtual sustituye a `.lab-gallery-grid` usando las mismas variables de columnas/gaps de gallery.css.
 import { useEffect, useMemo, useRef } from "react";
-import GalleryChrome from "../../design/GALLERY/GalleryChrome";
+import GalleryChrome, { type GalleryChromeScope } from "../../design/GALLERY/GalleryChrome";
 import { dismissBeatGalerStartupLoader } from "../../startup/startupLoader";
 import { BeatTagPeekLayer, useBeatTagPeek } from "../../design/shared/BeatTagPeek";
 import AddBeatModal from "../../../components/AddBeatModal";
@@ -68,7 +68,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   const closeAdd = () => { setDroppedFile(null); scope.setShowAdd(false); };
   const openAdd = () => { if (!scope.rejectOfflineMutation("Adding a beat")) scope.setShowAdd(true); };
   // Scope para GalleryChrome (misma forma que el legacy; `displayedBeats` no existe en POSTGRES: la selección es global en el servidor).
-  const chromeScope = {
+  const chromeScope: GalleryChromeScope = {
     includedTags: scope.includedTags, excludedTags: scope.excludedTags, allTags: scope.allTags, tagColors: scope.tagColors, handleTagClick: scope.handleTagClick, clearTagFilters: scope.clearTagFilters, openTagRename: scope.openTagRename,
     search: scope.search, setSearch: scope.setSearch, sortBy: scope.sortBy, setSortBy: scope.setSortBy, selectMode, displayedBeats: [] as Beat[],
     finishSelection: scope.finishSelection, toggleSelection: (b: Beat | null) => scope.toggleSelection(b, false),
