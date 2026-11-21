@@ -58,3 +58,17 @@ node scripts/catalog-lab/probe-smoke-v1.mjs; echo $?
 SMOKE_PLAY_SELECTOR='[data-no-existe]' node scripts/catalog-lab/probe-smoke-v1.mjs; echo $?
 node scripts/catalog-lab/lab.cjs down
 ```
+
+## Primer play en frío y en caliente (`probe-first-play.mjs`) — LAB con dobles, no latencia real
+
+Línea base repetible para tocar el precalentamiento del login. Mide por repetición: (1) instante (ms) de creación de cada `Worker`, de cada WebSocket del hilo principal, de la primera petición al doble `/lab-telegram` y de `/catalog/v1/direct/*`, y qué módulos se cargaron antes del clic; (2) ms desde el clic en play hasta que `currentTime` avanza. **Frío** = perfil de Chrome nuevo (caché HTTP e IndexedDB vacías) + login + Gallery + clic (instantes relativos al envío del login y al login confirmado). **Caliente** = mismo perfil ya usado, recarga con sesión recordada, mismo beat (instantes relativos al inicio de la carga). Tras `FP_SETTLE_MS` (2000) de «Gallery lista». Mediana y p90 (nearest-rank). Limitaciones: Vite dev (módulos sueltos), Telegram FAKE (en el LAB el puerto Direct B es el doble HTTP `catalogLabDirectPort`, no abre MTProto), solo Workers/WebSockets del hilo principal. Mismo preflight que el humo V1 (exige gateway FAKE, Chrome/driver locales, sin descargas). Salida: `RUN`/`TABLE`/`FIRST-PLAY PASS|FAIL`, código 1 si falla alguna repetición o hay <5 válidas de cada tipo, y JSON crudo en `tmp/catalog-lab-out/first-play/` (no versionado).
+
+Git Bash (puertos propios; el primer `up` tras arrancar WSL puede dar `ECONNREFUSED` en el bootstrap: repetir `up`; `down` siempre):
+```
+export MSYS_NO_PATHCONV=1 TEMP='E:\777\tmp' TMP='E:\777\tmp' DIRECT_DIAGNOSTICS_DIR='E:\777\tmp\diag' \
+  LAB_PG_PORT=54369 LAB_CLOUD_PORT=4200 LAB_WEB_PORT=1500 LAB_STATE_DIR=tmp/catalog-lab-firstplay LAB_PG_DIR=/tmp/bg-catlab-firstplay LAB_SYNTH_AUDIO=1
+node scripts/catalog-lab/lab.cjs up --no-legacy --seed 30
+node scripts/catalog-lab/probe-first-play.mjs; echo $?                 # FP_COLD=6 FP_HOT=8 por defecto; 0 = PASS
+FP_PLAY_SELECTOR='[data-no-existe]' FP_COLD=1 FP_HOT=1 node scripts/catalog-lab/probe-first-play.mjs; echo $?   # mutación: FAIL, código 1
+node scripts/catalog-lab/lab.cjs down
+```
