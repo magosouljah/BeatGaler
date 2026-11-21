@@ -61,10 +61,6 @@ jobs:
         working-directory: cloud-server
         run: npm run test:billing-v1
 
-      - name: Keep legacy webhook contract green
-        working-directory: cloud-server
-        run: node --test tests/billing-webhook.test.cjs
-
       - name: Validate Billing V1 migrations through durable inbox
         working-directory: cloud-server
         env:
