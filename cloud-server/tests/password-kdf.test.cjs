@@ -4,9 +4,36 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const test = require("node:test");
 const { hashPassword, verifyPassword, SCRYPT_KEY_LENGTH } = require("../password-kdf");
 
-(async () => {
+test("hashPassword waits for the asynchronous scrypt result", async t => {
+  const derivedKey = Buffer.alloc(SCRYPT_KEY_LENGTH, 42);
+  let complete;
+  const scrypt = t.mock.method(crypto, "scrypt", (_password, _salt, _length, callback) => {
+    complete = callback;
+  });
+  const scryptSync = t.mock.method(crypto, "scryptSync", () => {
+    throw new Error("Unexpected synchronous scrypt");
+  });
+
+  let finished = false;
+  const pending = hashPassword("test password", "0011").then(hash => {
+    finished = true;
+    return hash;
+  });
+  // Keep early rejection handled until the assertions can run.
+  pending.catch(() => {});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(scryptSync.mock.callCount(), 0);
+  assert.equal(scrypt.mock.callCount(), 1);
+  assert.equal(finished, false);
+
+  complete(null, derivedKey);
+  assert.equal(await pending, derivedKey.toString("hex"));
+});
+
+test("password KDF guards and legacy hash compatibility", async () => {
   const password = "correct horse battery staple";
   const saltHex = "00112233445566778899aabbccddeeff";
   const expected = crypto.scryptSync(password, Buffer.from(saltHex, "hex"), SCRYPT_KEY_LENGTH).toString("hex");
@@ -28,21 +55,9 @@ const { hashPassword, verifyPassword, SCRYPT_KEY_LENGTH } = require("../password
   assert.match(serverSource, /user\.passwordHash = await hashPassword\(newPassword, salt\)/,
     "password change must await new password KDF");
 
-  const pending = hashPassword(password, saltHex);
-  let eventLoopTicked = false;
-  await new Promise(resolve => setImmediate(() => {
-    eventLoopTicked = true;
-    resolve();
-  }));
-  assert.equal(eventLoopTicked, true, "hashPassword must yield to the event loop");
-
-  const actual = await pending;
+  const actual = await hashPassword(password, saltHex);
   assert.equal(actual, expected, "async KDF must preserve existing scrypt hash compatibility");
   assert.equal(await verifyPassword(password, { passwordSalt: saltHex, passwordHash: expected }), true);
   assert.equal(await verifyPassword("wrong password", { passwordSalt: saltHex, passwordHash: expected }), false);
 
-  console.log("PASS async password KDF: request wiring, event-loop yield, legacy hash compatibility");
-})().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
 });
