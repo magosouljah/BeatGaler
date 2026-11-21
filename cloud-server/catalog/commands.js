@@ -73,12 +73,8 @@ const BEAT_UPDATE_SQL = `UPDATE catalog_beats SET name = $4, bpm_text = $5, key_
     has_artwork = $12, legacy_json = $13, legacy_sha256 = $14, legacy_export_bytes = $15, name_display = $16, name_search = $17, key_display = $18, key_search = $19,
     bpm_display = $20, rating_display = $21, search_text = $22, version = version + 1, updated_at = now()
   WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 RETURNING version::text AS version`;
-// T20-N perf (SLO_FAIL n=1M, EXPLAIN real sobre LAB): escribir SIEMPRE catalog_beat_tags/catalog_beat_tag_groups y
-// disparar refreshGroupsAndFacets aunque `tags` no cambie fuerza, para cualquier PATCH de metadata ajena a tags
-// (p.ej. solo `rating`), un recómputo de facetas que escanea TODO catalog_beat_tag_groups para cada norm_key del
-// beat (puede ser un tag muy popular) — coste O(tamaño del grupo), no O(1). `tagsChanged` (comparación exacta de
-// antes/después, ver tagsEqual) permite omitir ese trabajo cuando el conjunto/orden de tags es idéntico; los grupos
-// ya siguen state/manual_rank solos vía el FK ON UPDATE CASCADE de 0026, así que no hay pérdida de consistencia.
+// Evita reescribir tags y grupos cuando el PATCH conserva el conjunto y el orden de tags.
+// El FK ON UPDATE CASCADE de 0026 mantiene state/manual_rank de los grupos.
 function tagsEqual(a, b) {
   const x = Array.isArray(a) ? a : []; const y = Array.isArray(b) ? b : [];
   return x.length === y.length && x.every((v, i) => v === y[i]);
@@ -93,29 +89,6 @@ async function writeBeatDoc(client, uid, gen, beatId, doc, { tagsChanged = true 
     for (const t of p.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, beatId, t.position, t.label, t.normKey, t.searchKey]);
   }
   return { version: r.rows[0].version, normKeys: [...new Set(p.tags.map((t) => t.normKey))], tagsChanged };
-}
-// RECÓMPUTO COMPLETO (oráculo/reconstrucción, ver facets.js): reescribe los grupos de los beats y recuenta las facetas completas de
-// las claves dadas. Coste O(tamaño del grupo): ya NO lo usa ningún camino de mutación en línea (patch, trash/restore, bulk, rename,
-// import/replace usan facets.snapshotGroups/insertGroups/applyFacetDelta bajo el lock de biblioteca). Se conserva exportado para
-// pruebas y para reconstrucciones explícitas.
-async function refreshGroupsAndFacets(client, uid, gen, beatIds, normKeys, revision) {
-  if (beatIds.length) {
-    await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = ANY($3::text[])', [uid, gen, beatIds]);
-    await client.query(`INSERT INTO catalog_beat_tag_groups(user_id, generation_id, beat_id, norm_key, projection_version, state, manual_rank, first_position, label_at_first_position)
-      SELECT DISTINCT ON (t.beat_id, t.norm_key) t.user_id, t.generation_id, t.beat_id, t.norm_key, t.projection_version, b.state, b.manual_rank, t.position, t.label
-      FROM catalog_beat_tags t JOIN catalog_beats b USING (user_id, generation_id, beat_id)
-      WHERE t.user_id = $1 AND t.generation_id = $2 AND t.beat_id = ANY($3::text[]) ORDER BY t.beat_id, t.norm_key, t.position`, [uid, gen, beatIds]);
-  }
-  const keys = [...new Set(normKeys)];
-  if (!keys.length) return;
-  await client.query('DELETE FROM catalog_facets WHERE user_id = $1 AND generation_id = $2 AND norm_key = ANY($3::text[])', [uid, gen, keys]);
-  await client.query(`WITH grp AS (SELECT * FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND norm_key = ANY($3::text[]) AND state IN ('ACTIVE','TRASH')),
-    cnt AS (SELECT state, norm_key, projection_version, count(*) AS n FROM grp GROUP BY 1, 2, 3),
-    rep AS (SELECT DISTINCT ON (state, norm_key, projection_version) state, norm_key, projection_version, beat_id, first_position, label_at_first_position
-            FROM grp ORDER BY state, norm_key, projection_version, manual_rank, beat_id COLLATE "C")
-    INSERT INTO catalog_facets(user_id, generation_id, scope, norm_key, projection_version, beat_count, rep_beat_id, rep_position, rep_label, updated_revision)
-    SELECT $1, $2, c.state, c.norm_key, c.projection_version, c.n, r.beat_id, r.first_position, r.label_at_first_position, $4::bigint
-    FROM cnt c JOIN rep r USING (state, norm_key, projection_version)`, [uid, gen, keys, revision]);
 }
 async function normKeysOf(client, uid, gen, beatIds) {
   if (!beatIds.length) return [];
@@ -736,4 +709,4 @@ let configured = null;
 function configureCatalogCommands(options = null) { configured = options && options.pool && options.authority ? createCatalogCommands(options) : null; return configured; }
 function currentCatalogCommands() { return configured; }
 
-module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, addTagsToDoc, removeTagsFromDoc, refreshGroupsAndFacets, normKeysOf, createCatalogCommands, configureCatalogCommands, currentCatalogCommands };
+module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, addTagsToDoc, removeTagsFromDoc, normKeysOf, createCatalogCommands, configureCatalogCommands, currentCatalogCommands };

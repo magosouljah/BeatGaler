@@ -405,42 +405,6 @@ function createStagedEmailChange({
   };
 }
 
-function installStagedEmailChange(express, service) {
-  const application = express?.application;
-  if (!application || !service || application.__beatgalerStagedEmailChangeInstalled) return;
-  application.__beatgalerStagedEmailChangeInstalled = true;
-  const previousPost = application.post;
-
-  function fail(res, error) {
-    const code = String(error?.code || 'EMAIL_CHANGE_UNAVAILABLE');
-    const status = code === 'SESSION_REQUIRED' || code.startsWith('REAUTH_') ? 401
-      : code === 'EMAIL_CHANGE_CONFLICT' ? 409
-      : code === 'EMAIL_CHANGE_DELIVERY_UNAVAILABLE' || code === 'EMAIL_CHANGE_DELIVERY_FAILED' || code === 'EMAIL_VERIFICATION_AUTHORITY_UNAVAILABLE' ? 503
-      : 400;
-    return res.status(status).json({ error: error?.message || 'Email change is temporarily unavailable.', code });
-  }
-
-  application.post = function stagedEmailChangePost(routePath, ...handlers) {
-    const pathName = String(routePath || '');
-    if (pathName === '/auth/email/change/start') {
-      return previousPost.call(this, routePath, (req, res) => {
-        void service.start(req, req?.body?.email).then(result => res.status(202).json(result)).catch(error => fail(res, error));
-      });
-    }
-    if (pathName === '/auth/email/change/resend') {
-      return previousPost.call(this, routePath, (req, res) => {
-        void service.resend(req).then(result => res.status(202).json(result)).catch(error => fail(res, error));
-      });
-    }
-    if (pathName === '/auth/email/change/confirm') {
-      return previousPost.call(this, routePath, (req, res) => {
-        void service.confirm(req, req?.body?.token || req?.body?.code).then(result => res.json(result)).catch(error => fail(res, error));
-      });
-    }
-    return previousPost.call(this, routePath, ...handlers);
-  };
-}
-
 function createStagedEmailChangeNoticeWorker(service, { intervalMs = 30_000, onError = () => {} } = {}) {
   let timer = null;
   async function tick() {
@@ -475,6 +439,5 @@ module.exports = {
   sameHash,
   reauthToken,
   createStagedEmailChange,
-  installStagedEmailChange,
   createStagedEmailChangeNoticeWorker,
 };

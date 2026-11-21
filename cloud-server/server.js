@@ -57,7 +57,6 @@ const catalogPurge = require("./catalog/purge");
 const catalogDirect = require("./catalog/direct");
 const catalogNativeTransport = require("./catalog/native-transport-provisioning");
 const catalogPrefixPacks = require("./catalog/prefix-packs");
-const catalogSessionGuard = require("./catalog/session-guard");
 const catalogGateway = require("./catalog-gateway-runtime");
 const { createFileDeletionJournal } = require("./catalog-deletion-journal");
 
@@ -117,7 +116,6 @@ async function start() {
   catalogGatewayRuntime = catalogGateway.gatewayFromEnv({ pool: nativeAuthority ? pool : null, env: process.env, log: console });
   const mediaGateway = catalogGatewayRuntime ? catalogGatewayRuntime.gateway : null;
   const nativeOperations = catalogOperations.currentCatalogOperations();
-  catalogSessionGuard.configureCatalogSessionGuard(nativeAuthority ? { pool, authority: nativeAuthority } : null);
   catalogPlayback.configureCatalogPlayback(nativeAuthority ? { pool, authority: nativeAuthority } : null);
   const directFlag = String(process.env.BEATGALER_CATALOG_DIRECT_ENABLED || '').trim().toLowerCase() === 'true';
   catalogMedia.configureCatalogMedia(nativeAuthority ? { pool, authority: nativeAuthority } : null);
