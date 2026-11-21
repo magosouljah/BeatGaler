@@ -36,6 +36,81 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+function makeSharedRevocationPool(sessions, capabilities) {
+  return {
+    async query(sql, [userId, reason]) {
+      if (sql === 'SELECT session_key_hash FROM auth_sessions WHERE user_id=$1') {
+        const rows = [...sessions]
+          .filter(([, owner]) => owner === userId)
+          .map(([hash]) => ({ session_key_hash: hash }));
+        return { rows };
+      }
+      if (sql === "UPDATE direct_capabilities SET status='REVOKED',revoked_at=now(),revoke_reason=$2 WHERE user_id=$1 AND status IN ('ACTIVE','AUTHORIZED')") {
+        for (const capability of capabilities) {
+          if (capability.userId === userId && ['ACTIVE', 'AUTHORIZED'].includes(capability.status)) {
+            capability.status = 'REVOKED';
+            capability.reason = reason;
+          }
+        }
+        return { rows: [] };
+      }
+      if (sql === 'DELETE FROM auth_sessions WHERE user_id=$1') {
+        for (const [hash, owner] of sessions) {
+          if (owner === userId) sessions.delete(hash);
+        }
+        return { rows: [] };
+      }
+      throw new Error(`Unexpected shared revocation query: ${sql}`);
+    },
+  };
+}
+
+async function testSharedRevocation(clock) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-account-lifecycle-shared-'));
+  const userId = 'usr_shared';
+  const otherUserId = 'usr_other';
+  const localHash = sha256('local-session');
+  const durableOnlyHash = sha256('other-process-session');
+  const otherUserHash = sha256('other-user-session');
+  const localSessions = {
+    [localHash]: { userId, createdAt: clock, expiresAt: clock + 60_000 },
+    [otherUserHash]: { userId: otherUserId, createdAt: clock, expiresAt: clock + 60_000 },
+  };
+  const durableSessions = new Map([[localHash, userId], [durableOnlyHash, userId], [otherUserHash, otherUserId]]);
+  const capabilities = [
+    { userId, status: 'ACTIVE' },
+    { userId, status: 'AUTHORIZED' },
+    { userId, status: 'REVOKED', reason: 'previous' },
+    { userId: otherUserId, status: 'ACTIVE' },
+  ];
+  const revoked = [];
+  const file = path.join(dir, 'accounts-data.json');
+  try {
+    fs.writeFileSync(file, JSON.stringify({ users: [{ id: userId }, { id: otherUserId }], sessions: localSessions }));
+    const runtime = createAccountLifecycleRuntime({
+      dataDir: dir,
+      now: () => clock,
+      env: {},
+      pool: makeSharedRevocationPool(durableSessions, capabilities),
+      getCapabilityStore: () => ({ async revokeAuthSession(input) { revoked.push(input); } }),
+    });
+
+    assert.equal(await runtime._test.revokeUserSessions(userId, 'password_reset'), 2);
+    assert.deepEqual(revoked.map(input => input.authSessionHash).sort(), [localHash, durableOnlyHash].sort());
+    assert.deepEqual(revoked.map(input => input.reason), ['password_reset', 'password_reset']);
+    assert.deepEqual([...durableSessions], [[otherUserHash, otherUserId]]);
+    assert.deepEqual(readJson(file).sessions, { [otherUserHash]: localSessions[otherUserHash] });
+    assert.deepEqual(capabilities, [
+      { userId, status: 'REVOKED', reason: 'password_reset' },
+      { userId, status: 'REVOKED', reason: 'password_reset' },
+      { userId, status: 'REVOKED', reason: 'previous' },
+      { userId: otherUserId, status: 'ACTIVE' },
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-account-lifecycle-'));
   let clock = 1_800_000_000_000;
@@ -341,33 +416,8 @@ async function main() {
     fs.rmSync(authorityDir, { recursive: true, force: true });
   }
 
-  {
-    const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-account-lifecycle-shared-'));
-    const localHash = sha256('local-session');
-    const foreignHash = sha256('foreign-session');
-    fs.writeFileSync(path.join(sharedDir, 'accounts-data.json'), JSON.stringify({
-      users: [{ id: 'usr_shared', username: 'shared#0001', email: 'shared@example.com' }],
-      sessions: { [localHash]: { userId: 'usr_shared', createdAt: clock, expiresAt: clock + 60_000 } },
-    }));
-    const queries = [];
-    const revoked = [];
-    const sharedRuntime = createAccountLifecycleRuntime({
-      dataDir: sharedDir,
-      pool: { async query(sql) {
-        queries.push(sql);
-        if (sql.startsWith('SELECT session_key_hash')) return { rows: [{ session_key_hash: localHash }, { session_key_hash: foreignHash }] };
-        return { rows: [] };
-      } },
-      getCapabilityStore: () => ({ async revokeAuthSession(input) { revoked.push(input.authSessionHash); } }),
-    });
-    assert.equal(await sharedRuntime._test.revokeUserSessions('usr_shared', 'password_reset'), 2);
-    assert.deepEqual(new Set(revoked), new Set([localHash, foreignHash]));
-    assert.equal(queries.some(sql => sql.startsWith('DELETE FROM auth_sessions WHERE user_id=$1')), true);
-    assert.equal(queries.some(sql => sql.startsWith("UPDATE direct_capabilities SET status='REVOKED'")), true);
-    fs.rmSync(sharedDir, { recursive: true, force: true });
-  }
-
   fs.rmSync(dir, { recursive: true, force: true });
+  await testSharedRevocation(clock);
   console.log('account-lifecycle: PASS');
 }
 
