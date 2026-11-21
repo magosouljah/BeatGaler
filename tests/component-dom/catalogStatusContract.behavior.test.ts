@@ -76,7 +76,11 @@ describe("contrato de estados del catálogo", () => {
     expect(server.counters["GET /catalog/v1/query-sets/:id"]).toBe(1);
   });
 
-  it("bulk vuelve a consultar un BLOCKED hasta el límite, conserva el progreso y limpia la selección", async () => {
+  // CARACTERIZACIÓN ACTUAL (STOP-DESIGN C05, 2026-11-21): estos dos casos fijan la conducta de HOY ante BLOCKED
+  // (sondeo hasta el límite sin aviso en el estado: bulk.error null), no la deseada. Hoy el servidor no escribe
+  // BLOCKED en catalog_operations (failJob solo marca catalog_jobs), así que en producción se ve RUNNING/QUEUED.
+  // Cuando el propietario decida qué debe hacer la Galería con BLOCKED, invertir estas aserciones.
+  it("caracterización actual (STOP-DESIGN C05): bulk vuelve a consultar un BLOCKED hasta el límite, conserva el progreso y limpia la selección", async () => {
     const { store, query, server } = harness();
     await store.selectAll(query);
 
@@ -90,7 +94,7 @@ describe("contrato de estados del catálogo", () => {
     });
   });
 
-  it("renombrar un tag queda en parcial cuando BLOCKED persiste hasta el límite", async () => {
+  it("caracterización actual (STOP-DESIGN C05): renombrar un tag queda en parcial cuando BLOCKED persiste hasta el límite", async () => {
     const { store, server } = harness();
     store.openRename("original");
     store.setRenameTarget("nuevo");
