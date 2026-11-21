@@ -9,8 +9,6 @@ const db = require('../helpers/catalog-test-db.cjs');
 const mig = require('../../postgres-migrations.js');
 const authority = require('../../catalog/authority.js');
 const { createLegacyFence } = require('../../catalog/legacy-fence.js');
-const { createLibraryIndexPublication } = require('../../library-index-publication.js');
-const { createVaultIndexPointerStore } = require('../../vault-index-pointer-store.js');
 const { mergeAuthSnapshotDelta } = require('../../postgres-auth-multiprocess-compat.js');
 
 const { Pool } = require(path.join(__dirname, '..', '..', 'node_modules', 'pg'));
@@ -206,48 +204,6 @@ test('PASS 6: capa 0: cada tabla legacy rechaza escrituras (BGL01) para un usuar
   assert.equal(await count(pool, 'library_beats'), 1);
 }));
 
-test('PASS 8: carrera provision contra publicación legacy: gana exactamente una y la otra falla cerrada sin efectos externos', () => withDb(async (pool, h) => {
-  await activate(pool);
-  const manifest = { schema: 'beatgaler.telegram.library', version: 2, beats: [], trash: [], deleted: [] };
-  const raw = Buffer.from(JSON.stringify(manifest));
-  for (const [winner, u, chat] of [['provision', 'race-a', '-6001'], ['publish', 'race-b', '-6002']]) {
-    await user(pool, u, chat); await pool.query('UPDATE vaults SET index_bootstrap_pending=true WHERE user_id=$1', [u]);
-    const pool2 = new Pool({ ...h.config, max: 4 });
-    const external = [];
-    let publishedId = 0;
-    const transport = {
-      getPinnedMessage: async () => { external.push('pinned'); return publishedId ? { message_id: publishedId, caption: 'BEATGALER_LIBRARY_INDEX_V1' } : null; },
-      readPinnedIndexBuffer: async () => { external.push('pinned'); return publishedId ? { message_id: publishedId, caption: 'BEATGALER_LIBRARY_INDEX_V1', raw } : null; },
-      downloadMessageBuffer: async () => { external.push('download'); return raw; },
-      publishIndexBuffer: async () => { external.push('publish'); publishedId = 7; return { messageId: 7 }; },
-    };
-    try {
-      const pub = createLibraryIndexPublication({ pool: pool2, transport });
-      // Serialización real por el lock del vault: un cliente retiene FOR UPDATE mientras ambos entran en orden.
-      const holder = await pool.connect();
-      await holder.query('BEGIN'); await holder.query('SELECT 1 FROM vaults WHERE user_id=$1 FOR UPDATE', [u]);
-      const provision = () => auth(pool).provisionLibrary({ userId: u });
-      const publish = () => pub.publish({ userId: u, chatId: chat, manifest, expectedMessageId: 0 });
-      const first = winner === 'provision' ? provision() : publish();
-      await new Promise((r) => setTimeout(r, 200));
-      const second = winner === 'provision' ? publish() : provision();
-      await new Promise((r) => setTimeout(r, 200));
-      await holder.query('COMMIT'); holder.release();
-      const [r1, r2] = await Promise.allSettled([first, second]);
-      if (winner === 'provision') {
-        assert.equal(r1.status, 'fulfilled', r1.reason?.message); assert.equal(r1.value.created, true);
-        assert.equal(r2.status, 'rejected'); assert.equal(r2.reason.code, 'LEGACY_CLIENT_UNSUPPORTED');
-        assert.equal(external.includes('publish'), false, 'la publicación legacy no llegó a Telegram');
-        assert.equal(Number((await pool.query('SELECT count(*)::int AS n FROM library_quota_state WHERE user_id=$1', [u])).rows[0].n), 0);
-      } else {
-        assert.equal(r1.status, 'fulfilled', r1.reason?.message); assert.equal(r1.value.status, 'published');
-        assert.equal(r2.status, 'rejected'); assert.equal(r2.reason.code, 'LIBRARY_RESET_REQUIRED');
-        assert.ok(r2.reason.detail.reasons.includes('LEGACY_TRACE:library_quota_state'), JSON.stringify(r2.reason.detail));
-        assert.equal(Number((await pool.query('SELECT count(*)::int AS n FROM catalog_libraries WHERE user_id=$1', [u])).rows[0].n), 0);
-      }
-    } finally { await pool2.end(); }
-  }
-}));
 
 test('PASS 9+7d: cascadas y TRUNCATE rechazados; DELETE users sin §6.1 autorizado se rechaza; con GUC+MEDIA_DELETED pasa', () => withDb(async (pool) => {
   await activate(pool);
@@ -375,9 +331,6 @@ test('PASS 11+12: reglas DB §7 en generaciones nativas; era/época ausente o vi
     await assert.rejects(a.requireLibraryForMutation(c2, { userId: u, era: stale.authority_era, epoch: stale.authority_epoch }), (e) => e.code === 'CATALOG_EPOCH_STALE' && e.detail.current_epoch === '2');
     await c2.query('ROLLBACK');
   } finally { c2.release(); }
-  // Puntero INDEX legacy del chat nativo: cercado por chat.
-  const store = createVaultIndexPointerStore(pool);
-  await assert.rejects(store.compareAndSetForChat({ telegramChatId: '-9001', messageId: 3 }), (e) => e.status === 410);
   await assert.rejects(createLegacyFence({ pool }).assertLegacyEntryAllowed({ userId: u }), (e) => e.status === 410);
   await createLegacyFence({ pool }).assertLegacyEntryAllowed({ userId: 'nobody', chatId: '-1' });
 }));

@@ -371,17 +371,9 @@ async function main() {
   assert.doesNotMatch(source, /EditAdmin\s*\(/);
   assert.doesNotMatch(source, /GetParticipant\s*\(/);
 
-  // The same authenticated activation route exposes repair only when explicitly
-  // requested. Authentication remains before method selection, and ordinary
-  // activation remains the default.
+  // T25: la ruta legacy /transport/session/activate fue retirada del Cloud (Direct del catálogo usa /catalog/v1/direct/session).
   const serverCore = fs.readFileSync(path.join(repoRoot, 'cloud-server', 'server-core.js'), 'utf8');
-  const routeStart = serverCore.indexOf('app.post("/transport/session/activate"');
-  const routeEnd = serverCore.indexOf('\n});', routeStart);
-  const routeSource = serverCore.slice(routeStart, routeEnd);
-  assert.ok(routeStart >= 0, 'Direct activation route must exist');
-  assert.ok(routeSource.indexOf('authenticatedTransportAccount(req, res)') < routeSource.indexOf('repairMembership === true'));
-  assert.match(routeSource, /repairMembership === true \? "repairMembership" : "activateSession"/);
-  assert.match(routeSource, /directTransport\[activationMethod\]/);
+  assert.equal(serverCore.includes('app.post("/transport/session/activate"'), false, 'legacy activation route must be retired (T25)');
 
   console.log('PASS Direct persistent membership: bot-visible READY, Worker fallback on transient Bot API failure, definitive failures closed, same-bot repair and concurrent coalescing');
 }

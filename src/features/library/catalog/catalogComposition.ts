@@ -12,7 +12,8 @@ export type LibraryComposition =
   | { mode: "blocked"; resolution: Exclude<CatalogContextResolution, { status: "ready" }> };
 
 export function isCatalogClientEnabled(env: Record<string, string | boolean | undefined> = (import.meta as unknown as { env?: Record<string, string | boolean | undefined> }).env ?? {}): boolean {
-  return String(env[CATALOG_CLIENT_FLAG] ?? "").toLowerCase() === "true";
+  // T25: activo por defecto (INDEX retirado); solo un "false" explícito lo apaga, y entonces la Web muestra un estado fail-closed.
+  return String(env[CATALOG_CLIENT_FLAG] ?? "true").toLowerCase() !== "false";
 }
 
 export async function chooseLibraryComposition(input: { enabled: boolean; api: CatalogApi; signal?: AbortSignal }): Promise<LibraryComposition> {

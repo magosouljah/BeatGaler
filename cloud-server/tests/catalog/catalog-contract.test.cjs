@@ -105,3 +105,24 @@ test('E77: sin rutas ni métodos de transporte de bytes en el Cloud; el módulo 
   const manifest = JSON.parse(read('catalog', 'api-manifest.json'));
   assert.equal(manifest.endpoints.some((e) => ['/transfer/upload', '/media/', '/capability'].some((x) => e.path.includes(x)) || e.path.endsWith('/project')), false, 'el manifiesto no declara rutas de bytes');
 });
+
+test('T25: INDEX retirado del runtime — ni rutas legacy de INDEX/transporte/bytes ni módulos INDEX cargados por el servidor', () => {
+  const root = path.join(__dirname, '..', '..');
+  const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
+  const code = (f) => read(f).split(/\r?\n/).filter((l) => !l.trim().startsWith('//')).join('\n');
+  const core = code('server-core.js'); const server = code('server.js');
+  const RETIRED = ['/transport/index/', '/transport/project/', '/transport/session/', '/transport/operation/', '/transport/quota/', '/transport/topic/',
+    '/transport/trash/', '/transport/upload/', '/transport/routing/', '/library/upsert', '/library/get', '/library/artwork', '/library/move-to-trash-batch',
+    '/library/cleanup-garbage', '/metadata/upsert', '/metadata/artwork', '/beats/upload', '/beats/download', '/beats/stream', '/beats/delete-topic',
+    '/cloud-files/upload', '/projects/upload'];
+  const calls = [...core.matchAll(/app\.(get|post|put|patch|delete|use)\(\s*["'`]([^"'`]+)/g)].map((m) => m[2]);
+  assert.ok(calls.length > 10, 'inventario de rutas de server-core');
+  for (const r of RETIRED) assert.equal(calls.some((p) => p.startsWith(r)), false, `server-core.js registra ${r}`);
+  for (const m of ['library-index-publication', 'vault-index-pointer-store', 'startup-routing-index', 'atomic-library-index', 'direct-index-pin-authority',
+    'project-upload-route', 'project-upload-admission', 'project-upload-authority', 'library-beat-quota', 'library-trash-assets']) {
+    assert.equal(fs.existsSync(path.join(root, `${m}.js`)), false, `${m}.js debe estar eliminado`);
+    assert.equal(core.includes(`./${m}`) || server.includes(`./${m}`), false, `el runtime no debe cargar ${m}`);
+  }
+  for (const s of ['ensureAll()', 'recoverAll()', 'publishIndexBuffer', 'UpdatePinnedMessage']) assert.equal(server.includes(s) || core.includes(s), false, `arranque/rutas sin ${s}`);
+});
+

@@ -7,9 +7,6 @@ const assert = require('node:assert/strict');
 const authority = require('../../catalog/authority.js');
 const fence = require('../../catalog/legacy-fence.js');
 const quarantine = require('../../catalog/flush-quarantine.js');
-const { createLibraryIndexPublication } = require('../../library-index-publication.js');
-const { createVaultIndexPointerStore } = require('../../vault-index-pointer-store.js');
-const { createDirectIndexPinAuthority } = require('../../direct-index-pin-authority.js');
 const { installDirectCapabilityBoundary } = require('../../direct-capability-boundary.js');
 const { mergeAuthSnapshotDelta } = require('../../postgres-auth-multiprocess-compat.js');
 const { createUserStorageLifecycle } = require('../../user-storage-lifecycle.js');
@@ -146,94 +143,8 @@ test('stripDirectCredentials: la sesión catalog-v1 serializada no contiene bot_
   assert.ok(JSON.parse(native).protocol === 'catalog-v1');
 });
 
-test('capa 1 por helper: cada entrada C10 de library-index-publication rechaza con 410 y 0 llamadas externas (PASS 7)', async () => {
-  const calls = { transport: 0 };
-  const spy = (name) => async () => { calls.transport += 1; throw new Error(`${name} must not be called`); };
-  const transport = { getPinnedMessage: spy('getPinnedMessage'), publishIndexBuffer: spy('publishIndexBuffer'), downloadMessageBuffer: spy('downloadMessageBuffer'),
-    deleteMessages: spy('deleteMessages'), deleteAndVerifyMessages: spy('deleteAndVerifyMessages'), pinExistingIndexMessage: spy('pinExistingIndexMessage'),
-    readPinnedIndexBuffer: spy('readPinnedIndexBuffer'), copyLegacyProjectPart: spy('copyLegacyProjectPart'), verifyLegacyProjectCopy: spy('verifyLegacyProjectCopy') };
-  const pool = fakePool({ catalogUsers: ['native'], catalogChats: ['-1009'], onQuery: (sql, params) => {
-    if (/SELECT id FROM vaults WHERE user_id=\$1 AND telegram_chat_id=\$2/.test(sql)) return { rows: [{ id: 'v-native' }] };
-    if (/SELECT id,telegram_chat_id,index_bootstrap_pending FROM vaults/.test(sql)) return { rows: [{ id: 'v-native', telegram_chat_id: params[0] === 'native' ? '-1009' : '-1', index_bootstrap_pending: true }] };
-  } });
-  const pub = createLibraryIndexPublication({ pool, transport, readIndex: spy('readIndex') });
-  const manifest = { schema: 'beatgaler.telegram.library', version: 2, beats: [], trash: [], deleted: [] };
-  const entries = {
-    publish: () => pub.publish({ userId: 'native', chatId: '-1009', manifest, expectedMessageId: 0 }),
-    purgeTrash: () => pub.purgeTrash({ userId: 'native', chatId: '-1009', beatIds: ['b1'] }),
-    recover: () => pub.recover({ userId: 'native', chatId: '-1009' }),
-    migrateLegacyProjects: () => pub.migrateLegacyProjects({ userId: 'native', chatId: '-1009' }),
-    reserve: () => pub.reserve({ userId: 'native', beatId: 'b1' }),
-    ensureBootstrap: () => pub.ensureBootstrap('native'),
-    verifyCommitted: () => pub.verifyCommitted({ userId: 'native', chatId: '-1009', messageId: 5 }),
-    assertPurged: () => pub.assertPurged({ userId: 'native', beatIds: ['b1'] }),
-    renew: () => pub.renew({ userId: 'native', beatId: 'b1' }),
-    cancel: () => pub.cancel({ userId: 'native', beatId: 'b1' }),
-    authorizeProject: () => pub.authorizeProject({ userId: 'native', declaredBytes: 1 }),
-    uploadProject: () => pub.uploadProject({ userId: 'native', chatId: '-1009' }),
-    byChatOnly: () => pub.recover({ userId: 'other-user', chatId: '-1009' }),
-  };
-  for (const [name, run] of Object.entries(entries)) {
-    const before = pool.writes().length;
-    await assert.rejects(run, (e) => e.code === 'LEGACY_CLIENT_UNSUPPORTED' && e.status === 410, name);
-    assert.equal(pool.writes().length, before, `${name}: 0 escrituras SQL legacy`);
-  }
-  assert.equal(calls.transport, 0, '0 llamadas a Telegram/MASTER');
-  // Un usuario sin catálogo pasa el cerco y llega a su lógica legacy (aquí: falla por falta de INDEX, no por el cerco).
-  await assert.rejects(pub.reserve({ userId: 'legacy-user', beatId: 'b1' }), (e) => e.code !== 'LEGACY_CLIENT_UNSUPPORTED');
-});
 
-test('capa 1 bajo el lock: provisión concurrente entre la entrada y FOR UPDATE falla cerrada antes de pinned/publishIndexBuffer (PASS 7)', async () => {
-  let locked = false;
-  const external = [];
-  const pool = fakePool({ onQuery: (sql) => {
-    if (/catalog-legacy-fence/.test(sql)) return { rows: locked ? [{ '?column?': 1 }] : [] }; // la provisión gana tras el lock
-    if (/FROM vaults WHERE user_id=\$1 FOR UPDATE/.test(sql)) { locked = true; return { rows: [{ id: 'v1', telegram_chat_id: '-1001', index_bootstrap_pending: true }] }; }
-    if (/SELECT 1 FROM library_quota_state/.test(sql)) return { rows: [] };
-  } });
-  const transport = { getPinnedMessage: async () => { external.push('pinned'); return null; }, publishIndexBuffer: async () => { external.push('publish'); return { messageId: 1 }; },
-    downloadMessageBuffer: async () => { external.push('download'); return Buffer.alloc(0); } };
-  const pub = createLibraryIndexPublication({ pool, transport });
-  const manifest = { schema: 'beatgaler.telegram.library', version: 2, beats: [], trash: [], deleted: [] };
-  await assert.rejects(pub.publish({ userId: 'u1', chatId: '-1001', manifest, expectedMessageId: 0 }), (e) => e.code === 'LEGACY_CLIENT_UNSUPPORTED');
-  assert.deepEqual(external, ['pinned'], 'solo la lectura del pin previa al lock (sin estado de cuota); nada tras el lock');
-  assert.ok(pool.statements.some((s) => /^ROLLBACK/.test(s)));
-  assert.deepEqual(pool.writes(), []);
-});
 
-test('capa 1 en puntero INDEX, pin authority y capacidades INDEX (PASS 7)', async () => {
-  const pool = fakePool({ catalogUsers: ['native'], catalogChats: ['-1009'] });
-  const store = createVaultIndexPointerStore(pool);
-  await assert.rejects(store.getForChat('-1009'), (e) => e.status === 410);
-  await assert.rejects(store.compareAndSetForChat({ telegramChatId: '-1009', messageId: 3 }), (e) => e.status === 410);
-  assert.deepEqual(pool.writes(), []);
-  let restricted = 0;
-  const pin = createDirectIndexPinAuthority({ pool: fakePool({ catalogChats: ['-1009'], onQuery: (sql) => {
-    if (/SELECT transport_bot_id,index_pin_restricted_bot_id/.test(sql)) return { rows: [{ transport_bot_id: 'Bot20', index_pin_restricted_bot_id: null, project_media_restricted_bot_id: null }] };
-  } }), transport: { restrictBotPinRights: async () => { restricted += 1; } } });
-  await assert.rejects(pin.ensure({ chatId: '-1009', botId: 'Bot20', membershipState: 'ready' }), (e) => e.status === 410);
-  assert.equal(restricted, 0);
-
-  const routes = new Map();
-  const express = { application: { post(route, ...handlers) { routes.set(route, handlers); return this; } } };
-  installDirectCapabilityBoundary(express, { pool, env: {}, store: { async issue() {}, async revokeMissingOperations() { return 0; } } });
-  let handlerRan = 0;
-  express.application.post('/transport/operation/begin', (req, res) => { handlerRan += 1; res.json({ ok: true, operation_id: 'op1' }); });
-  const run = (kind, scope) => new Promise((resolve) => {
-    const res = { statusCode: 200, status(c) { this.statusCode = c; return this; }, json(p) { resolve({ status: this.statusCode, payload: p }); return this; } };
-    const req = { headers: { authorization: 'Bearer t' }, beatgalerAuthorizedUserId: 'native', beatgalerAuthorizedTenantId: 'native', beatgalerAuthorizedInstallationId: 'i', body: { kind, scope } };
-    const handlers = routes.get('/transport/operation/begin'); let i = 0;
-    const next = () => { const h = handlers[i++]; return h ? h(req, res, next) : undefined; };
-    next();
-  });
-  for (const kind of authority.INDEX_OPERATION_TYPES) {
-    const r = await run(kind, { objectType: kind === 'delete_messages' ? 'message' : 'index', objectIds: [kind === 'delete_messages' ? '5' : 'pinned'] });
-    assert.deepEqual([r.status, r.payload.code], [410, 'LEGACY_CLIENT_UNSUPPORTED'], kind);
-  }
-  assert.equal(handlerRan, 0, 'el handler nunca crea la operación Direct');
-  const ok = await run('download', { objectType: 'message', objectIds: ['5'] });
-  assert.equal(ok.status, 200, 'las operaciones de datos no cambian en T05');
-});
 
 test('respondLegacyFence solo responde a errores del cerco', () => {
   const sent = [];

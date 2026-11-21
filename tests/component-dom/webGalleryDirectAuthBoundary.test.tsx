@@ -32,7 +32,8 @@ vi.mock("../../src/features/playback/webRememberedDirectPreconnect", () => ({
   preconnectRememberedWebDirect: mocks.preconnect,
 }));
 
-vi.mock("../../src/App", () => ({
+// T25: la Web monta siempre el workspace del catálogo (sin árbol LEGACY); la frontera de auth se prueba sobre él.
+vi.mock("../../src/app/WebGalleryWorkspace", () => ({
   default: () => React.createElement("main", { "data-test-gallery-app": true }, "Authenticated Gallery"),
 }));
 vi.mock("../../src/features/library/LibraryUxBridge", () => ({
@@ -131,7 +132,7 @@ describe("Web Direct authenticated Gallery mount boundary", () => {
     expect(mocks.preconnect).not.toHaveBeenCalled();
   });
 
-  it("preconnects after account confirmation, and unmounts Gallery on logout", async () => {
+  it("mounts Gallery after account confirmation (no legacy INDEX preconnect, T25), and unmounts it on logout", async () => {
     const pending = deferred<TestAccount | null>();
     mocks.restore.mockReturnValueOnce(pending.promise);
     await mountAt("/gallery");
@@ -141,7 +142,7 @@ describe("Web Direct authenticated Gallery mount boundary", () => {
     await act(async () => { pending.resolve(account("user-a")); await pending.promise; });
     await expectAfterLazyMount(() => {
       expect(host?.querySelector("[data-test-gallery-app]")).not.toBeNull();
-      expect(mocks.preconnect).toHaveBeenCalledTimes(1);
+      expect(mocks.preconnect).not.toHaveBeenCalled();
     });
 
     await act(async () => {
@@ -149,14 +150,13 @@ describe("Web Direct authenticated Gallery mount boundary", () => {
     });
     await flushLazy();
     expect(host?.querySelector("[data-test-gallery-app]")).toBeNull();
-    expect(mocks.preconnect).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: account("user-b") }));
     });
     await expectAfterLazyMount(() => {
       expect(host?.querySelector("[data-test-gallery-app]")).not.toBeNull();
-      expect(mocks.preconnect).toHaveBeenCalledTimes(2);
+      expect(mocks.preconnect).not.toHaveBeenCalled();
     });
   });
 });

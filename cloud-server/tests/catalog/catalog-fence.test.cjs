@@ -89,34 +89,3 @@ test('montaje completo: con operations+direct+playback+media+purge inyectados, l
   try { const r = await raw(s2.port, 'GET', '/catalog/v1/context'); assert.deepEqual([r.status, r.body.code, r.body.detail.reason], [503, 'CATALOG_UNAVAILABLE', 'NOT_MOUNTED']); } finally { s2.server.close(); }
 });
 
-// ---------- handler real de session/start (vm) con la capa 2 ----------
-test('session/start real: dueño nativo sin catalog-v1 → 410 antes de migrateLegacyProjects/startSession; con catalog-v1 → sesión con bloque catalog{era,epoch} y sin credenciales; usuario legacy → como hoy', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'server-core.js'), 'utf8');
-  const a = source.indexOf('app.post("/transport/session/start",'); const b = source.indexOf('app.post("/transport/session/activate",', a);
-  const routeSource = source.slice(a, b);
-  async function run({ guardResult, protocol }) {
-    const calls = { migrate: 0, start: 0, outcomes: [] }; let handler;
-    const context = {
-      app: { post(_r, cb) { handler = cb; } }, criticalPathTrace: { write() {}, step(_q, _s, op) { return op(); } },
-      authenticatedTransportAccount() { return { beatgalerUserId: 'inst', user: { id: 'u1' }, account: { beatgalerAccountId: 'acc' } }; },
-      storageChatId() { return '-100123'; }, createDirectStartupTrace() { return { mark() {}, publish(_r, o) { calls.outcomes.push(o); } }; },
-      libraryIndexPublication: { async migrateLegacyProjects() { calls.migrate++; } },
-      directTransport: { async startSession(input) { calls.start++; return { session_id: 's1', protocol: input.protocol, bot_token: input.protocol === CATALOG_SESSION_PROTOCOL ? undefined : 'x' }; } },
-      vaultIndexPointers: { async getForChat() { return null; } }, wrapWebTransportSession(s) { return s; }, respondLegacyFence,
-      assertCatalogSessionProtocolIfConfigured: async () => { if (guardResult instanceof Error) throw guardResult; return guardResult; },
-      console: { warn() {}, error() {} },
-    };
-    vm.runInNewContext(routeSource, context, { filename: 'server-core.js' });
-    const res = { statusCode: 200, locals: {}, status(c) { this.statusCode = c; return this; }, json(p) { this.payload = p; return this; } };
-    await handler({ body: { protocol } }, res);
-    return { calls, res };
-  }
-  const rejected = await run({ guardResult: new CatalogLegacyFenceError('session/start requires protocol catalog-v1', { entry: 'session/start', by: 'protocol' }), protocol: null });
-  assert.deepEqual([rejected.res.statusCode, rejected.res.payload.code, rejected.calls.migrate, rejected.calls.start, rejected.calls.outcomes], [410, 'LEGACY_CLIENT_UNSUPPORTED', 0, 0, ['legacy_fenced']], 'rechazo antes de cualquier efecto Direct/legacy');
-  const accepted = await run({ guardResult: { catalog: true, outcome: 'CATALOG', protocol: CATALOG_SESSION_PROTOCOL, authority_era: 'e1', authority_epoch: '7' }, protocol: CATALOG_SESSION_PROTOCOL });
-  assert.equal(accepted.res.statusCode, 200);
-  assert.deepEqual(JSON.parse(JSON.stringify(accepted.res.payload.catalog)), { protocol: CATALOG_SESSION_PROTOCOL, authority_era: 'e1', authority_epoch: '7' }); // objeto del realm vm: comparar por valor
-  assert.equal(accepted.res.payload.bot_token, undefined); assert.equal(accepted.calls.start, 1);
-  const legacy = await run({ guardResult: { catalog: false, outcome: 'LEGACY' }, protocol: null });
-  assert.deepEqual([legacy.res.statusCode, legacy.res.payload.catalog, legacy.calls.migrate, legacy.calls.start], [200, undefined, 1, 1]);
-});

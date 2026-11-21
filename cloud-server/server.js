@@ -46,11 +46,7 @@ const { operationsRuntime } = require('./operations-runtime');
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
 const { installPersistentDirectSessionStart } = require("./direct-persistent-session-runtime");
 const { installPersistentDirectMembershipActivation } = require("./direct-persistent-membership-runtime");
-const { installAtomicLibraryIndexBootstrap } = require("./atomic-library-index");
-const { installStartupRoutingIndex } = require("./startup-routing-index");
-const vaultIndexPointers = require("./vault-index-pointer-store");
-const libraryIndexPublication = require("./library-index-publication");
-const { createDirectIndexPinAuthority } = require("./direct-index-pin-authority");
+
 const catalogAuthority = require("./catalog/authority");
 const catalogQueries = require("./catalog/queries");
 const catalogCommands = require("./catalog/commands");
@@ -91,7 +87,6 @@ async function start() {
   }
   configureRuntimeDependencies({ pool, postgresRequired: pgConfig.enabled });
   directPersistentAssignments.configure({ pool });
-  vaultIndexPointers.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
   // T05-N: autoridad nativa (solo lectura + provision explícita). Exige control-plane postgres; en json no se monta (§12.1).
@@ -148,13 +143,8 @@ async function start() {
   { const d = catalogDirect.currentCatalogDirect(); const raw = process.env.BEATGALER_CATALOG_DIRECT_PREWARM_BOTS; const n = raw === undefined || raw === '' ? 3 : Number(raw);
     if (d && n > 0) { const t = setTimeout(() => { d.prewarm({ maxBots: n }).catch(() => {}); }, 3000); if (typeof t.unref === 'function') t.unref(); } }
   console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'} gateway=${mediaGateway ? 'bot-router(lazy)' : 'none'} journal=${journalDir ? 'file' : 'none'}`);
-  libraryIndexPublication.configure({ pool: cutover.authority === 'postgres' ? pool : null, transport: require('./direct-transport-control') });
-  const indexPinAuthority = cutover.authority === 'postgres'
-    ? createDirectIndexPinAuthority({ pool, transport: require('./direct-transport-control') }) : null;
-  if (indexPinAuthority) {
-    await indexPinAuthority.ensureAll();
-    await libraryIndexPublication.recoverAll();
-  }
+  // T25: INDEX retirado del runtime. PostgreSQL es la única autoridad del catálogo; el arranque ya no fija, recupera ni publica INDEX
+  // (los mensajes INDEX históricos permanecen intactos en Telegram, solo como archivo).
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
   accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
   if (cutover.authority === 'postgres') {
@@ -299,8 +289,6 @@ async function start() {
   installDurableAuthAbuseControls(express, { pool, runtime: accountLifecycle, env: process.env });
   installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
-  installAtomicLibraryIndexBootstrap(express);
-  installStartupRoutingIndex(express, { pool, dataDir: STATE_DIR });
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"} pending-signup=${pendingSignupEnabled ? 'configured' : 'disabled'}`);
 
   // Install a one-shot loader only for server-core so activation can reuse its
@@ -329,7 +317,6 @@ async function start() {
   installPersistentDirectSessionStart({
     directTransport,
     persistentAssignments: directPersistentAssignments,
-    indexPinAuthority,
   });
   installPersistentDirectMembershipActivation({
     directTransport,
