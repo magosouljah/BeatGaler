@@ -4,6 +4,7 @@
 // vault, la era, la época, la generación y la consulta (filtros + orden); se muestra como provisional (sin interacción) y se revalida
 // siempre contra PostgreSQL. Cualquier fallo de almacenamiento (no disponible, cuota llena, datos corruptos) se trata como «sin copia».
 import type { CatalogBeatDto, CatalogContext, CatalogPage } from "./catalogApi";
+import { createIdbConnection, resolveIdbFactory } from "./catalogIdb";
 
 export const FIRST_BLOCK_CACHE_VERSION = 1;
 export const FIRST_BLOCK_CACHE_DB = "beatgaler-catalog-first-block";
@@ -178,26 +179,13 @@ export function memoryFirstBlockBackend(): FirstBlockBackend & { map: Map<string
   };
 }
 
-export function indexedDbFirstBlockBackend(factory: IDBFactory | undefined = typeof indexedDB === "undefined" ? undefined : indexedDB): FirstBlockBackend | null {
-  if (!factory) return null;
-  let dbp: Promise<IDBDatabase> | null = null;
-  const open = () => (dbp ??= new Promise<IDBDatabase>((resolve, reject) => {
-    let req: IDBOpenDBRequest;
-    try { req = factory.open(FIRST_BLOCK_CACHE_DB, 1); } catch (e) { reject(e); return; }
-    req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains("entries")) req.result.createObjectStore("entries", { keyPath: "key" }); };
-    req.onsuccess = () => { const db = req.result; db.onversionchange = () => { db.close(); dbp = null; }; resolve(db); };
-    req.onerror = () => reject(req.error);
-    req.onblocked = () => reject(new Error("indexedDB blocked"));
-  }).catch((e) => { dbp = null; throw e; }));
-  const tx = async <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T> | void): Promise<T | undefined> => {
-    const db = await open();
-    return new Promise<T | undefined>((resolve, reject) => {
-      const t = db.transaction("entries", mode); const r = fn(t.objectStore("entries"));
-      t.oncomplete = () => resolve(r ? r.result : undefined);
-      t.onerror = () => reject(t.error ?? (r ? r.error : null));
-      t.onabort = () => reject(t.error ?? new Error("transaction aborted"));
-    });
-  };
+export function indexedDbFirstBlockBackend(factory?: IDBFactory | null): FirstBlockBackend | null {
+  const idb = resolveIdbFactory(factory);
+  if (!idb) return null;
+  // Política propia: sin plazo en la conexión (la lectura lleva el suyo, `withTimeout`), la transacción acaba en oncomplete, un open() fallido
+  // se reintenta y onversionchange cierra la conexión.
+  const conn = createIdbConnection({ factory: idb, name: FIRST_BLOCK_CACHE_DB, version: 1, stores: [{ name: "entries", keyPath: "key" }], settle: "transaction", retryOpen: true, closeOnVersionChange: true });
+  const tx = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T> | void): Promise<T | undefined> => conn.run<T>(mode, ["entries"], (t) => fn(t.objectStore("entries")));
   return {
     get: (k) => tx("readonly", (s) => s.get(k)),
     put: async (e) => { await tx("readwrite", (s) => { s.put(e); }); },

@@ -2,6 +2,7 @@
 // prefijos MP3 E71 y portadas originales E79), con su uso para la cuenta activa y su limpieza. Todas son copias prescindibles: limpiarlas solo
 // libera espacio aquí; jamás toca PostgreSQL ni Telegram (no hay ninguna petición de red en este módulo). Los límites mostrados son los que
 // las cachés ya aplican; este módulo no define ninguno nuevo.
+import { safe } from "./catalogIdb";
 import { ARTWORK_CACHE_DEFAULTS, type ArtworkCache } from "./catalogArtworkCache";
 import type { FirstBlockCache } from "./catalogFirstBlockCache";
 import { PREFIX_CACHE_DEFAULTS, type PrefixCache } from "./catalogPrefixCache";
@@ -15,13 +16,13 @@ export interface CatalogLocalCaches {
 
 export function createCatalogLocalCaches({ accountId, firstBlockCache, prefixCache, artworkCache }: { accountId: string; firstBlockCache: FirstBlockCache | null; prefixCache: PrefixCache | null; artworkCache: ArtworkCache | null }): CatalogLocalCaches {
   const none = { entries: 0, bytes: 0 };
-  const safe = async (fn: () => Promise<{ entries: number; bytes: number }>) => { try { return await fn(); } catch { return none; } };
+  const safeUsage = (fn: () => Promise<{ entries: number; bytes: number }>) => safe(fn, none);
   async function usage(): Promise<CatalogLocalCacheUsage[]> {
     const metadataOn = Boolean(firstBlockCache?.available);
     const [metadata, prefixes, artwork] = await Promise.all([
-      metadataOn ? safe(() => firstBlockCache!.usage(accountId)) : none,
-      prefixCache ? safe(() => prefixCache.usage(accountId)) : none,
-      artworkCache ? safe(() => artworkCache.usage(accountId)) : none,
+      metadataOn ? safeUsage(() => firstBlockCache!.usage(accountId)) : none,
+      prefixCache ? safeUsage(() => prefixCache.usage(accountId)) : none,
+      artworkCache ? safeUsage(() => artworkCache.usage(accountId)) : none,
     ]);
     return [
       { kind: "metadata", available: metadataOn, ...metadata, limitBytes: null },
