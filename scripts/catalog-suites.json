@@ -385,6 +385,18 @@
           ],
           "kind": "node-test",
           "timeout_ms": 300000
+        },
+        {
+          "id": "catalog-migration-constraints-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-migration-constraints.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 300000
         }
       ]
     },
