@@ -38,7 +38,7 @@ export default function WebLibraryPagination() {
       style={{
         position: "fixed",
         right: 20,
-        bottom: 20,
+        bottom: 104,
         zIndex: 70,
         display: "flex",
         alignItems: "center",

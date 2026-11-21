@@ -1,0 +1,312 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "BeatGaler — bucket cifrado para backups del catálogo PostgreSQL (SOLO la base de datos; NO contiene audios de Telegram). Plantilla NO desplegada: requiere autorización del propietario.",
+  "Parameters": {
+    "BucketName": {
+      "Type": "String",
+      "Description": "Nombre global único del bucket de backups",
+      "AllowedPattern": "^[a-z0-9][a-z0-9.-]{2,62}$"
+    },
+    "RetentionDays": {
+      "Type": "Number",
+      "Default": 35,
+      "MinValue": 7,
+      "Description": "Días que se conserva cada backup (objeto actual) antes de expirar"
+    },
+    "NoncurrentDays": {
+      "Type": "Number",
+      "Default": 90,
+      "MinValue": 30,
+      "Description": "Días que se conservan versiones sobrescritas/borradas"
+    },
+    "ObjectLockDays": {
+      "Type": "Number",
+      "Default": 14,
+      "MinValue": 1,
+      "Description": "Retención WORM (modo GOVERNANCE) de cada backup: protege contra borrado accidental o ransomware con credenciales de backup"
+    }
+  },
+  "Resources": {
+    "BackupKey": {
+      "Type": "AWS::KMS::Key",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Description": "BeatGaler backups PostgreSQL (SSE-KMS)",
+        "EnableKeyRotation": true,
+        "KeyPolicy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AdminDelAccount",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:root"
+                }
+              },
+              "Action": "kms:*",
+              "Resource": "*"
+            }
+          ]
+        }
+      }
+    },
+    "BackupBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketName": {
+          "Ref": "BucketName"
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "ObjectLockEnabled": true,
+        "ObjectLockConfiguration": {
+          "ObjectLockEnabled": "Enabled",
+          "Rule": {
+            "DefaultRetention": {
+              "Mode": "GOVERNANCE",
+              "Days": {
+                "Ref": "ObjectLockDays"
+              }
+            }
+          }
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "BucketKeyEnabled": true,
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "aws:kms",
+                "KMSMasterKeyID": {
+                  "Fn::GetAtt": [
+                    "BackupKey",
+                    "Arn"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "expire-backups",
+              "Status": "Enabled",
+              "Prefix": "",
+              "ExpirationInDays": {
+                "Ref": "RetentionDays"
+              },
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": {
+                  "Ref": "NoncurrentDays"
+                }
+              },
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 2
+              }
+            }
+          ]
+        }
+      }
+    },
+    "BackupBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "BackupBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "SoloTLS",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "BackupBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${BackupBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            },
+            {
+              "Sid": "ExigirSSEKMS",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:PutObject",
+              "Resource": {
+                "Fn::Sub": "${BackupBucket.Arn}/*"
+              },
+              "Condition": {
+                "StringNotEqualsIfExists": {
+                  "s3:x-amz-server-side-encryption": "aws:kms"
+                }
+              }
+            },
+            {
+              "Sid": "NadieBorraVersiones",
+              "Effect": "Deny",
+              "NotPrincipal": {
+                "AWS": {
+                  "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:root"
+                }
+              },
+              "Action": [
+                "s3:DeleteObjectVersion",
+                "s3:PutBucketVersioning",
+                "s3:PutLifecycleConfiguration",
+                "s3:BypassGovernanceRetention"
+              ],
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "BackupBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${BackupBucket.Arn}/*"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "BackupWriterPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "pg-backup.sh: solo escribir backups nuevos (sin leer, sin borrar)",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:PutObject",
+                "s3:AbortMultipartUpload"
+              ],
+              "Resource": {
+                "Fn::Sub": "${BackupBucket.Arn}/bk-*"
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "kms:GenerateDataKey",
+                "kms:Encrypt"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "BackupKey",
+                  "Arn"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "BackupReaderPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "pg-restore.sh: solo listar y leer",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion"
+              ],
+              "Resource": {
+                "Fn::Sub": "${BackupBucket.Arn}/bk-*"
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:ListBucket"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "BackupBucket",
+                  "Arn"
+                ]
+              }
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "kms:Decrypt"
+              ],
+              "Resource": {
+                "Fn::GetAtt": [
+                  "BackupKey",
+                  "Arn"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "BucketArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "BackupBucket",
+          "Arn"
+        ]
+      }
+    },
+    "KmsKeyArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "BackupKey",
+          "Arn"
+        ]
+      }
+    },
+    "WriterPolicyArn": {
+      "Value": {
+        "Ref": "BackupWriterPolicy"
+      }
+    },
+    "ReaderPolicyArn": {
+      "Value": {
+        "Ref": "BackupReaderPolicy"
+      }
+    }
+  }
+}

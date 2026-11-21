@@ -23,6 +23,8 @@ function createUserStorageLifecycle({
   clearStorageBindingsForUser,
   rebindStorageBindingsForUser,
   ensureEmptyIndexForStorage,
+  // T05-N (NATIVO r2.1 §6.2.1): rechazo en origen. Un vault con biblioteca POSTGRES no cambia de chat sin rebind-chat.
+  assertVaultRebindAllowed = async () => ({ native: false }),
   now = () => Date.now(),
   logger = console,
 } = {}) {
@@ -166,6 +168,9 @@ function createUserStorageLifecycle({
       if (current !== expected) {
         throw new Error("Storage assignment changed before recovery; refusing stale recovery.");
       }
+
+      // Rechazo en origen antes de cualquier verificación o efecto en Telegram: CATALOG_VAULT_REBIND_FORBIDDEN.
+      await assertVaultRebindAllowed({ userId: userKey(user), fromChatId: current });
 
       const verification = await verifyForRecovery(user, { cleanupManagerBot: false });
       if (verification.status !== "missing" || verification.definitive !== true) {

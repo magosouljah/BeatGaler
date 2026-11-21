@@ -147,7 +147,7 @@ function uploadRequest({ token = "", headers = {}, body = {}, ip = "127.0.0.1", 
   const installationId = "tenant_a";
   const expiresAt = Date.now() + 60_000;
   fs.writeFileSync(path.join(dir, "accounts-data.json"), JSON.stringify({
-    users: [{ id: userId }],
+    users: [{ id: userId, providers: { x: { id: "x-user-a" }, google: { id: "google-user-a" } } }],
     sessions: {
       [sessionKey(token)]: { userId, expiresAt },
       [sessionKey(foreignToken)]: { userId, expiresAt },
@@ -170,6 +170,38 @@ function uploadRequest({ token = "", headers = {}, body = {}, ip = "127.0.0.1", 
       BEATGALER_UPLOAD_RATE_MAX: "100",
       BEATGALER_UPLOAD_CONCURRENCY: "1",
     }});
+
+    // After an owner-approved account reset, installation bindings left behind
+    // by deleted accounts must not block X OAuth or be treated as owned.
+    {
+      const staleReq = { headers: {}, body: { provider: "x", beatgalerUserId: "tenant_b" } };
+      const staleRes = responseRecorder();
+      let nextCalled = false;
+      containment.guardOAuthStart(staleReq, staleRes, () => { nextCalled = true; });
+      assert.equal(nextCalled, true, "orphaned installation may start fresh OAuth");
+      assert.equal(staleRes.statusCode, 200);
+      // Returning users may reauthenticate via an already-linked provider,
+      // but the verified OAuth identity must match this installation's owner.
+      const ownedReq = { headers: {}, body: { provider: "x", beatgalerUserId: installationId } };
+      const ownedRes = responseRecorder();
+      let ownedNext = false;
+      containment.guardOAuthStart(ownedReq, ownedRes, () => { ownedNext = true; });
+      assert.equal(ownedNext, true, "existing X user can restart sign-in after session expiry");
+      ownedRes.json({ authorization_url: "https://x.com/oauth?state=existing-x-state", flow_id: "x-flow" });
+      const guard = JSON.parse(fs.readFileSync(path.join(dir, "authz-session-bindings.json"), "utf8"))["oauth:existing-x-state"];
+      assert.equal(guard.expectedOwnerId, userId);
+      assert.equal(guard.existingProviderLogin, true);
+      let callbackAllowed = false;
+      const callbackReq = { query: { state: "existing-x-state" }, body: {}, headers: {} };
+      const callbackRes = responseRecorder();
+      await containment.guardOAuthCallback(callbackReq, callbackRes, () => { callbackAllowed = true; });
+      assert.equal(callbackAllowed, true);
+      assert.equal(callbackReq.beatgalerOAuthExpectedOwnerId, userId, "callback must verify provider identity against owner");
+      const denied = responseRecorder();
+      containment.guardOAuthStart({ headers: {}, body: { provider: "unknown", beatgalerUserId: installationId } },
+        denied, () => assert.fail("unlinked provider must not take over an existing installation"));
+      assert.equal(denied.statusCode, 403);
+    }
 
     // 401 unauthenticated, before multipart parsing.
     {

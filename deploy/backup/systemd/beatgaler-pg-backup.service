@@ -1,0 +1,17 @@
+[Unit]
+Description=BeatGaler PostgreSQL encrypted catalog backup to S3
+Wants=network-online.target
+After=network-online.target
+# Deploy only after an isolated S3 restore has been verified.
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/beatgaler/catalog-backup.env
+WorkingDirectory=/opt/beatgaler/backup
+ExecStart=/usr/bin/python3 /opt/beatgaler/backup/pg-runtime-env.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=45min

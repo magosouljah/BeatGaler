@@ -1,0 +1,1516 @@
+{
+  "schema": "beatgaler.catalog-suites",
+  "version": 1,
+  "task": "T02",
+  "note": "Manifiesto de suites del runner scripts/catalog-check.cjs. Una suite 'pending' no tiene casos todavía: el runner la rechaza con exit 4 hasta que su tarea propietaria registre casos reales. No se finge ninguna suite.",
+  "allowed_case_roots": [
+    "cloud-server/tests/catalog-harness/",
+    "cloud-server/tests/fixtures/catalog/",
+    "tests/catalog-harness/",
+    "cloud-server/tests/catalog/",
+    "cloud-server/tests/postgres-schema.test.cjs",
+    "cloud-server/tests/postgres-migration-runner.test.cjs",
+    "tests/component-dom/",
+    "tests/helpers/",
+    "cloud-server/tests/project-master-message.test.cjs"
+  ],
+  "forbidden_case_files": [
+    "cloud-server/tests/postgres-live.integration.cjs"
+  ],
+  "prerequisites": {
+    "catalog-test-db": "CATALOG_TEST_ADMIN_URL y CATALOG_TEST_INSTANCE_ID válidos contra cloud-server/tests/helpers/catalog-test-descriptor.json (se valida antes de cualquier conexión)",
+    "chrome": "Chrome local (CHROME_BIN o ruta estándar) y node_modules/@wdio/cli instalado"
+  },
+  "suites": {
+    "unit": {
+      "status": "active",
+      "network": "deny",
+      "requires": [],
+      "cases": [
+        {
+          "id": "fixtures-reproducible",
+          "cmd": [
+            "node",
+            "cloud-server/tests/fixtures/catalog/generate-fixtures.cjs",
+            "--check"
+          ],
+          "kind": "plain"
+        },
+        {
+          "id": "harness-net-guard",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog-harness/net-guard.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "harness-runner",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog-harness/runner.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "harness-test-db-guards",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog-harness/test-db-guards.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "harness-fake-transport",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog-harness/fake-transport.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "harness-fake-catalog-server",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog-harness/fake-catalog-server.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t03-catalog-contract",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-contract.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t06-catalog-cursor",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-cursor.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t06-catalog-queries",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-queries.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t06-catalog-routes",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-routes.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t07-metadata-rules",
+          "cmd": [
+            "node",
+            "--experimental-strip-types",
+            "--no-warnings",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-metadata-rules.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t07-catalog-commands",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-commands.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t10-catalog-worker",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t11-transport-gateway",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-gateway.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t14-catalog-playback",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-playback.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t15-catalog-purge",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-purge.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-catalog-fence",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-fence.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t17-catalog-native-cli",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-native-cli.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        }
+      ]
+    },
+    "faults": {
+      "status": "active",
+      "network": "deny",
+      "requires": [],
+      "cases": [
+        {
+          "id": "fake-transport-faults",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog-harness/fake-transport.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t10-catalog-worker-faults",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
+          "id": "t11-transport-contract-faults",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-contract.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny",
+          "timeout_ms": 300000
+        },
+        {
+          "id": "t15-catalog-purge-faults",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-purge.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        }
+      ]
+    },
+    "integration": {
+      "status": "active",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "test-db-lifecycle",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog-harness/catalog-test-db.integration.cjs"
+          ],
+          "kind": "node-test"
+        }
+      ]
+    },
+    "web": {
+      "status": "active",
+      "network": "loopback",
+      "requires": [
+        "chrome"
+      ],
+      "cases": [
+        {
+          "id": "v01b-browser-harness",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-browser-harness.mjs"
+          ],
+          "kind": "plain"
+        }
+      ]
+    },
+    "perf": {
+      "status": "pending",
+      "owner": "T20"
+    },
+    "T03": {
+      "status": "active",
+      "owner": "T03",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t03-catalog-contract",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-contract.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-migration-runner",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-migration-runner.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-schema-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-schema.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 300000
+        }
+      ]
+    },
+    "T05": {
+      "status": "active",
+      "owner": "T05",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-authority-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-authority.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 600000
+        }
+      ]
+    },
+    "T06": {
+      "status": "active",
+      "owner": "T06",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t06-catalog-cursor",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-cursor.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t06-catalog-queries",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-queries.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t06-catalog-routes",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-routes.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-queries-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-queries.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T07": {
+      "status": "active",
+      "owner": "T07",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t07-metadata-rules",
+          "cmd": [
+            "node",
+            "--experimental-strip-types",
+            "--no-warnings",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-metadata-rules.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t07-catalog-commands",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-commands.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t06-catalog-routes",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-routes.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-commands-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-commands.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-artwork-unlink-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-artwork-unlink.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T08": {
+      "status": "active",
+      "owner": "T08",
+      "network": "loopback",
+      "requires": [],
+      "note": "Cliente de lectura en fixture (V03/V04/V05 + C(T08)); la composición de producto sigue apagada hasta T16. Requiere node_modules raíz (vitest, typescript). vitest abre un canal IPC/loopback interno: política loopback, ningún host externo.",
+      "cases": [
+        {
+          "id": "t08-catalog-geometry",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogRowGeometry.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-navigation",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogNavigation.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-api",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogApi.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-store",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogQueryStore.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-gallery",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogVirtualGallery.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        }
+      ]
+    },
+    "T09": {
+      "status": "active",
+      "owner": "T09",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t06-catalog-routes",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-routes.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-operations-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-operations.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T10": {
+      "status": "active",
+      "owner": "T10",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "cases": [
+        {
+          "id": "t10-catalog-worker",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-worker-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-worker.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T11": {
+      "status": "active",
+      "owner": "T11",
+      "network": "deny",
+      "requires": [],
+      "note": "Fase A/MEDIA con fakes: adaptador del gateway (§8.6) y harness scripts/catalog-transport-contract.cjs. La fase B (sandbox real) queda en STOP-APPROVAL; nunca se ejecuta en CI.",
+      "cases": [
+        {
+          "id": "t11-transport-gateway",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-gateway.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t11-transport-sandbox-offline",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-sandbox.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t11-transport-contract",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-contract.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny",
+          "timeout_ms": 300000
+        }
+      ]
+    },
+    "T12": {
+      "status": "active",
+      "owner": "T12",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Transferencias por capacidad (§8.6) y PROJECT por MASTER sobre operaciones C7, con el servidor Telegram FAKE detrás del adaptador real del gateway (T11) y el worker real (T10). Encargo explícito con fakes: etiqueta FAKE, T11 sigue NO PASS y G2 NOT_PROVEN. Requiere node_modules raíz (vitest, typescript) para el cliente.",
+      "cases": [
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t11-transport-gateway",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-gateway.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t12-project-master-message",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/project-master-message.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "t12-catalog-transfer-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogTransfer.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "catalog-prefix-packs-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-prefix-packs.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 1500000
+        },
+        {
+          "id": "e71-prefix-streaming-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogPrefixStreaming.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e75-main-pack-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogMainPack.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e78-resumable-upload-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogResumable.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e79-artwork-cache-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogArtworkCache.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "e70-catalog-direct-unit",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-direct.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "e70-catalog-direct-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogDirect.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t12-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        },
+        {
+          "id": "catalog-transport-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-transport.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-direct-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-direct.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T13": {
+      "status": "active",
+      "owner": "T13",
+      "network": "loopback",
+      "requires": [],
+      "note": "Cliente de mutaciones sin INDEX y V07-A (InteractionStore) con doble de comandos a nivel fetch; la composición de producto sigue apagada (T16). Encargo con fakes: etiqueta FAKE; sin activación de Gallery. Requiere node_modules raíz (vitest, typescript); vitest abre IPC loopback.",
+      "cases": [
+        {
+          "id": "t13-catalog-mutations",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogMutations.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t13-catalog-interaction-store",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogInteractionStore.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t12-catalog-transfer-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogTransfer.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t08-catalog-api",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogApi.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t13-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        }
+      ]
+    },
+    "T14": {
+      "status": "active",
+      "owner": "T14",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Rondas Shuffle persistidas (r4 §5), vecinos de orden (I2), acceso a medios por gateway con Range (§8.6) y cliente (sesión musical V06, media manager con refcount, artwork LRU). Fakes: etiqueta FAKE; N=100k/1M se miden en T20. Requiere node_modules raíz (vitest, typescript).",
+      "cases": [
+        {
+          "id": "t14-catalog-playback",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-playback.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t11-transport-gateway",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-transport-gateway.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "t14-catalog-media-client",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogMediaClient.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t14-catalog-playback-session",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogPlaybackSession.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t14-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        },
+        {
+          "id": "catalog-playback-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-playback.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T15": {
+      "status": "active",
+      "owner": "T15",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Purge durable C9 con journal externo (memoria/disco), gateway fake de borrado + prueba de ausencia autorizada, worker. Cleanup real apagado: flags de biblioteca fijados en el laboratorio. Etiqueta FAKE.",
+      "cases": [
+        {
+          "id": "t15-catalog-purge",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-purge.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t10-catalog-worker",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-worker.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-purge-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-purge.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T16": {
+      "status": "active",
+      "owner": "T16",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Capa 2 (session/start exige catalog-v1 con el flag encendido), guarda de compatibilidad hacia delante, montaje de todos los módulos con gateway nulo (fail-closed) y composición por autoridad en el cliente (V08 simplificada). Dos bibliotecas (nativa + RESET_REQUIRED + flag apagado). V09 requiere navegador real: fuera de este CI. Etiqueta FAKE.",
+      "cases": [
+        {
+          "id": "t16-catalog-fence",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-fence.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "loopback"
+        },
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "t16-gateway-runtime",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-gateway-runtime.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t16-name-uniqueness",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-name-uniqueness.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t16-add-beat-rename",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/addBeatRename.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-import-pick-drop",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/importPickDrop.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-playbar-next-recovery",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/playbarNextRecovery.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-audio-replace",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogAudioReplace.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-drop-routing",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogDropRouting.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-ui-polish",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/uiPolish.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-audit-fixes",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogAuditFixes.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-review-project",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogReviewProject.test.ts"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-catalog-composition",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-vitest.mjs",
+            "tests/component-dom/catalogLibraryComposition.test.tsx"
+          ],
+          "kind": "plain",
+          "network": "loopback"
+        },
+        {
+          "id": "t16-typecheck",
+          "cmd": [
+            "node",
+            "tests/catalog-harness/run-typecheck.mjs"
+          ],
+          "kind": "plain",
+          "network": "loopback",
+          "timeout_ms": 600000
+        },
+        {
+          "id": "catalog-fence-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-fence.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T17": {
+      "status": "active",
+      "owner": "T17",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "CLI nativa (NATIVO r2.1 §3.1, §4): inspect solo lectura, activate/rebind-chat/reset dry-run por defecto; precondiciones §3.1/§5.0 verificables en SQL; reset nunca vacía una biblioteca nativa ni borra filas legacy/medios. FAKE: sin Telegram ni entorno real.",
+      "cases": [
+        {
+          "id": "t17-catalog-native-cli",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-native-cli.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t05-catalog-authority",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-authority.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "postgres-schema-contract",
+          "cmd": [
+            "node",
+            "cloud-server/tests/postgres-schema.test.cjs"
+          ],
+          "kind": "plain",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-native-cli-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-native-cli.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T18": {
+      "status": "pending",
+      "owner": "T18"
+    },
+    "T19": {
+      "status": "active",
+      "owner": "T19",
+      "network": "descriptor",
+      "requires": [
+        "catalog-test-db"
+      ],
+      "note": "Backup/restore PostgreSQL (NATIVO r2.1 §11): snapshot verificable, restore aislado con restore_hold + época+1 + workers apagados, reconciliación del journal externo, verificación de bytes, backup corrupto/ausente, proveedor inaccesible, STOP-DATA previo a activación. Etiqueta FAKE/LAB; NO es G4.",
+      "cases": [
+        {
+          "id": "t19-catalog-backup",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-backup.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t19-catalog-backup-infra",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-backup-infra.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "g3-preflight",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/g3-preflight.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t09-catalog-operations",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-operations.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "t03-catalog-contract",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-contract.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
+          "id": "catalog-backup-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-backup.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-backup-scale-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-backup-scale.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-facets-delta-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-facets-delta.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-search-text-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-search-text.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
+        }
+      ]
+    },
+    "T20": {
+      "status": "pending",
+      "owner": "T20"
+    },
+    "T21": {
+      "status": "pending",
+      "owner": "T21"
+    },
+    "all-local": {
+      "status": "aggregate",
+      "includes": [
+        "unit",
+        "faults",
+        "integration",
+        "web"
+      ]
+    }
+  }
+}

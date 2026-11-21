@@ -1,0 +1,68 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-g1",
+      "sort_order": 0,
+      "name": "Beat b-g1",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "master": {
+        "telegram_file_id": "direct:1100",
+        "telegram_message_id": 1100
+      }
+    }
+  ],
+  "trash": [
+    {
+      "trash_id": "t-g",
+      "trashed_at": 1762000000,
+      "beat": {
+        "id": "b-g2",
+        "sort_order": 0,
+        "name": "Beat b-g2",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0,
+        "master": {
+          "telegram_file_id": "direct:1101",
+          "telegram_message_id": 1101
+        },
+        "project": {
+          "manifest": {
+            "filename": "p.zip",
+            "parts": [
+              {
+                "index": 0,
+                "telegram_file_id": "direct:1102",
+                "telegram_message_id": 1102
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "garbage": [
+    {
+      "message_id": 1100,
+      "reason": "replaced",
+      "marked_at": 1762000000
+    },
+    {
+      "message_id": 1102,
+      "reason": "replaced",
+      "marked_at": "2026-11-01T00:00:00Z"
+    },
+    {
+      "message_id": 1199,
+      "reason": "replaced",
+      "marked_at": 1762000001
+    }
+  ]
+}

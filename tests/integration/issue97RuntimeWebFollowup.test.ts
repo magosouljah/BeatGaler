@@ -99,9 +99,13 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(accountGate).not.toContain("optimisticRememberedSession");
   });
 
-  it("returns the first MSE URL before Direct stream admission and dispatches remembered Direct before React mount", () => {
+  it("returns the first MSE URL before stream admission and mounts remembered Direct behind Gallery authentication", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
+    const experience = source("src/app/WebExperience.tsx");
+    const galleryEntry = source("src/app/WebGalleryEntry.tsx");
+    const galleryWorkspace = source("src/app/WebGalleryWorkspace.tsx");
+    const experienceGate = source("src/features/auth/AuthExperienceGate.tsx");
     const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
     const adapter = source("src/platform/webAdapter.ts");
     const accountGate = source("src/components/AccountGate.tsx");
@@ -116,11 +120,17 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(playback).toContain("return Promise.resolve({ url, completed });");
     expect(playback).not.toContain("private async prepareMediaSource");
 
-    expect(main).toContain('import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";');
-    expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
+    expect(main).toContain('import WebExperience from "./app/WebExperience";');
+    expect(main).not.toContain("preconnectRememberedWebDirect();");
     expect(main).not.toContain('void import("./features/playback/webStartupPlaybackCoordinator").then(');
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(main).not.toContain("new WebGalerCloudTransport");
+
+    expect(experience).toContain('path === "/" ? <LandingPage />');
+    expect(galleryEntry).toContain('<AuthExperienceGate initialPhase={initialPhase} onAuthenticated={accountReady}>');
+    expect(experienceGate).toContain('if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;');
+    expect(galleryWorkspace).toContain("useEffect(() => { preconnectRememberedWebDirect(); }, []);");
+    expect(galleryWorkspace).toContain("<App />");
 
     expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
     expect(rememberedPreconnect).toContain("hasRememberedWebSessionMarker()");

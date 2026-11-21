@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import type { Beat } from "../types";
 import { Artwork } from "./ui";
@@ -18,6 +18,8 @@ import speaker1FillPng from "../assets/player-icons/speaker.1.fill.png";
 import speaker2FillPng from "../assets/player-icons/speaker.2.fill.png";
 import speaker3FillPng from "../assets/player-icons/speaker.3.fill.png";
 import { playerMetaLabel, playerToggleTitle } from "../features/components/componentLogic";
+
+import "./player.css";
 
 interface Props {
   beat: Beat;
@@ -119,7 +121,7 @@ function controlButtonStyle(active = false, size = 30): React.CSSProperties {
       ? "rgba(255,255,255,0.12)"
       : "rgba(255,255,255,0.04)",
     color: active ? "#ffffff" : "rgba(255,255,255,0.45)",
-    transition: "all 0.2s ease-in-out",
+    transition: "background-color var(--playbar-fast) var(--playbar-ease), transform var(--playbar-fast) var(--playbar-ease), opacity var(--playbar-fast) var(--playbar-ease)",
     transform: "scale(1)",
   };
 }
@@ -137,15 +139,17 @@ function transportButtonStyle(size = 28): React.CSSProperties {
     padding: 0,
     background: "transparent",
     color: "rgba(255,255,255,0.86)",
-    transition: "all 0.18s ease-in-out",
+    transition: "transform var(--playbar-fast) var(--playbar-ease), opacity var(--playbar-fast) var(--playbar-ease)",
     transform: "scale(1)",
   };
 }
 
 function iconButtonStateHandlers<T extends HTMLElement>(on = true) {
+  const canScale = () => window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   return {
     onMouseEnter: (e: React.MouseEvent<T>) => {
-      e.currentTarget.style.transform = on ? "scale(1.1)" : "scale(1)";
+      e.currentTarget.style.transform = on && canScale() ? "scale(1.1)" : "scale(1)";
       e.currentTarget.style.opacity = "1";
     },
     onMouseLeave: (e: React.MouseEvent<T>) => {
@@ -153,10 +157,10 @@ function iconButtonStateHandlers<T extends HTMLElement>(on = true) {
       e.currentTarget.style.opacity = "1";
     },
     onMouseDown: (e: React.MouseEvent<T>) => {
-      e.currentTarget.style.transform = "scale(0.95)";
+      e.currentTarget.style.transform = canScale() ? "scale(0.95)" : "scale(1)";
     },
     onMouseUp: (e: React.MouseEvent<T>) => {
-      e.currentTarget.style.transform = "scale(1.1)";
+      e.currentTarget.style.transform = on && canScale() ? "scale(1.1)" : "scale(1)";
     },
   };
 }
@@ -345,7 +349,11 @@ export default function Player({
   onDelete,
   onAddToQueue,
 }: Props) {
-  const [viewportWidth, setViewportWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1920);
+  const [viewportWidth, setViewportWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1100);
+  // FLIP only at the mode boundary: no trailing animations during live resizing.
+  const measuredWidthRef = useRef<number | null>(null);
+  const seekFromRef = useRef<{ left: number; top: number; width: number } | null>(null);
+  const seekAnimationRef = useRef<Animation | null>(null);
   const [showVolume, setShowVolume] = useState(false);
   const [showEmptyQueueHint, setShowEmptyQueueHint] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -364,11 +372,62 @@ export default function Player({
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
-  useEffect(() => {
-    const handleResize = () => setViewportWidth(window.innerWidth);
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+  useLayoutEffect(() => {
+    // Measure the dock itself, using the same breakpoints as Studio.
+    const host = rootRef.current?.parentElement;
+    const update = () => {
+      const width = host?.getBoundingClientRect().width ?? window.innerWidth;
+      const before = measuredWidthRef.current;
+      if (before !== null && (before <= 760) !== (width <= 760)) {
+        // Snapshot the visible bar before the breakpoint reflow, including interruptions.
+        const rect = scrubberRef.current?.getBoundingClientRect();
+        seekFromRef.current = rect ? { left: rect.left, top: rect.top, width: rect.width } : null;
+        seekAnimationRef.current?.cancel();
+        seekAnimationRef.current = null;
+      }
+      measuredWidthRef.current = width;
+      // Only rerender when a visual breakpoint changes. CSS handles every in-between pixel.
+      setViewportWidth(previous => (
+        (previous < 1100) === (width < 1100) &&
+        (previous < 860) === (width < 860) &&
+        (previous < 700) === (width < 700) &&
+        (previous <= 760) === (width <= 760) &&
+        (previous < 380) === (width < 380)
+      ) ? previous : width);
+    };
+    update();
+    if (host && typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(update);
+      observer.observe(host);
+      return () => observer.disconnect();
+    }
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
   }, []);
+
+  const narrowSeekLayout = viewportWidth <= 760;
+  useLayoutEffect(() => {
+    const from = seekFromRef.current;
+    seekFromRef.current = null;
+    const seek = scrubberRef.current;
+    if (!seek || !from || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const to = seek.getBoundingClientRect();
+    if (!to.width || !from.width) return;
+    const dx = from.left - to.left;
+    const dy = from.top - to.top;
+    const scaleX = from.width / to.width;
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(scaleX - 1) < 0.005) return;
+    // FLIP: only transform, while the real left/right geometry already matches the canvas.
+    seekAnimationRef.current = seek.animate(
+      [
+        { transform: `translate3d(${dx}px, ${dy}px, 0) scaleX(${scaleX})` },
+        { transform: "translate3d(0, 0, 0) scaleX(1)" },
+      ],
+      { duration: 180, easing: getComputedStyle(seek).getPropertyValue("--playbar-ease").trim() || "ease-out" },
+    );
+  }, [narrowSeekLayout]);
+
+  useEffect(() => () => seekAnimationRef.current?.cancel(), []);
 
   useEffect(() => {
     const onDocMouseDown = (event: MouseEvent) => {
@@ -459,19 +518,19 @@ export default function Player({
     bar.setPointerCapture?.(pointerId);
   };
 
-  const isCompact = viewportWidth < 1100;
   const isSmall = viewportWidth < 860;
   const isTiny = viewportWidth < 700;
-  const playerHeight = isSmall ? 62 : 68;
+  const playerHeight = 68; // Same height at every width.
+  const isNarrow = narrowSeekLayout;
+  const isMicro = viewportWidth < 380;
   const playerPadding = isTiny ? 10 : isSmall ? 14 : 18;
   const controlsGap = isTiny ? 5 : isSmall ? 7 : 10;
   const rightGap = isTiny ? 7 : 10;
-  const playerWidth = `min(${isCompact ? 980 : 1100}px, calc(100vw - ${isTiny ? 16 : 24}px))`;
   const transportSize = 23;
   const playPauseSize = 30;
   const utilityBtnSize = isTiny ? 26 : 30;
-  const infoGap = isTiny ? 8 : 12;
-  const artworkSize = isTiny ? 42 : 48;
+  const infoGap = 12;
+  const artworkSize = 48; // Stable footprint during the cover morph.
   const volContainerW = isTiny ? 32 : 36;
   const volContainerH = isTiny ? 150 : 168;
   const volPadY = 14;
@@ -480,14 +539,14 @@ export default function Player({
   const volThumbBottom = volume * (volTrackH - volThumbD);
 
   return (
+    <div className="bg-playbar-frame">
     <div
       ref={rootRef}
+      className="bg-playbar"
+      data-layout={isMicro ? "micro" : isNarrow ? "narrow" : "wide"}
       style={{
-        position: "fixed",
-        left: "50%",
-        transform: "translateX(-50%)",
-        bottom: 24,
-        width: playerWidth,
+        position: "relative",
+        width: "100%",
         height: playerHeight,
         background: "rgba(20, 20, 20, 0.75)",
         backdropFilter: "blur(20px)",
@@ -497,13 +556,14 @@ export default function Player({
         zIndex: 90,
         display: "flex",
         alignItems: "center",
-        padding: `10px ${playerPadding}px`,
+        padding: `10px ${playerPadding}px`, // No jump in vertical alignment at the breakpoint.
         gap: isTiny ? 10 : 14,
         overflow: "visible",
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: controlsGap, flexShrink: 0 }}>
         <button
+          className="bg-playbar-optional"
           onClick={onToggleShuffle}
           style={controlButtonStyle(shuffleEnabled, utilityBtnSize)}
           title="Shuffle"
@@ -534,6 +594,7 @@ export default function Player({
         </div>
 
         <button
+          className="bg-playbar-optional"
           onClick={onCycleRepeat}
           style={controlButtonStyle(repeatMode !== "off", utilityBtnSize)}
           title="Repeat"
@@ -543,13 +604,18 @@ export default function Player({
         </button>
       </div>
 
-      {/* CENTER: Now Playing + Scrubber */}
-      <div style={{ display: "flex", alignItems: "center", gap: infoGap, flex: 1, minWidth: 0 }}>
-        <Artwork beat={beat} size={artworkSize} playing={false} />
+      {/* CENTER: keep the cover's layout slot fixed; scale/move the image together. */}
+      <div style={{ display: "flex", alignItems: "center", gap: infoGap, flex: 1, minWidth: 0, position: "relative" }}>
+        <div className={isNarrow ? "bg-playbar-cover-slot is-condensed" : "bg-playbar-cover-slot"}>
+          <div><Artwork beat={beat} size={artworkSize} playing={false} /></div>
+        </div>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
-          {/* Beat info + More button row */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 0, paddingTop: 5 }}>
+          {/* Move only the text row up, reserving a readable 11-12px gap to seek. */}
+          <div className="bg-playbar-metadata-row" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <div
+              className={`bg-playbar-text-content${isNarrow ? " is-condensed" : ""}`}
+              style={{ flex: 1, minWidth: 0, paddingBottom: 6 }}
+            >
               <div style={{ fontSize: isTiny ? 12 : 14, fontWeight: 600, color: "#FFFFFF", lineHeight: "1.2", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {beat.name}
               </div>
@@ -558,6 +624,7 @@ export default function Player({
               </div>
             </div>
               <button
+                className="bg-playbar-optional"
                 ref={moreButtonRef}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -580,14 +647,22 @@ export default function Player({
           <div
             ref={scrubberRef}
             data-testid="player-scrubber"
+            className="bg-playbar-seek"
             onPointerEnter={() => setHoveringScrubber(true)}
             onPointerLeave={() => setHoveringScrubber(false)}
             onPointerDown={startProgressDrag}
             style={{
-              marginTop: 6,
-              paddingTop: 6, paddingBottom: 6, marginBottom: -6, // wider invisible hit area, same visual position
+              marginTop: 0,
+              paddingTop: 5,
+              paddingBottom: 5,
+              marginBottom: 0,
               cursor: "pointer",
-              position: "relative",
+              position: "absolute",
+              // 6px inset matches the visible 36px cover inside its 48px slot.
+              left: isNarrow ? 6 : artworkSize + infoGap,
+              right: 0,
+              bottom: -6,
+              transformOrigin: "left center",
               touchAction: "none",
               userSelect: "none",
             }}
@@ -599,7 +674,7 @@ export default function Player({
                   width: `${Math.max(0, Math.min(1, isDraggingProgress ? dragProgress : progress)) * 100}%`,
                   background: "#FFFFFF",
                   borderRadius: 2,
-                  transition: isDraggingProgress ? "none" : "width 0.1s linear",
+                  transition: isDraggingProgress ? "none" : "width var(--playbar-fast) linear",
                 }}
               />
               <div
@@ -625,10 +700,11 @@ export default function Player({
 
       {/* RIGHT: Auxiliary Controls */}
       <div style={{ display: "flex", alignItems: "center", gap: rightGap, flexShrink: 0, position: "relative" }}>
-        {canAddBeat && <button onClick={onAddBeat} style={controlButtonStyle(false, utilityBtnSize)} title="Add beat" {...iconButtonStateHandlers<HTMLButtonElement>()}>
+        {canAddBeat && <button className="bg-playbar-optional" onClick={onAddBeat} style={controlButtonStyle(false, utilityBtnSize)} title="Add beat" {...iconButtonStateHandlers<HTMLButtonElement>()}>
           <PlusIcon />
         </button>}
         <button
+          className="bg-playbar-optional"
           ref={queueButtonRef}
           onClick={() => {
             setShowVolume(false);
@@ -799,7 +875,7 @@ export default function Player({
                   color: "#FFFFFF",
                   textAlign: "left",
                   cursor: "pointer",
-                  transition: "all 0.2s ease-in-out",
+                  transition: "background-color var(--playbar-fast) var(--playbar-ease), transform var(--playbar-fast) var(--playbar-ease), opacity var(--playbar-fast) var(--playbar-ease)",
                 }}
               >
                 <Artwork beat={item} size={32} playing={false} />
@@ -808,7 +884,7 @@ export default function Player({
                     {item.name}
                   </div>
                   <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)" }}>
-                    {item.bpm}{item.bpm && item.key ? " • " : ""}{item.key}
+                    {item.bpm}{item.bpm && item.key ? "  " : ""}{item.key}
                   </div>
                 </div>
               </button>
@@ -851,5 +927,7 @@ export default function Player({
         />
       )}
     </div>
+    </div>
   );
 }
+

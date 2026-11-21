@@ -1,0 +1,41 @@
+{
+  "index": {
+    "schema": "beatgaler.telegram.library",
+    "version": 2,
+    "updated_at": 1762560000,
+    "beats": [
+      {
+        "id": "b-x",
+        "sort_order": 0,
+        "name": "Beat b-x",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0
+      },
+      {
+        "id": "b-y",
+        "sort_order": 1,
+        "name": "Beat b-y",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0
+      }
+    ],
+    "trash": [],
+    "deleted": [
+      {
+        "beat_id": "b-y",
+        "deleted_at": 1761000000
+      }
+    ]
+  },
+  "sql_tombstones": [
+    {
+      "beat_id": "b-x",
+      "state": "CONFIRMED",
+      "confirmed_at": 1762000000
+    }
+  ]
+}

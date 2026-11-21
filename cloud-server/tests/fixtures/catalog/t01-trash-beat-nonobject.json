@@ -1,0 +1,30 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [],
+  "trash": [
+    {
+      "trash_id": "t-s",
+      "trashed_at": 1,
+      "beat": "b-str"
+    },
+    {
+      "trash_id": "t-n",
+      "trashed_at": 1,
+      "beat": null
+    },
+    {
+      "trash_id": "t-a",
+      "trashed_at": 1,
+      "beat": [
+        "b-arr"
+      ]
+    },
+    {
+      "trash_id": "t-num",
+      "trashed_at": 1,
+      "beat": 7
+    }
+  ]
+}

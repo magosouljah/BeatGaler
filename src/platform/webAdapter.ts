@@ -1,3 +1,4 @@
+import { isCatalogClientEnabled } from "../features/library/catalog/catalogComposition";
 import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import { getActiveWebAccountId } from "../features/auth/activeWebAccount";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
@@ -43,6 +44,9 @@ function isRecoverablePlaybackRouteError(error: unknown): boolean { const code =
 function prewarmAuthenticatedWebTransport(): void {
   if (typeof window === "undefined" || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
   if (!getActiveWebAccountId()) return;
+  // T16/V08: con el catálogo nativo activo (VITE_CATALOG_API_ENABLED) no existe transporte legacy que precalentar: ninguna petición
+  // a /transport/session/start ni Direct desde la rama POSTGRES (la capa 2 del servidor lo rechazaría con 410 de todos modos).
+  if (isCatalogClientEnabled()) { playTrace("ADAPTER_TRANSPORT_PREWARM_SKIPPED_CATALOG"); return; }
   playTrace("ADAPTER_TRANSPORT_PREWARM_BEGIN");
   void resolveWebCoordinator().then(coordinator => coordinator.start()).then(() => playTrace("ADAPTER_TRANSPORT_PREWARM_DISPATCHED"), error => playTrace("ADAPTER_TRANSPORT_PREWARM_DEFERRED", { error_name: error instanceof Error ? error.name : "unknown" }));
 }

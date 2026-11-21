@@ -54,7 +54,7 @@ function sendJson(res, status, error, extra = {}) {
 }
 
 function createHttpContainment(options = {}) {
-  const dataDir = options.dataDir || __dirname;
+  const dataDir = options.dataDir || require("./state-dir").STATE_DIR;
   const env = options.env || process.env;
   const now = options.now || (() => Date.now());
   const accountsFile = path.join(dataDir, "accounts-data.json");
@@ -88,7 +88,15 @@ function createHttpContainment(options = {}) {
   }
 
   function linkedAccount(installationId) {
-    return cloudData().linkedAccounts?.[String(installationId || "")] || null;
+    const link = cloudData().linkedAccounts?.[String(installationId || "")] || null;
+    if (!link) return null;
+    // An owner-approved SQL account reset can leave old installation bindings
+    // in the persistent compatibility snapshot. Those records do not establish
+    // ownership once their BeatGaler account no longer exists. Never let an
+    // orphaned link block new X/Google sign-in or an installation claim.
+    const ownerId = String(link.beatgalerAccountId || "");
+    if (!ownerId || !(accountsData().users || []).some(user => String(user?.id || "") === ownerId)) return null;
+    return link;
   }
 
   function findLoginUser(req) {
@@ -215,11 +223,12 @@ function createHttpContainment(options = {}) {
     next();
   }
 
-  function rememberOAuthGuard(state, flowId, installationId, expectedOwnerId) {
+  function rememberOAuthGuard(state, flowId, installationId, expectedOwnerId, existingProviderLogin = false) {
     const bindings = authzData();
     const record = {
       installationId: String(installationId),
       expectedOwnerId: expectedOwnerId ? String(expectedOwnerId) : null,
+      existingProviderLogin: Boolean(existingProviderLogin),
       flowId: String(flowId || ""),
       state: String(state || ""),
       expiresAt: now() + OAUTH_GUARD_TTL_MS,
@@ -240,6 +249,7 @@ function createHttpContainment(options = {}) {
     const installationId = String(req.body?.beatgalerUserId || "").trim();
     const current = linkedAccount(installationId);
     let expectedOwnerId = null;
+    let existingProviderLogin = false;
     const token = bearerToken(req);
     if (token) {
       const auth = authenticate(req, res);
@@ -247,14 +257,22 @@ function createHttpContainment(options = {}) {
       expectedOwnerId = String(auth.user.id);
       if (current && String(current.beatgalerAccountId || "") !== expectedOwnerId) return sendJson(res, 403, "This installation belongs to another BeatGaler account.");
     } else if (current) {
-      return sendJson(res, 403, "This installation is already linked. Resume its authenticated session before changing sign-in providers.");
+      // A returning user's previous session may have expired. Let the same
+      // provider prove account ownership again, never a different provider.
+      const provider = String(req.body?.provider || "").trim().toLowerCase();
+      const owner = (accountsData().users || []).find(u => String(u?.id || "") === String(current.beatgalerAccountId || ""));
+      if (!owner || !owner.providers?.[provider]?.id) {
+        return sendJson(res, 403, "This installation is already linked. Sign in using its connected provider.");
+      }
+      expectedOwnerId = String(owner.id);
+      existingProviderLogin = true;
     }
     const originalJson = res.json.bind(res);
     res.json = payload => {
       if (Number(res.statusCode || 200) < 300 && payload?.authorization_url && payload?.flow_id && installationId) {
         try {
           const state = new URL(payload.authorization_url).searchParams.get("state");
-          if (state) rememberOAuthGuard(state, payload.flow_id, installationId, expectedOwnerId);
+          if (state) rememberOAuthGuard(state, payload.flow_id, installationId, expectedOwnerId, existingProviderLogin);
         } catch {}
       }
       return originalJson(payload);
@@ -278,6 +296,11 @@ function createHttpContainment(options = {}) {
     } else if (current) {
       markOAuthFlowBlocked(guard.flowId);
       return res.status(403).send("This BeatGaler installation was claimed during sign-in. Start again.");
+    }
+    // Secure re-login: OAuth provider identity MUST map to the same owner.
+    // The actual identity is not known until the provider callback completes.
+    if (guard.expectedOwnerId && guard.existingProviderLogin) {
+      req.beatgalerOAuthExpectedOwnerId = String(guard.expectedOwnerId);
     }
     if (!current && !(await reserveInstallationClaim(res, guard.installationId, guard.expectedOwnerId || `oauth:${guard.flowId}`))) {
       markOAuthFlowBlocked(guard.flowId);

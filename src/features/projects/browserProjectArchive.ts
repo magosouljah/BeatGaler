@@ -37,6 +37,7 @@ export async function prepareBrowserProjectArchive(
   beatName: string,
   incoming: File,
   existingProject: File | null,
+  options: { sameTypeOnly?: boolean } = {},
 ): Promise<PreparedBrowserProject> {
   const extension = projectExtensionFromName(incoming.name);
   if (extension === "zip") {
@@ -49,7 +50,12 @@ export async function prepareBrowserProjectArchive(
   if (existingNames.length > MAX_PROJECT_ZIP_ENTRIES) throw new Error("The PROJECT ZIP contains too many files.");
 
   for (const name of existingNames) {
-    if (isBackupEntry(name) || isDawEntry(name)) zip.remove(name);
+    // Flujo anterior (por defecto): se quitan TODOS los archivos de DAW y las carpetas Backup. `sameTypeOnly` (catálogo PostgreSQL, decisión del
+    // propietario): solo se reemplazan los archivos de DAW del MISMO tipo que el nuevo; los demás DAW, samples, backups y resto se conservan.
+    const remove = options.sameTypeOnly
+      ? normalizedParts(name).some(part => projectExtensionFromName(part) === extension)
+      : isBackupEntry(name) || isDawEntry(name);
+    if (remove) zip.remove(name);
   }
   zip.file(incoming.name, await readBlobAsArrayBuffer(incoming));
 

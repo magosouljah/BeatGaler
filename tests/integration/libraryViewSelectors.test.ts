@@ -19,6 +19,7 @@ describe("task 3.3 library/tag selectors", () => {
     expect(selectFilteredAndSortedBeats(beats, "alpha", new Set(), new Set(), "manual").map(b => b.id)).toEqual(["b"]);
     expect(selectFilteredAndSortedBeats(beats, "120", new Set(), new Set(), "manual").map(b => b.id)).toEqual(["c"]);
     expect(selectFilteredAndSortedBeats(beats, "gm", new Set(), new Set(), "manual").map(b => b.id)).toEqual(["c"]);
+    expect(selectFilteredAndSortedBeats(beats, "TRAP", new Set(), new Set(), "manual").map(b => b.id)).toEqual(["a", "d"]);
     expect(selectFilteredAndSortedBeats(beats, "dark", new Set(["dark"]), new Set(["lofi"]), "manual").map(b => b.id)).toEqual(["a"]);
   });
 

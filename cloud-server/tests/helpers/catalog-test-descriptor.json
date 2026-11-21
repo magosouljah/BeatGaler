@@ -1,0 +1,17 @@
+{
+  "schema": "beatgaler.catalog-test-descriptor",
+  "version": 1,
+  "id": "catalog-lab-gha-service-v1",
+  "note": "Instancia dedicada y desechable: service container PostgreSQL del job .github/workflows/catalog-checks.yml (misma imagen que el descriptor G0 run 42416790955). No existe fuera de ese job. Cualquier otra URL se rechaza antes de conectar.",
+  "image": "postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109",
+  "host": "postgres",
+  "port": 5432,
+  "admin_role": "catalog_lab_admin",
+  "admin_database": "catalog_lab_sentinel",
+  "server_version_major": 16,
+  "server_encoding": "UTF8",
+  "datcollate": "en_US.utf8",
+  "sentinel": { "table": "catalog_lab.lab_identity", "column": "instance_id", "instance_id_env": "CATALOG_TEST_INSTANCE_ID", "instance_id_pattern": "^gha-[0-9]+-[0-9]+-[0-9a-f]{32}$" },
+  "test_database_prefix": "beatgaler_catalog_test_",
+  "test_role_prefix": "catalog_test_"
+}

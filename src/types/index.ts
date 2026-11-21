@@ -14,6 +14,8 @@ export interface Beat {
   rating: number;
   image_base64: string | null;
 	image_preview_base64?: string | null;
+  /** Catálogo (E80): el beat TIENE portada y aún se está cargando; la carátula no muestra el fondo procedural de «sin portada». */
+  artwork_pending?: boolean;
   image_crop?: { x: number; y: number; w: number; h: number; unit: 'ratio' } | null;
   has_wav: boolean;
   has_stems: boolean;

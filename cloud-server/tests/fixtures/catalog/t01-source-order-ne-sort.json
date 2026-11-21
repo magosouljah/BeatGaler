@@ -1,0 +1,35 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b3",
+      "sort_order": 2,
+      "name": "Beat b3",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    },
+    {
+      "id": "b1",
+      "sort_order": 0,
+      "name": "Beat b1",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    },
+    {
+      "id": "b2",
+      "sort_order": 0,
+      "name": "Beat b2",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    }
+  ],
+  "trash": []
+}

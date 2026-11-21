@@ -1,0 +1,51 @@
+{
+  "index": {
+    "schema": "beatgaler.telegram.library",
+    "version": 2,
+    "updated_at": 1762560000,
+    "beats": [
+      {
+        "id": "b-t1",
+        "sort_order": 0,
+        "name": "Beat b-t1",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0,
+        "telegram_topic_id": 9001
+      },
+      {
+        "id": "b-t2",
+        "sort_order": 1,
+        "name": "Beat b-t2",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0,
+        "telegram_topic_id": 9002
+      }
+    ],
+    "trash": []
+  },
+  "link": {
+    "installation_id": "inst-A",
+    "user_id": "u-1",
+    "verified_against_vaults": true
+  },
+  "cloud_data": {
+    "beatTopics": {
+      "inst-A:b-t1": {
+        "chatId": -1001234,
+        "messageThreadId": 9001,
+        "beatName": "Beat b-t1",
+        "updatedAt": 1762000000000
+      },
+      "inst-A:b-t2": {
+        "chatId": -1001234,
+        "messageThreadId": 9555,
+        "beatName": "Beat b-t2",
+        "updatedAt": 1762000000000
+      }
+    }
+  }
+}

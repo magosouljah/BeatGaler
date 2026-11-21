@@ -1,9 +1,9 @@
 'use strict';
 
 const { postgresConfig, createPostgresPool } = require('./postgres-runtime-config');
-const { applyMigrations } = require('./postgres-migrations');
+const { applyMigrations, assertKnownMigrations } = require('./postgres-migrations');
 
-async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = applyMigrations,
+async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = applyMigrations, forwardGuard = assertKnownMigrations,
   onMigrationError = () => {} } = {}) {
   const config = postgresConfig(env);
   if (!config.enabled) return Object.freeze({ enabled: false, pool: null, migrations: null });
@@ -12,6 +12,8 @@ async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = 
   const pool = createPostgresPool(Pool, env);
   try {
     const migrations = await apply(pool);
+    // T16: guarda hacia delante tras aplicar lo conocido; una DB "por delante" del binario detiene el arranque.
+    if (typeof forwardGuard === 'function') await forwardGuard(pool);
     return Object.freeze({ enabled: true, pool, migrations });
   } catch (error) {
     try { onMigrationError(); } catch (_) {}

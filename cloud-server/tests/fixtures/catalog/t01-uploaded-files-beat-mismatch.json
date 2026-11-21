@@ -1,0 +1,69 @@
+{
+  "index": {
+    "schema": "beatgaler.telegram.library",
+    "version": 2,
+    "updated_at": 1762560000,
+    "beats": [
+      {
+        "id": "b-u1",
+        "sort_order": 0,
+        "name": "Beat b-u1",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0,
+        "master": {
+          "telegram_file_id": "direct:1400",
+          "telegram_message_id": 1400
+        }
+      },
+      {
+        "id": "b-u2",
+        "sort_order": 1,
+        "name": "Beat b-u2",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0,
+        "master": {
+          "telegram_file_id": "direct:1401",
+          "telegram_message_id": 1401
+        }
+      }
+    ],
+    "trash": []
+  },
+  "link": {
+    "installation_id": "inst-A",
+    "user_id": "u-1",
+    "verified_against_vaults": true
+  },
+  "cloud_data": {
+    "uploadedFiles": {
+      "direct:1400": {
+        "beatgalerUserId": "inst-A",
+        "telegramMessageId": 1400,
+        "filename": "m.wav",
+        "kind": "MASTER",
+        "beatId": "b-u2",
+        "createdAt": 1762000000000
+      },
+      "direct:1401": {
+        "beatgalerUserId": "inst-A",
+        "telegramMessageId": 1401,
+        "filename": "m.wav",
+        "kind": "MASTER",
+        "beatId": "b-u2",
+        "createdAt": 1762000000000
+      },
+      "direct:1402": {
+        "beatgalerUserId": "inst-A",
+        "telegramMessageId": 1402,
+        "filename": "old.wav",
+        "kind": "MASTER",
+        "beatId": "b-u1",
+        "createdAt": 1761000000000
+      }
+    }
+  }
+}

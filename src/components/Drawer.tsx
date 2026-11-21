@@ -26,10 +26,17 @@ interface Props {
   onSaveAll?: (currentUpdated: Beat) => Promise<void> | void;
   isReviewNameTaken?: (name: string, beatId: string) => boolean;
   mutationAllowed?: boolean;
+  /** Límite de caracteres Unicode del nombre (catálogo PostgreSQL: 50). Nunca se recorta: se rechaza el guardado. */
+  maxNameChars?: number;
   onCloudMutationCommit?: (
     updated: Beat,
     options: { syncMetadata: boolean; reason: string },
   ) => Promise<void>;
+  /**
+   * Catálogo PostgreSQL (Gallery POSTGRES): guarda metadatos, portada y archivos pendientes (MASTER/WAV/PROJECT) en UNA mutación del catálogo.
+   * Si se pasa, sustituye a la ruta heredada (INDEX/Desktop). Si falla, el Drawer sigue abierto con los cambios y archivos pendientes.
+   */
+  onCatalogSave?: (input: { original: Beat; updated: Beat; files: PlatformBeatEditFiles; artworkRemoved: boolean; onProgress?: (progress: PlatformCloudCommitProgress) => void }) => Promise<void>;
 }
 
 type PendingFiles = {
@@ -64,7 +71,7 @@ const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] 
   OTHER: { name: "Any file", extensions: ["mp3", "wav", "zip", "flp", "als", "mid", "midi", "txt", "pdf", "png", "jpg", "jpeg"] },
 };
 
-export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit }: Props) {
+export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, onCatalogSave, maxNameChars }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
@@ -83,6 +90,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const isBulk = !!selectedBeats && selectedBeats.length > 1;
   const imgRef = useRef<HTMLInputElement>(null);
   const displayedBeatIdRef = useRef(beat.id);
+  const ratingEditedRef = useRef(false); // E86: el usuario ya eligió estrellas a mano (la hidratación del ID3 no las pisa)
   const [cloudFiles, setCloudFiles] = useState<CloudFileRecord[]>([]);
   const [cloudBusy, setCloudBusy] = useState<string | null>(null);
   const [cloudError, setCloudError] = useState<string | null>(null);
@@ -229,10 +237,13 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         tags: current.tags.length > 0 ? current.tags : beat.tags,
         image_base64: current.image_base64 || beat.image_base64,
         image_preview_base64: current.image_preview_base64 || beat.image_preview_base64,
+        // E86: las estrellas del ID3 llegan al hidratar la revisión; si el usuario ya las tocó, prevalece su elección.
+        rating: reviewInfo && !ratingEditedRef.current ? (beat.rating || current.rating) : current.rating,
       }));
       return;
     }
     displayedBeatIdRef.current = beat.id;
+    ratingEditedRef.current = false;
     setData({ ...beat });
     setPending({});
     setPendingCloud({});
@@ -269,6 +280,10 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       return;
     }
     const requestedName = data.name.trim();
+    if (maxNameChars !== undefined && Array.from(requestedName).length > maxNameChars) {
+      setError(`Máximo ${maxNameChars} caracteres en el nombre (tiene ${Array.from(requestedName).length}).`);
+      return;
+    }
     if (reviewInfo && isReviewNameTaken?.(requestedName, beat.id)) {
       setDuplicateNameError(true);
       setError(`A beat named "${requestedName}" already exists. Change the name to continue.`);
@@ -304,6 +319,15 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           await onSaved(updated, progress => setSaveProgress(progress));
           if (closeAfterSave) onClose();
         }
+        return;
+      }
+      // §6.1-1/2/3: en el catálogo todo cambio (metadatos, archivos elegidos, portada nueva o quitada) va a una sola mutación SQL; antes los
+      // archivos de esta sección se ignoraban y un beat sin MASTER se «guardaba» sin enviar nada.
+      if (onCatalogSave && !reviewInfo && !isBulk) {
+        await onCatalogSave({ original: beat, updated: validatedData, files: pendingWebEdit, artworkRemoved: Boolean(beat.image_base64) && !validatedData.image_base64, onProgress: progress => setSaveProgress(progress) });
+        setPendingWebEdit({});
+        await onSaved(validatedData);
+        if (closeAfterSave) onClose();
         return;
       }
       if (platform.capabilities.browserCloudEditing && !reviewInfo && !isBulk && !onCloudMutationCommit) {
@@ -500,7 +524,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setSaving(false);
       setSaveProgress(null);
     }
-  }, [beat, data, pending, pendingCloud, pendingWebEdit, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit]);
+  }, [beat, data, pending, pendingCloud, pendingWebEdit, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit, onCatalogSave]);
 
   useEffect(() => {
     if (!isEdit && !isBulk) return;
@@ -778,7 +802,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             </div> : <div style={{ fontWeight: 500, fontSize: 19, color: "#fff" }}>{data.name}</div>}
           </div>}
 
-          <div style={{ marginTop: 14 }}><BulkCheck field="rating" label="RATING" /><Stars n={data.rating} onChange={(isEdit || isBulk) ? v => setData(d => ({ ...d, rating: v })) : undefined} /></div>
+          <div style={{ marginTop: 14 }}><BulkCheck field="rating" label="RATING" /><Stars n={data.rating} onChange={(isEdit || isBulk) ? v => { ratingEditedRef.current = true; setData(d => ({ ...d, rating: v })); } : undefined} /></div>
 
           <div style={{ marginTop: 14, background: "#161616", borderRadius: 8, padding: "14px", border: "1px solid #1e1e1e" }}>
             <BulkCheck field="tags" label={isBulk ? `TAGS (${bulkTagsMode.toUpperCase()})` : "TAGS"} />

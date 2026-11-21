@@ -222,6 +222,9 @@ async function transportRequest<T>(path: string, body: Record<string, unknown>):
   return stage ? observePlayStep(stage, request) : request();
 }
 
+/** E70: solicitud de control del plano directo del catálogo (mismo bearer, CSRF y tiempo de espera que las rutas de sesión). */
+export function catalogDirectControlRequest<T>(path: string, body: Record<string, unknown>): Promise<T> { return transportRequest<T>(path, body); }
+
 export function webTransportRequestBody(body: Record<string, unknown>): Record<string, unknown> {
   return { ...body, beatgalerUserId: getWebClientId() };
 }
@@ -262,9 +265,13 @@ function sessionIdentity(
   };
 }
 
+/** E70 (Direct B): el catálogo reutiliza el mismo vínculo de clave temporal con su propia ruta de sesión (sin lease legacy ni INDEX). */
+export interface TemporarySessionOptions { startPath?: string }
+
 async function bindTemporarySession(
   bootstrap: WebTransportSessionPublic,
   metadata?: TempAuthMetadata,
+  options?: TemporarySessionOptions,
 ): Promise<WebTransportSession> {
   const safeBootstrap = validateBootstrap(bootstrap);
   if (metadata) throw new Error("Unexpected prebuilt temporary-auth metadata.");
@@ -274,7 +281,7 @@ async function bindTemporarySession(
     let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
     try {
       prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(safeBootstrap.temp_auth.dc_id), { attempt });
-      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>(options?.startPath ?? "/transport/session/start", {
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
       }));
@@ -323,8 +330,8 @@ export async function reserveWebTransportSession(): Promise<WebTransportSessionP
 }
 
 /** Creates and binds a fresh, memory-only temporary MTProto authorization to an already reserved lease. */
-export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic): Promise<WebTransportSession> {
-  return bindTemporarySession(bootstrap);
+export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic, options?: TemporarySessionOptions): Promise<WebTransportSession> {
+  return bindTemporarySession(bootstrap, undefined, options);
 }
 
 /** Opens/reuses a lease, then binds a client-generated temporary key. No permanent transport secret reaches the browser. */
@@ -332,13 +339,13 @@ export async function prepareWebTransportSession(): Promise<WebTransportSession>
   return bindWebTransportSession(await reserveWebTransportSession());
 }
 
-export async function renewWebTransportSession(session: WebTransportSession): Promise<WebTransportSession> {
+export async function renewWebTransportSession(session: WebTransportSession, options?: TemporarySessionOptions): Promise<WebTransportSession> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= TEMP_AUTH_TRANSIENT_MAX_ATTEMPTS; attempt += 1) {
     let prepared: Awaited<ReturnType<typeof prepareWebTempAuth>> | null = null;
     try {
       prepared = await observePlayStep("TEMP_AUTH_PREPARE", () => prepareWebTempAuth(session.temp_auth.dc_id), { attempt, renewal: true });
-      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>("/transport/session/start", {
+      const rawResponse = validateBootstrap(await transportRequest<WebTransportSessionPublic>(options?.startPath ?? "/transport/session/start", {
         browserClientId: getWebClientId(),
         tempAuthMetadata: prepared.metadata,
       }));

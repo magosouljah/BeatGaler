@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { appAlert } from "../lib/dialog";
 import type { Beat, FolderScanResult, ResolveFilesPayload } from "../types";
 import { Artwork, FolderIcon } from "./ui";
@@ -20,12 +20,19 @@ import {
 import ImportDecisionsModal from "./ImportDecisionsModal";
 import { sanitizeUserVisibleText } from "../lib/userVisibleError";
 import { platform } from "../platform";
+import { beatNameLength, validateBeatName } from "../lib/metadataValidation";
+import type { PlatformImportCandidate } from "../platform/contracts";
 
 interface Props {
   onClose: () => void;
-  onAdd: (beats: Beat[]) => void;
+  /** `hydrated` (flujo web de un archivo): ID3 / WAV→MP3 listos; el catálogo los espera antes de importar. */
+  onAdd: (beats: Beat[], hydrated?: Promise<Beat>[]) => void;
   onCandidateHydrated?: (beat: Beat) => void;
   existingBeats: Beat[];
+  /** Si se define, el nombre del beat no puede superarlo (code points): se pide editarlo antes de subir. Sin definir = flujo actual sin cambios. */
+  maxNameChars?: number;
+  /** Archivo soltado (arrastrar y soltar): entra por el MISMO flujo que «Choose MP3 or WAV» (validación de nombre incluida). */
+  initialFile?: File;
 }
 
 type Step = "choose" | "scanning" | "results" | "conflict";
@@ -80,7 +87,7 @@ function isDuplicateCandidate(beat: Beat, existingBeats: Beat[]) {
   ));
 }
 
-export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, existingBeats }: Props) {
+export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, existingBeats , maxNameChars, initialFile }: Props) {
   const [step, setStep] = useState<Step>("choose");
   const [scanned, setScanned] = useState<Beat[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -90,8 +97,43 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importBatch, setImportBatch] = useState<ImportBatchPreview | null>(null);
+  const [pending, setPending] = useState<{ candidate: PlatformImportCandidate; draft: string } | null>(null);
+  const handedOff = useRef(false);
+  const acceptRef = useRef<((candidate: PlatformImportCandidate) => void) | null>(null);
+  const initialStarted = useRef(false);
+  useEffect(() => {
+    if (!initialFile || initialStarted.current || !platform.capabilities.browserFileImport) return;
+    initialStarted.current = true;
+    setImporting(true);
+    try { acceptRef.current?.(platform.importer.fromFile(initialFile)); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setImporting(false); }
+  }, [initialFile]);
 
   if (platform.capabilities.browserFileImport) {
+    const finishCandidate = (candidate: PlatformImportCandidate, beat: Beat) => {
+      // Review opens while WAV conversion and metadata hydration run in the background.
+      handedOff.current = true;
+      onAdd([beat], [candidate.hydrated]);
+      onClose();
+      void candidate.hydrated.then(onCandidateHydrated).catch(error => {
+        if (platform.importer.fileForBeat(candidate.beat.id)) {
+          void appAlert({ title: "Import failed", message: String(error), danger: true });
+        }
+      });
+    };
+    // Cancelar o cerrar con un candidato pendiente libera el archivo elegido (el original nunca se modifica).
+    const closeModal = () => {
+      if (pending && !handedOff.current) platform.importer.releaseBeat(pending.candidate.beat.id);
+      onClose();
+    };
+    const nameOk = (value: string) => value.trim().length > 0 && maxNameChars !== undefined && beatNameLength(value.trim()) <= maxNameChars;
+    const acceptCandidate = (candidate: PlatformImportCandidate) => {
+      // Nombre derivado del archivo válido (o sin límite): flujo actual, sin pasos adicionales.
+      if (maxNameChars === undefined || beatNameLength(candidate.beat.name.trim()) <= maxNameChars) { finishCandidate(candidate, candidate.beat); return; }
+      setPending({ candidate, draft: candidate.beat.name });
+    };
+    acceptRef.current = acceptCandidate;
     const handleBrowserPick = async () => {
       if (importing) return;
       setImporting(true);
@@ -99,14 +141,7 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
       try {
         const candidate = await platform.importer.pickBeat();
         if (!candidate) return;
-        // Review opens while WAV conversion and metadata hydration run in the background.
-        onAdd([candidate.beat]);
-        onClose();
-        void candidate.hydrated.then(onCandidateHydrated).catch(error => {
-          if (platform.importer.fileForBeat(candidate.beat.id)) {
-            void appAlert({ title: "Import failed", message: String(error), danger: true });
-          }
-        });
+        acceptCandidate(candidate);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -114,9 +149,46 @@ export default function AddBeatModal({ onClose, onAdd, onCandidateHydrated, exis
       }
     };
 
+    if (pending && maxNameChars !== undefined) {
+      const trimmed = pending.draft.trim();
+      const length = beatNameLength(trimmed);
+      const valid = nameOk(pending.draft);
+      const hint = !trimmed ? "Escribe un nombre." : length > maxNameChars ? `Máximo ${maxNameChars} caracteres (tiene ${length}).` : "";
+      const originalFile = platform.importer.fileForBeat(pending.candidate.beat.id)?.name ?? pending.candidate.beat.name;
+      const confirm = () => { if (valid) finishCandidate(pending.candidate, { ...pending.candidate.beat, name: trimmed }); };
+      return (
+        <>
+          <div onClick={closeModal} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 400, backdropFilter: "blur(6px)" }} />
+          <div role="dialog" aria-label="Name your beat" style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 420, maxWidth: "calc(100vw - 32px)", background: "#0f0f0f", border: "1px solid #1e1e1e", borderRadius: 14, zIndex: 410, boxShadow: "0 24px 60px rgba(0,0,0,0.6)" }}>
+            <div style={{ padding: "18px 22px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 500, fontSize: 14, color: "#e0e0e0" }}>Name your beat</span>
+              <button aria-label="Close" onClick={closeModal} style={{ background: "none", border: "none", color: "#777", fontSize: 18, cursor: "pointer" }}>×</button>
+            </div>
+            <div style={{ padding: 22 }}>
+              <div style={{ fontSize: 11, color: "#666", lineHeight: 1.6, marginBottom: 12 }}>The file name is longer than {maxNameChars} characters. Choose a shorter beat name; the file itself keeps its original name.</div>
+              <div style={{ fontSize: 10, color: "#555", letterSpacing: 0.7, marginBottom: 6 }}>FILE</div>
+              <div data-testid="add-beat-original-file" style={{ fontSize: 12, color: "#9a9a9a", marginBottom: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{originalFile}</div>
+              <label htmlFor="add-beat-name" style={{ display: "block", fontSize: 10, color: "#555", letterSpacing: 0.7, marginBottom: 6 }}>BEAT NAME</label>
+              <input id="add-beat-name" autoFocus value={pending.draft} aria-invalid={!valid} aria-describedby="add-beat-name-hint"
+                onChange={event => setPending({ ...pending, draft: event.target.value })}
+                onKeyDown={event => { if (event.key === "Enter") confirm(); }}
+                style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", background: "#161616", border: `1px solid ${valid ? "#252525" : "#7f1d1d"}`, borderRadius: 8, color: "#e0e0e0", fontSize: 13, outline: "none" }} />
+              <div id="add-beat-name-hint" role="status" style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 11, color: valid ? "#666" : "#fca5a5" }}>
+                <span data-testid="add-beat-name-hint">{hint}</span><span data-testid="add-beat-name-count">{length} / {maxNameChars}</span>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                <button onClick={closeModal} style={{ flex: 1, padding: "10px", background: "#161616", border: "1px solid #252525", borderRadius: 8, color: "#999", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+                <button data-testid="add-beat-confirm" disabled={!valid} onClick={confirm} style={{ flex: 1, padding: "10px", background: valid ? "#1a2a1a" : "#161616", border: `1px solid ${valid ? "#2d4a2d" : "#1e1e1e"}`, borderRadius: 8, color: valid ? "#e0e0e0" : "#555", fontSize: 12, cursor: valid ? "pointer" : "not-allowed" }}>Add beat</button>
+              </div>
+            </div>
+          </div>
+        </>
+      );
+    }
+
     return (
       <>
-        <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 400, backdropFilter: "blur(6px)" }} />
+        <div onClick={closeModal} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 400, backdropFilter: "blur(6px)" }} />
         <div style={{ position: "fixed", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 420, maxWidth: "calc(100vw - 32px)", background: "#0f0f0f", border: "1px solid #1e1e1e", borderRadius: 14, zIndex: 410, boxShadow: "0 24px 60px rgba(0,0,0,0.9)" }}>
           <div style={{ padding: "18px 22px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontWeight: 500, fontSize: 14, color: "#e0e0e0" }}>Add beat</span>

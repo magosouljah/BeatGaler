@@ -10,7 +10,7 @@ function expect(source, needle, message) {
 }
 
 const tauri = fs.readFileSync("src/lib/tauri.ts", "utf8");
-const app = fs.readFileSync("src/App.tsx", "utf8");
+const downloads = fs.readFileSync("src/features/downloads/useBeatDownloads.ts", "utf8");
 const library = fs.readFileSync("src/lib/libraryStateManager.ts", "utf8");
 const boundary = fs.readFileSync("cloud-server/productive-temp-auth-boundary.js", "utf8");
 
@@ -20,7 +20,7 @@ expect(tauri, "telegram_cloud_connected: true", "Web settings fallback regressed
 expect(tauri, 'return { connected: true, reachable, username: null };', "browser Cloud status fallback no longer reports connectivity from navigator");
 expect(tauri, 'export async function flushOfflineTrashIntents(): Promise<number> {\n  await initTauri();\n  if (!invoke) return 0;', "browser startup can throw through the Desktop offline-trash bridge");
 
-expect(app, 'useEffect(() => {\n    if (!isTauriAvailable) return;\n\n    let unlisten: (() => void) | undefined;\n    let disposed = false;\n\n    void listen<BackgroundDownloadEvent>("beatgaler-download-event"', "Web still reaches the native background-download listener");
+expect(downloads, 'useEffect(() => {\n    if (platform.kind !== "desktop") return;\n    let unlisten: (() => void) | undefined;\n    let disposed = false;\n\n    void platform.events.listen<BackgroundDownloadEvent>("beatgaler-download-event"', "Web still reaches the native background-download listener");
 
 expect(library, 'import { platform } from "../platform";', "authoritative library manager no longer uses the platform adapter");
 expect(library, "await platform.library.restoreAuthoritative();", "authoritative restore no longer delegates to the platform library");

@@ -9,14 +9,18 @@ const { PostgresControlPlaneRuntime } = require('./postgres-control-plane-runtim
 const { installMultiprocessAuthSnapshotCompatibility } = require('./postgres-auth-multiprocess-compat');
 const { assertJsonRollbackSnapshot } = require('./postgres-rollback-preparation');
 const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('./control-plane-json-compat');
+const { assertNativeStartupCompatible } = require('./catalog/authority');
+const { statePath } = require('./state-dir');
 
 async function prepareControlPlaneCutover({ pool, env = process.env, secretProviderOptions } = {}) {
   const config = controlPlaneAuthorityConfig(env);
-  const authPath = path.join(__dirname, 'accounts-data.json');
-  const persistentPath = path.join(__dirname, 'cloud-data.json');
+  const authPath = statePath('accounts-data.json');
+  const persistentPath = statePath('cloud-data.json');
 
   if (config.authority === 'json') {
     if (pool) {
+      // T05-N (NATIVO r2.1 §12.2): json + pool con activación nativa o bibliotecas de catálogo → el arranque se niega.
+      await assertNativeStartupCompatible({ pool, authority: 'json' });
       const authRaw = fs.existsSync(authPath) ? fs.readFileSync(authPath, 'utf8') : JSON.stringify({ users: [], sessions: {} });
       const persistentRaw = fs.existsSync(persistentPath)
         ? fs.readFileSync(persistentPath, 'utf8')

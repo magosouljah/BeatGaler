@@ -11,6 +11,7 @@ const { ProjectAccessError } = require('./project-access');
 const { withTelegramFloodWait } = require('./telegram-retry');
 
 const { noDirectStartupTrace } = require('./direct-startup-trace');
+const { CATALOG_SESSION_PROTOCOL, stripDirectCredentials } = require('./catalog/authority');
 
 const ROOT = __dirname;
 function backendPath(value, fallbackName) {
@@ -380,6 +381,82 @@ function mutateState(pool, mutator) {
 
 function stateSnapshot(pool) {
   return withPoolLock(() => normalizeState(pool));
+}
+
+// Catálogo nativo (gateway de servidor, NATIVO r2.1 §8.6): credencial vigente de un bot del pool, solo lectura y bajo demanda. El token
+// nunca se registra ni se persiste; la versión de credencial acompaña para que una rotación invalide la sesión del gateway.
+async function catalogBotCredential(botId) {
+  const pool = loadPool();
+  const bot = pool.find(item => item.id === String(botId));
+  if (!bot) throw Object.assign(new Error(`Unknown transport bot ${botId}.`), { code: 'BOT_UNKNOWN', transient: false });
+  const botState = stateSnapshot(pool).bots[bot.id];
+  const token = await tokenForCredentialVersion(bot, botState.credential_version);
+  return { token, telegramUserId: bot.telegram_user_id || null, credentialVersion: botState.credential_version };
+}
+
+// Direct B (catálogo): forma interna de sesión que consume la frontera de autorización temporal (productive-temp-auth-boundary.js).
+// Las credenciales permanentes NUNCA salen del proceso: la frontera las elimina y entrega solo el bloque de vinculación.
+// Sin lease legacy, sin INDEX, sin MASTER: el bot es el asignado a la biblioteca (vaults.transport_bot_id), el mismo del gateway.
+async function catalogDirectSession({ botId, chatId, sessionId = null }) {
+  const cred = await catalogBotCredential(botId);
+  const { apiId, apiHash } = apiCredentials();
+  return {
+    ok: true,
+    mode: 'catalog-v1-direct',
+    // Estable por (bot, chat): el cliente exige que el bootstrap y la vinculación describan el mismo lease; no es un secreto ni un lease legacy.
+    session_id: sessionId || `cdirect-${crypto.createHash('sha256').update(`${botId}|${chatId}`).digest('hex').slice(0, 24)}`,
+    transport_id: String(botId),
+    transport_user_id: cred.telegramUserId || null,
+    transport_username: null,
+    chat_id: String(chatId),
+    bot_token: cred.token,
+    telegram_api_id: apiId,
+    telegram_api_hash: apiHash,
+    resolver_chat_id: null,
+    generation: 1,
+    credential_version: cred.credentialVersion,
+    heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
+    heartbeat_timeout_ms: HEARTBEAT_TIMEOUT_MS,
+    token_rotation_enabled: false,
+    lease_state: 'ACTIVE',
+  };
+}
+
+// Native PostgreSQL: establish one assigned bot's membership in its exact
+// existing Telegram storage group. Does NOT rotate tokens, create/delete
+// messages, touch INDEX, or change bot assignments.
+async function ensureCatalogBotMembership({ chatId, botId }) {
+  const chat = String(chatId || '').trim();
+  const id = String(botId || '').trim();
+  if (!/^-100[0-9]+$/.test(chat) || !id) throw new Error('CATALOG_TRANSPORT_TARGET_INVALID');
+  const cred = await catalogBotCredential(id);
+  const identity = await resolveBotIdentityViaHttp(cred.token);
+  if (cred.telegramUserId && String(identity.telegram_user_id) !== String(cred.telegramUserId)) {
+    const e = new Error('CATALOG_TRANSPORT_BOT_IDENTITY_MISMATCH'); e.code = 'BOT_IDENTITY_MISMATCH'; throw e;
+  }
+  if (!identity.telegram_username) throw new Error('CATALOG_TRANSPORT_BOT_USERNAME_MISSING');
+  const master = await masterForVault(chat);
+  try {
+    const botEntity = await master.client.getEntity('@' + identity.telegram_username);
+    await inviteAndPromote(master.client, master.vault, botEntity);
+    const participant = await master.client.invoke(new Api.channels.GetParticipant({
+      channel: master.vault, participant: botEntity,
+    }));
+    if (!participant?.participant) throw new Error('CATALOG_TRANSPORT_MASTER_MEMBERSHIP_UNVERIFIED');
+  } finally {
+    try { await master.client.disconnect(); } catch (_) {}
+  }
+  for (let n = 0; n < 8; n++) {
+    try {
+      const observed = await managerBotApiCall(cred.token, 'getChat', { chat_id: chat });
+      if (String(observed?.id || '') === chat) return { ready: true, botId: id };
+      throw new Error('CATALOG_TRANSPORT_BOT_CHAT_MISMATCH');
+    } catch (error) {
+      if (n === 7 || !botMembershipError(error).absent) throw error;
+      await wait(Math.min(1500, 250 * (n + 1)));
+    }
+  }
+  throw new Error('CATALOG_TRANSPORT_BOT_MEMBERSHIP_NOT_VISIBLE');
 }
 
 function cleanupStaleOperationsDurably(pool) {
@@ -1011,7 +1088,15 @@ async function runtimeForLease(
   return runtime;
 }
 
-function sessionPublic(runtime, leaseState = null) {
+function sessionPublic(runtime, leaseState = null, { protocol = null } = {}) {
+  const session = sessionPublicLegacy(runtime, leaseState);
+  // T05-N (NATIVO r2.1 §8.5): un cliente catalog-v1 nunca recibe bot_token, api_id ni api_hash. El plano de datos
+  // nativo va por el gateway del servidor (§8.6, T11/T12); aquí solo se garantiza que la respuesta no lleva credenciales.
+  if (String(protocol || '') === CATALOG_SESSION_PROTOCOL) return { ...stripDirectCredentials(session), mode: 'catalog-v1-gateway', protocol: CATALOG_SESSION_PROTOCOL };
+  return session;
+}
+
+function sessionPublicLegacy(runtime, leaseState = null) {
   return {
     ok: true,
     mode: 'telegram-direct-botapi-local',
@@ -1046,7 +1131,7 @@ function getLeaseChecked({ installationId, sessionId, generation, allowExpired =
   return { pool, state, lease };
 }
 
-async function startSession({ installationId, chatId, startupTrace = noDirectStartupTrace }) {
+async function startSession({ installationId, chatId, protocol = null, startupTrace = noDirectStartupTrace }) {
   if (!enabled()) throw new Error('Telegram Direct transport is not configured on this server.');
   startMaintenance();
   const installation = String(installationId || '').trim();
@@ -1068,7 +1153,7 @@ async function startSession({ installationId, chatId, startupTrace = noDirectSta
           state.leases[existing.session_id].last_heartbeat_at = nowIso();
         }
       });
-      return sessionPublic(runtime, existing.status);
+      return sessionPublic(runtime, existing.status, { protocol });
     }
   }
 
@@ -1803,13 +1888,14 @@ async function verifyLegacyProjectCopy({ chatId, beatId, sourceMessageId, messag
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
-async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, sizeBytes, threadId }) {
+async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, sizeBytes, threadId, caption = null }) {
   const masterInfo = await masterForVault(chatId);
   try {
     const sent = await masterInfo.client.sendFile(masterInfo.vault, {
       file: new CustomFile(path.basename(String(filename || 'project.zip')), sizeBytes, filePath),
       forceDocument: true,
-      caption: projectCaption(beatId, sha256),
+      // T12: el catálogo nativo pasa su marcador `catalog:v1 op= part=`; sin `caption` se conserva el formato legacy.
+      caption: typeof caption === 'string' && caption ? caption : projectCaption(beatId, sha256),
       ...(Number.isSafeInteger(Number(threadId)) && Number(threadId) > 0 ? { replyTo: Number(threadId) } : {}),
       workers: 1,
     });
@@ -1818,13 +1904,27 @@ async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, 
     if (!Number.isSafeInteger(id) || id <= 0 || !documentId) {
       throw new ProjectAccessError('MASTER returned no PROJECT document.', 'PROJECT_BYTES_UNVERIFIED', 503);
     }
-    return { messageId: id, documentId };
+    const senderId = sent?.fromId?.userId != null ? String(sent.fromId.userId) : null;
+    const sentSize = Number(sent?.media?.document?.size);
+    return { messageId: id, documentId, senderId, sizeBytes: Number.isSafeInteger(sentSize) && sentSize > 0 ? sentSize : null };
   } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
-async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, sha256, documentId, sizeBytes }) {
+// T12: identidad numérica del MASTER que publica PROJECT en el vault (remitente persistido antes del primer despacho, D-T09-4).
+async function masterSenderId(chatId) {
+  const masterInfo = await masterForVault(chatId);
+  try {
+    const me = await masterInfo.client.getMe();
+    const id = String(me?.id ?? '');
+    if (!/^[0-9]{1,20}$/.test(id)) throw new ProjectAccessError('MASTER identity is unavailable.', 'PROJECT_ACCESS_UNAVAILABLE', 503);
+    return id;
+  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
+}
+
+async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, sha256, documentId, sizeBytes, caption = null }) {
   const message = (await client.getMessages(vault, { ids: [Number(messageId)] }))?.[0];
-  if (message?.out !== true || String(message?.message || '') !== projectCaption(beatId, sha256) ||
+  const expectedCaption = typeof caption === 'string' && caption ? caption : projectCaption(beatId, sha256);
+  if (message?.out !== true || String(message?.message || '') !== expectedCaption ||
       !(message?.media?.document instanceof Api.Document) ||
       String(message.media.document.id) !== String(documentId) ||
       Number(message.media.document.size) !== Number(sizeBytes)) {
@@ -1833,10 +1933,10 @@ async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, 
   return true;
 }
 
-async function findProjectFile({ chatId, beatId, sha256, sizeBytes }) {
+async function findProjectFile({ chatId, beatId, sha256, sizeBytes, caption: captionOverride = null }) {
   const masterInfo = await masterForVault(chatId);
   try {
-    const caption = projectCaption(beatId, sha256);
+    const caption = typeof captionOverride === 'string' && captionOverride ? captionOverride : projectCaption(beatId, sha256);
     for (const options of [{ search: caption, limit: 100 }, { limit: 100 }]) {
       for await (const message of masterInfo.client.iterMessages(masterInfo.vault, options)) {
         if (message?.out !== true || String(message?.message || '') !== caption ||
@@ -2044,6 +2144,10 @@ module.exports = {
   restrictBotPinRights,
   downloadMessageBuffer,
   publishProjectFile,
+  masterSenderId,
+  catalogBotCredential,
+  catalogDirectSession,
+  ensureCatalogBotMembership,
   copyLegacyProjectPart,
   copyLegacyProjectPartFromClient,
   directBotAdminRights,
@@ -2061,6 +2165,7 @@ module.exports = {
   poolStatus,
   cleanupExpiredSessions,
   __test: {
+    sessionPublic,
     pinMasterIndexMessage,
     commitIndexCopyOnWriteWithMaster,
     normalizeState,

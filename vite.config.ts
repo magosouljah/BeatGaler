@@ -75,7 +75,7 @@ function productiveTrustBoundaryPlugin() {
 
 export default defineConfig(async ({ command, mode }) => ({
   plugins: [productiveTrustBoundaryPlugin(), react(), stage1ViteTiming()],
-  base: command === "serve" ? "/" : "./",
+  base: mode === "web" || command === "serve" ? "/" : "./",
   clearScreen: false,
   resolve: {
     alias: {

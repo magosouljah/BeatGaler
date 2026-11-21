@@ -80,14 +80,16 @@ export function createWebImportCandidate(file: File): PlatformImportCandidate {
   }
   const hydrated = Promise.all([parseId3FromFile(file), entry.ready]).then(([metadata]) => ({
     ...beat, mp3_path: entry.slots.MASTER?.name || "", playback_path: entry.objectUrl,
-    bpm: metadata.bpm, key: metadata.key, tags: metadata.tags, image_base64: metadata.image_base64,
+    bpm: metadata.bpm, key: metadata.key, tags: metadata.tags, rating: metadata.rating, image_base64: metadata.image_base64,
   }));
   // Review opens immediately. Save still observes preparation failures via entry.ready.
   void hydrated.catch(() => {});
   return { beat, hydrated };
 }
 
-async function pickOneAudioFile(): Promise<File | null> {
+/** Tras volver el foco a la ventana, Chrome/Edge pueden emitir `focus` ANTES que `change`: se espera la ventana de gracia antes de dar la selección por cancelada. */
+export const PICK_FOCUS_GRACE_MS = 1500;
+export async function pickOneAudioFile(): Promise<File | null> {
   return new Promise(resolve => {
     const input = document.createElement("input");
     input.type = "file";
@@ -97,14 +99,28 @@ async function pickOneAudioFile(): Promise<File | null> {
     document.body.appendChild(input);
 
     let settled = false;
+    let graceTimer: number | undefined;
     const finish = (file: File | null) => {
       if (settled) return;
       settled = true;
       window.removeEventListener("focus", onFocus);
+      if (graceTimer !== undefined) window.clearTimeout(graceTimer);
       input.remove();
       resolve(file);
     };
-    const onFocus = () => window.setTimeout(() => finish(input.files?.[0] ?? null), 0);
+    // `change` decide siempre (con archivo). `focus` solo sirve de respaldo para navegadores sin evento `cancel`: espera la ventana de gracia
+    // y sondea; si aparece un archivo lo entrega, y solo al vencer sin archivo se interpreta como cancelación.
+    const onFocus = () => {
+      const started = Date.now();
+      const poll = () => {
+        if (settled) return;
+        const file = input.files?.[0];
+        if (file) { finish(file); return; }
+        if (Date.now() - started >= PICK_FOCUS_GRACE_MS) { finish(null); return; }
+        graceTimer = window.setTimeout(poll, 100);
+      };
+      graceTimer = window.setTimeout(poll, 100);
+    };
     input.addEventListener("change", () => finish(input.files?.[0] ?? null), { once: true });
     input.addEventListener("cancel", () => finish(null), { once: true });
     window.addEventListener("focus", onFocus, { once: true });

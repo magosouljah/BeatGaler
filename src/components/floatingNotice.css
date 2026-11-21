@@ -1,0 +1,32 @@
+/* Avisos flotantes: fixed, fuera del flujo (no alteran márgenes, scroll ni la Gallery). El contenedor no captura clics; solo el aviso. */
+.bg-floating-notices {
+  position: fixed; z-index: 9000; right: 24px; bottom: 24px;
+  width: min(420px, calc(100vw - 32px)); display: flex; justify-content: flex-end; pointer-events: none;
+}
+.bg-floating-notices.is-lifted { bottom: 104px; }
+.bg-floating-notice {
+  pointer-events: auto; margin: 0; padding: 11px 12px 11px 14px; max-width: 100%;
+  display: flex; align-items: flex-start; gap: 10px; box-sizing: border-box;
+  border-radius: 16px; color: rgba(255,255,255,.94); font: 500 12.5px/1.4 system-ui, sans-serif;
+  /* liquid-glass: el contenido de atrás se desenfoca y satura; el velo es mínimo */
+  background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04)), rgba(24,24,28,.34);
+  -webkit-backdrop-filter: blur(22px) saturate(1.7); backdrop-filter: blur(22px) saturate(1.7);
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 -1px 0 rgba(255,255,255,.04), 0 12px 34px rgba(0,0,0,.38);
+  animation: bg-floating-notice-in 220ms cubic-bezier(.2,.8,.2,1) both;
+}
+.bg-floating-notice.is-error { border-color: rgba(248,113,113,.5); }
+.bg-floating-notice-dot { flex: none; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: rgba(255,255,255,.55); box-shadow: 0 0 10px currentColor; }
+.bg-floating-notice.is-success .bg-floating-notice-dot { background: #4ade80; color: #4ade80; }
+.bg-floating-notice.is-error .bg-floating-notice-dot { background: #f87171; color: #f87171; }
+.bg-floating-notice.is-progress .bg-floating-notice-dot { background: #f5a623; color: #f5a623; animation: bg-floating-notice-pulse 1.2s ease-in-out infinite; }
+.bg-floating-notice-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.bg-floating-notice-close { flex: none; border: 0; background: transparent; color: rgba(255,255,255,.7); font-size: 17px; line-height: 1; padding: 0 2px; cursor: pointer; }
+.bg-floating-notice-close:hover { color: #fff; }
+@keyframes bg-floating-notice-in { from { opacity: 0; transform: translate3d(0, 10px, 0) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes bg-floating-notice-pulse { 50% { opacity: .35; } }
+@media (max-width: 590px) {
+  .bg-floating-notices { right: 16px; left: 16px; width: auto; bottom: 84px; }
+  .bg-floating-notices.is-lifted { bottom: 120px; }
+}
+@media (prefers-reduced-motion: reduce) { .bg-floating-notice, .bg-floating-notice-dot { animation: none; } }

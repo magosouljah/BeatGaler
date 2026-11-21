@@ -1,0 +1,16 @@
+{
+  "schema": "beatgaler.catalog-test-descriptor",
+  "version": 1,
+  "id": "catalog-bench-lab-wsl-pg18-v1",
+  "note": "SOLO para scripts/catalog-bench en esta máquina de desarrollo: laboratorio PostgreSQL 18 desechable en WSL (localhost:54329, ver memoria 'Catalog PG lab in WSL'). No es el descriptor de CI (cloud-server/tests/helpers/catalog-test-descriptor.json, fijo al service container de .github/workflows/catalog-checks.yml) y nunca debe sustituirlo en catalog-check.cjs/catalog-suites.json. Sirve únicamente para validar catalog-benchmark.cjs y el generador fuera de CI, contra una instancia que el propio laboratorio ya trata como desechable.",
+  "host": "127.0.0.1",
+  "port": 54329,
+  "admin_role": "catalog_lab_admin",
+  "admin_database": "catalog_lab_sentinel",
+  "server_version_major": 18,
+  "server_encoding": "UTF8",
+  "datcollate": "C.UTF-8",
+  "sentinel": { "table": "catalog_lab.lab_identity", "column": "instance_id", "instance_id_env": "CATALOG_TEST_INSTANCE_ID", "instance_id_pattern": "^gha-[0-9]+-[0-9]+-[0-9a-f]{32}$" },
+  "test_database_prefix": "beatgaler_catalog_test_",
+  "test_role_prefix": "catalog_test_"
+}

@@ -114,6 +114,7 @@ export function useBeatGalerComposition() {
     includedTags,
     excludedTags,
     sortBy,
+    platform.kind === "web" ? "any" : "all",
   );
 
   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);

@@ -7,6 +7,7 @@ export function selectFilteredAndSortedBeats(
   includedTags: ReadonlySet<string>,
   excludedTags: ReadonlySet<string>,
   sortBy: SortKey,
+  includeMode: "all" | "any" = "all",
 ): Beat[] {
   const manualOrderIndex = new Map<string, number>();
   beats.forEach((beat, index) => manualOrderIndex.set(beat.id, index));
@@ -14,8 +15,10 @@ export function selectFilteredAndSortedBeats(
   return beats
     .filter(beat => {
       const q = search.trim().toLowerCase();
-      return (!q || beat.name.toLowerCase().includes(q) || beat.tags.some(tag => tag.includes(q)) || beat.key.toLowerCase().includes(q) || String(beat.bpm).includes(q))
-        && (includedTags.size === 0 || [...includedTags].every(tag => beat.tags.includes(tag)))
+      return (!q || beat.name.toLowerCase().includes(q) || beat.tags.some(tag => tag.toLowerCase().includes(q)) || beat.key.toLowerCase().includes(q) || String(beat.bpm).includes(q))
+        && (includedTags.size === 0 || (includeMode === "any"
+          ? [...includedTags].some(tag => beat.tags.includes(tag))
+          : [...includedTags].every(tag => beat.tags.includes(tag))))
         && (excludedTags.size === 0 || ![...excludedTags].some(tag => beat.tags.includes(tag)));
     })
     .sort((a, b) => {

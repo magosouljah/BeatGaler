@@ -1,0 +1,195 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b0",
+      "sort_order": 0,
+      "name": "z",
+      "rating": 0
+    },
+    {
+      "id": "b1",
+      "sort_order": 1,
+      "name": "ä",
+      "rating": 0
+    },
+    {
+      "id": "b2",
+      "sort_order": 2,
+      "name": "a",
+      "rating": 0
+    },
+    {
+      "id": "b3",
+      "sort_order": 3,
+      "name": "A",
+      "rating": 0
+    },
+    {
+      "id": "b4",
+      "sort_order": 4,
+      "name": "á",
+      "rating": 0
+    },
+    {
+      "id": "b5",
+      "sort_order": 5,
+      "name": "á",
+      "rating": 0
+    },
+    {
+      "id": "b6",
+      "sort_order": 6,
+      "name": "ñ",
+      "rating": 0
+    },
+    {
+      "id": "b7",
+      "sort_order": 7,
+      "name": "n",
+      "rating": 0
+    },
+    {
+      "id": "b8",
+      "sort_order": 8,
+      "name": "😀",
+      "rating": 0
+    },
+    {
+      "id": "b9",
+      "sort_order": 9,
+      "name": "🎵",
+      "rating": 0
+    },
+    {
+      "id": "b10",
+      "sort_order": 10,
+      "name": "a-2",
+      "rating": 0
+    },
+    {
+      "id": "b11",
+      "sort_order": 11,
+      "name": "a2",
+      "rating": 0
+    },
+    {
+      "id": "b12",
+      "sort_order": 12,
+      "name": "a10",
+      "rating": 0
+    },
+    {
+      "id": "b13",
+      "sort_order": 13,
+      "name": "a.2",
+      "rating": 0
+    },
+    {
+      "id": "b14",
+      "sort_order": 14,
+      "name": "I",
+      "rating": 0
+    },
+    {
+      "id": "b15",
+      "sort_order": 15,
+      "name": "İ",
+      "rating": 0
+    },
+    {
+      "id": "b16",
+      "sort_order": 16,
+      "name": "ı",
+      "rating": 0
+    },
+    {
+      "id": "b17",
+      "sort_order": 17,
+      "name": "i",
+      "rating": 0
+    },
+    {
+      "id": "b18",
+      "sort_order": 18,
+      "name": "same",
+      "rating": 0
+    },
+    {
+      "id": "b19",
+      "sort_order": 19,
+      "name": "same",
+      "rating": 0
+    },
+    {
+      "id": "x0",
+      "sort_order": 20,
+      "name": "Z",
+      "rating": 0
+    },
+    {
+      "id": "x1",
+      "sort_order": 21,
+      "name": "10",
+      "rating": 0
+    },
+    {
+      "id": "x2",
+      "sort_order": 22,
+      "name": "2",
+      "rating": 0
+    },
+    {
+      "id": "x3",
+      "sort_order": 23,
+      "name": "-",
+      "rating": 0
+    },
+    {
+      "id": "x4",
+      "sort_order": 24,
+      "name": "_",
+      "rating": 0
+    },
+    {
+      "id": "x5",
+      "sort_order": 25,
+      "name": "🌙",
+      "rating": 0
+    },
+    {
+      "id": "x6",
+      "sort_order": 26,
+      "name": "ß",
+      "rating": 0
+    },
+    {
+      "id": "x7",
+      "sort_order": 27,
+      "name": "ss",
+      "rating": 0
+    },
+    {
+      "id": "n-absent",
+      "sort_order": 28
+    },
+    {
+      "id": "n-null",
+      "sort_order": 29,
+      "name": null
+    },
+    {
+      "id": "n-empty",
+      "sort_order": 30,
+      "name": ""
+    },
+    {
+      "id": "b0",
+      "sort_order": 31,
+      "name": "dup-id"
+    }
+  ],
+  "trash": []
+}

@@ -1,12 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+import { lazy, Suspense } from "react";
+import { platform } from "./platform";
+import WebExperience from "./app/WebExperience";
+const DesktopApp = lazy(() => import("./app/DesktopExperience"));
 import { browserId3Reader } from "./lib/id3BrowserParser";
-import AuthExperienceGate from "./features/auth/AuthExperienceGate";
-import LibraryUxBridge from "./features/library/LibraryUxBridge";
-import WebLibraryPagination from "./features/library/WebLibraryPagination";
 import { installStartupTrace } from "./features/perf/startupTrace";
-import { preconnectRememberedWebDirect } from "./features/playback/webRememberedDirectPreconnect";
 import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
 import { playTrace } from "./features/playback/playTrace";
 import { PlatformProvider } from "./platform/react";
@@ -19,7 +18,6 @@ import "./styles/library-ux.css";
 playTrace("APP_ENTRY_EXECUTE");
 installStartupTrace();
 installWebCsrfFetchCoordinator();
-preconnectRememberedWebDirect();
 
 function GlobalStyles() {
   return (
@@ -126,11 +124,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
     <GlobalStyles />
     <PlatformProvider>
-      <AuthExperienceGate>
-        <LibraryUxBridge />
-        <WebLibraryPagination />
-        <App />
-      </AuthExperienceGate>
+      {platform.kind === "web" ? <WebExperience /> : <Suspense fallback={null}><DesktopApp /></Suspense>}
     </PlatformProvider>
   </ErrorBoundary>
 );

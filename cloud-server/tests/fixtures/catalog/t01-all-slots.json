@@ -1,0 +1,84 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-all",
+      "sort_order": 0,
+      "name": "Beat b-all",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "color": "#ff0055",
+      "color2": "#00ffaa",
+      "telegram_topic_id": 9001,
+      "metadata_message_id": 501,
+      "master": {
+        "telegram_file_id": "direct:502",
+        "telegram_message_id": 502,
+        "filename": "m.wav",
+        "mime": "audio/wav",
+        "size": 1000
+      },
+      "artwork": {
+        "telegram_file_id": "direct:503",
+        "telegram_message_id": 503,
+        "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mime": "image/png",
+        "filename": "a.png",
+        "size": 10
+      },
+      "files": [
+        {
+          "cloud_file_id": "f1",
+          "type": "stems",
+          "filename": "s.zip",
+          "size": 5,
+          "status": "ready",
+          "telegram_file_id": "direct:504",
+          "telegram_message_id": 504
+        },
+        {
+          "cloud_file_id": "f2",
+          "type": "mp3",
+          "filename": "x.mp3",
+          "size": 4,
+          "status": "ready",
+          "telegram_file_id": "direct:505",
+          "telegram_message_id": 505
+        }
+      ],
+      "project": {
+        "manifest": {
+          "filename": "p.zip",
+          "original_size": 30,
+          "transport": "direct",
+          "parts": [
+            {
+              "index": 0,
+              "size": 15,
+              "filename": "p.000",
+              "telegram_file_id": "direct:506",
+              "telegram_message_id": 506
+            },
+            {
+              "index": 1,
+              "size": 15,
+              "filename": "p.001",
+              "telegram_file_id": "direct:507",
+              "telegram_message_id": 507
+            }
+          ]
+        },
+        "size": 30,
+        "openable": true,
+        "has_flp": true,
+        "has_als": false,
+        "has_samples": true
+      }
+    }
+  ],
+  "trash": []
+}

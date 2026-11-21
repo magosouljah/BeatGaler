@@ -9,6 +9,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'vite.config.ts'
+      - 'tests/component-dom/**'
+      - 'tests/integration/libraryViewSelectors.test.ts'
       - 'deploy/web/**'
       - 'scripts/deploy-web-production.ps1'
       - 'scripts/test-public-operations-pages.mjs'
@@ -37,6 +39,20 @@ jobs:
         run: node scripts/regression-web-startup-bridge.mjs
       - name: Guard bound-temp Web RPC seam
         run: node scripts/regression-web-bound-temp-rpc.mjs
+      - name: Validate Landing and Gallery integration
+        run: >-
+          node node_modules/vitest/vitest.mjs run
+          tests/component-dom/authUi11_2.test.tsx
+          tests/component-dom/tagFilters.test.tsx
+          tests/component-dom/libraryUxBridge.test.ts
+          tests/component-dom/appLibraryMenus.test.tsx
+          tests/component-dom/webExperience.test.tsx
+          tests/component-dom/galleryDesign.test.tsx
+          tests/component-dom/galleryTagPacking.test.ts
+          tests/component-dom/publicStartupLoader.test.ts
+          tests/component-dom/webLibraryNavigation.test.ts
+          tests/integration/libraryViewSelectors.test.ts
+          --environment jsdom
       - name: Build browser Web
         run: npm run build:web
       - name: Validate static package

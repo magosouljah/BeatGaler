@@ -1,0 +1,14 @@
+/* Product adapters to the approved DESIGN layout, scoped to Web. */
+.bg-product-gallery { color:var(--lab-ink); padding-bottom:0; }
+.bg-gallery-chrome { display:contents; }
+.bg-product-gallery .lab-gallery-main { width:100%; max-width:none; margin:0; padding-inline:0; }
+.bg-product-gallery .bg-beat-detail { text-align:left; border:0; padding:0; background:none; cursor:pointer; }
+.bg-product-gallery .lab-beat-tile--v2 { height:239px; min-height:239px; overflow:visible; }
+.bg-product-gallery .bg-gallery-selection-actions { position:fixed; bottom:112px; left:50%; transform:translateX(-50%); z-index:95; border-radius:16px; max-width:calc(100vw - 24px); overflow-x:auto; white-space:nowrap; }
+.bg-product-gallery .bg-gallery-selection-actions button { min-height:32px; color:#ddd; background:transparent; border:1px solid #333; border-radius:8px; }
+.bg-product-gallery [data-library-scroll] .bg-button { margin-top:12px; }
+.bg-product-gallery [data-beat-slot-id] { transform:none !important; }
+@media(hover:none),(pointer:coarse) {
+ .bg-product-gallery [data-beat-artwork-id][aria-label^="Play"]::after { content:"▶"; position:absolute; left:8px; bottom:8px; width:32px; height:32px; display:grid; place-items:center; border:1px solid #ffffff42; border-radius:50%; background:#000a; color:#fff; font-size:12px; pointer-events:none; }
+}
+@media(prefers-reduced-motion:reduce) { .bg-product-gallery *, .bg-product-gallery *::before, .bg-product-gallery *::after { animation:none !important; transition:none !important; } }

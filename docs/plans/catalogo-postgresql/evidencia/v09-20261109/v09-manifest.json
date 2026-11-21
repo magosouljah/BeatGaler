@@ -1,0 +1,53 @@
+{
+  "browser": {
+    "name": "chrome",
+    "version": "152.0.7977.65",
+    "chromedriver": "152.0.7977.65 (fc4d67f1788019a27e32511137ceccbd2fafdaaa-refs/branch-heads/7977@{#1892})",
+    "headless": true,
+    "flags": [
+      "--headless=new",
+      "--autoplay-policy=no-user-gesture-required",
+      "--mute-audio",
+      "--force-device-scale-factor=1"
+    ]
+  },
+  "os": {
+    "platform": "win32",
+    "release": "10.0.19045",
+    "cpus": 4,
+    "cpuModel": "AMD Athlon 3000G with Radeon Vega Graphics     ",
+    "memGB": 14,
+    "gpu": "SwiftShader/software (headless)"
+  },
+  "page": {
+    "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+    "dpr": 1,
+    "viewport": [
+      1424,
+      749
+    ],
+    "screen": [
+      800,
+      600
+    ],
+    "reducedMotion": false,
+    "hover": true,
+    "pointer": "fine",
+    "fonts": 0,
+    "hardwareConcurrency": 4,
+    "deviceMemory": null
+  },
+  "refreshHz": 62,
+  "network": "loopback 127.0.0.1 (LAB)",
+  "screenReader": "NO DISPONIBLE (ni NVDA ni Narrador automatizable): casos de lector NO ejecutados",
+  "edge": "NO INSTALADO: casos Edge NO ejecutados",
+  "zoom": "devicePixelRatio 1 y 2 (BiDi setViewport); zoom de página 200 % no automatizable en headless → NO ejecutado",
+  "touch": "NO ejecutado (sin dispositivo táctil)",
+  "lab": {
+    "cloud": "http://127.0.0.1:4100 (gateway fake, PG efímero LAB)",
+    "postgres": "http://127.0.0.1:1430",
+    "legacy": "http://127.0.0.1:1431",
+    "beats": 300,
+    "account": "v09u-5b1b351f"
+  }
+}

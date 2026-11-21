@@ -1,0 +1,39 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-a",
+      "sort_order": 0,
+      "name": "Beat b-a",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "master": {
+        "telegram_file_id": "direct:900",
+        "telegram_message_id": 900
+      }
+    }
+  ],
+  "trash": [
+    {
+      "trash_id": "t-s",
+      "trashed_at": 1,
+      "beat": {
+        "id": "b-b",
+        "sort_order": 0,
+        "name": "Beat b-b",
+        "bpm": "120",
+        "key": "C",
+        "tags": [],
+        "rating": 0,
+        "master": {
+          "telegram_file_id": "direct:900",
+          "telegram_message_id": 900
+        }
+      }
+    }
+  ]
+}

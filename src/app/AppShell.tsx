@@ -1,3 +1,5 @@
+import GalleryChrome from "../features/design/GALLERY/GalleryChrome";
+import { BeatTagPeekLayer, useBeatTagPeek } from "../features/design/shared/BeatTagPeek";
 import AddBeatModal from "../components/AddBeatModal";
 import { PlusIcon, Artwork } from "../components/ui";
 import BeatCard from "../components/BeatCard";
@@ -23,8 +25,11 @@ import { setTagColor } from "../lib/tagColors";
 
 export default function AppShell({ scope }: { scope: Record<string, any> }) {
   const { hydrateReviewCandidate, REVIEW_SKELETON_ENABLED, activeDragBeat, addBeatsAndReview, addToQueue, allTags, applyBulkUpdate, audio, audioConflictBatch, backTagRename, backgroundUploadErrors, beatFileDrop, beats, cancelAudioConflicts, cancelReview, cancelTagRename, clearSelection, clearTagFilters, closeCloudFiles, closeImportDecisions, cloudDownloadNotice, cloudFiles, cloudFilesBeat, cloudFilesBusyId, cloudFilesDownloadError, cloudFilesDownloadedIds, cloudSessionVerified, commitDrawerCloudMutation, confirmTagRename, connectionState, continueTagRename, currentBeat, cycleRepeat, deferredLibraryReloadRef, deleteBeat, dismissDownloadError, dismissInterruptedUploadNotices, dismissProjectUpdateNotice, displayedBeats, drawer, dropActive, dropImportBatch, dropImporting, excludedTags, filteredBeats, finishSelection, handleBeatRestored, handleCloudFiles, handleCustomCursorChanged, handleDisconnectTelegramAccount, handleDownloadTelegram, handleDragCancel, handleDragEnd, handleDragStart, handleDroppedBeatFileRole, handleEditBulk, handleFolderChanged, handleGetCloudFile, handleIncompleteWarningsChanged, handleNext, handleOpenProject, handlePlay, handlePrev, handleRemoveBulk, handleReviewedBeatSaved, handleReviewedSaveAll, handleTagClick, handleToggleOffline, handleUpdateProject, handleUpload, handleUploadBulk, handleUploadProjectTelegram, handleUploadTelegram, handleWarm, importResolvedDecisions, includedTags, interruptedUploadNotices, libraryDropStaging, libraryRefreshing, loading, offlineBusyIds, openTagRename, openableCloudProjectIds, playQueueIndex, projectUpdateNotice, queuedBeats, rejectOfflineMutation, releaseFile, reloadLibrary, repeatMode, resolveAudioConflicts, retryBackgroundUpload, revealedBeatIds, reviewBootstrap, reviewQueue, search, seek, selectMode, selectedBeats, selectedIds, sensors, setBeatFileDrop, setDrawer, setSearch, setShowAdd, setShowSettings, setShowUpload, setSortBy, setTagColorMenu, setTagRenameNewTag, setVolume, settings, showAdd, showQueue, showSettings, showUpload, shuffleEnabled, skipCurrentReviewBeat, sortBy, startupCookingGate, tagColorMenu, tagColors, tagFrequency, tagRename, tagRenameAffectedCount, tagRenameBusy, tagRenameError, tagRenameMp3Count, tagRenameWavCount, tagSuggestions, togglePause, toggleQueue, toggleSelectAll, toggleSelection, toggleShuffle, updateBeat } = scope;
+  const web = platform.kind === "web";
+  const tagPeek = useBeatTagPeek();
   return (
     <div
+      className={web ? "bg-design lab-gallery-page bg-product-gallery" : undefined}
       style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0c0c0c", overflow: "hidden" }}
     >
       {(connectionState === "poor" || connectionState === "offline") && (
@@ -130,6 +135,7 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
           ))}
         </div>
       )}
+      {web ? <GalleryChrome scope={scope} /> : <>
       {/* Top bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 24px", height: 50, flexShrink: 0, borderBottom: "1px solid #111" }}>
         <span style={{ fontWeight: 400, fontSize: 14, color: "#aaa", letterSpacing: 0.3 }}>beat galer</span>
@@ -183,19 +189,21 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
         </div>
       </div>
 
+      </>}
       {/* Selection toolbar */}
-      {selectedIds.size > 0 && (
-        <div style={{ padding: "0 24px", height: 40, display: "flex", alignItems: "center", gap: 12, background: "#111", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>
+      {(selectedIds.size > 0 || (web && selectMode)) && (
+        <div className={web ? "bg-gallery-selection-actions" : undefined} style={{ padding: "0 24px", height: 40, display: "flex", alignItems: "center", gap: 12, background: "#111", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>
           <span style={{ fontSize: 12, color: "#888" }}>{selectedIds.size} selected</span>
-          <button onClick={handleEditBulk}
+          {web && <button type="button" onClick={() => toggleSelectAll(displayedBeats)}>Select All</button>}
+          <button onClick={handleEditBulk} disabled={selectedIds.size === 0}
             style={{ padding: "5px 14px", background: "#1e1e1e", border: "1px solid #2a2a2a", borderRadius: 6, color: "#ccc", fontSize: 12, cursor: "pointer" }}>
             Edit all
           </button>
-          <button onClick={handleUploadBulk}
+          {platform.capabilities.localHelper && <button onClick={handleUploadBulk}
             style={{ padding: "5px 14px", background: "#202020", border: "1px solid #2e2e2e", borderRadius: 6, color: "#e0e0e0", fontSize: 12, cursor: "pointer", fontWeight: 500 }}>
             Upload to YouTube
-          </button>
-          <button onClick={handleRemoveBulk}
+          </button>}
+          <button onClick={handleRemoveBulk} disabled={selectedIds.size === 0}
             style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>
             Remove all
           </button>
@@ -206,6 +214,7 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
         </div>
       )}
 
+      {!web && <>
       {/* Tag filter */}
 <div style={{ padding: "7px 24px", display: "flex", gap: 6, flexWrap: "wrap", borderBottom: "1px solid #111", flexShrink: 0 }}>
   <button
@@ -243,6 +252,7 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
   })}
 </div>
 
+      </>}
 {tagColorMenu && (
   <TagColorMenu
     x={tagColorMenu.x}
@@ -276,9 +286,10 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
 
       {/* Grid — OS file drag-drop */}
       <div
+        className={web ? "lab-gallery-main" : undefined}
         data-library-scroll="true"
         aria-busy={startupCookingGate || (connectionState === "online" && !cloudSessionVerified)}
-        style={{ flex: 1, position: "relative", overflowY: "auto", padding: "28px 24px", paddingBottom: currentBeat ? 90 : 28, opacity: libraryRefreshing ? 0.82 : 1, transform: libraryRefreshing ? "scale(0.997)" : "scale(1)", transition: "opacity 150ms ease, transform 150ms ease" }}
+        style={{ flex: 1, position: "relative", overflowY: "auto", padding: web ? undefined : "28px 24px", paddingBottom: web ? (currentBeat ? 140 : 90) : (currentBeat ? 90 : 28), opacity: libraryRefreshing ? 0.82 : 1, transform: libraryRefreshing ? "scale(0.997)" : "scale(1)", transition: "opacity 150ms ease, transform 150ms ease" }}
 
       >
         {libraryRefreshing && (
@@ -292,7 +303,8 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
               cloudSessionVerified && connectionState === "online" ? (
                 <div>
                   <div style={{ fontSize: 15, color: "#555", fontWeight: 500 }}>Empty Gallery</div>
-                  <div style={{ marginTop: 7, fontSize: 12, color: "#2f2f2f" }}>Add a beat to start your library.</div>
+                  <div style={{ marginTop: 7, fontSize: 12, color: "#888" }}>Add a beat to start your library.</div>
+                  {web && <button type="button" className="bg-button bg-button--secondary" onClick={() => { if (!rejectOfflineMutation("Adding a beat")) setShowAdd(true); }}>Add beat</button>}
                 </div>
               ) : connectionState === "offline" || connectionState === "poor" ? (
                 <div>
@@ -302,7 +314,9 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
               ) : (
                 <div aria-label="Loading beat library" style={{ minHeight: 1 }} />
               )
-            ) : <div style={{ fontSize: 13 }}>No beats match your search</div>}
+            ) : <div style={{ fontSize: 13 }}>No beats match your search
+              {web && <button type="button" className="bg-button bg-button--ghost" onClick={() => { setSearch(""); clearTagFilters(); }}>Clear filters</button>}
+            </div>}
           </div>
         ) : (
           <DndContext
@@ -314,7 +328,10 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
           >
             <SortableContext items={filteredBeats.map((b: import("../types").Beat) => b.id)} strategy={rectSortingStrategy}>
               <div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
-                <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "28px 22px", alignContent: "flex-start", maxWidth: 1300 }}>
+                <div className={web ? "lab-gallery-grid" : undefined}
+                  onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut} onPointerDown={tagPeek.onPointerDown}
+                  onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}
+                  style={web ? undefined : { display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "28px 22px", alignContent: "flex-start", maxWidth: 1300 }}>
                 {filteredBeats.map((beat: import("../types").Beat, i: number) => (
                   <BeatCard
                     key={beat.id}
@@ -547,6 +564,7 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
         />
       )}
 
+      {web && <BeatTagPeekLayer peek={tagPeek.peek} />}
       <JobStatusBar />
     </div>
   );

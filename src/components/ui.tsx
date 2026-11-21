@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTagColor } from "../lib/tagColors";
 import { cleanTags, normalizeTag, validateTag } from "../lib/metadataValidation";
-import { getProceduralBeatBackgroundDataUrl } from "../lib/proceduralBeatBackground";
+import { drawProceduralBeatBackground } from "../lib/proceduralBeatBackground";
 
 // ── Icons ────────────────────────────────────────────────────
 export function PlayIcon({ size = 13, color = "#000" }: { size?: number; color?: string }) {
@@ -87,10 +87,12 @@ export function Stars({
           onMouseLeave={() => onChange && setHov(null)}
           style={{
             fontSize: 13, cursor: onChange ? "pointer" : "default",
-            color: i <= (hov ?? n) ? "#f59e0b" : "#252525",
+            // E83: las cinco siempre visibles; vacías en contorno (☆) con el contraste de la BeatCard (antes #252525, casi invisibles sobre el panel).
+            color: i <= (hov ?? n) ? "#f59e0b" : "#6e6e6e",
             transition: "color 0.1s",
           }}
-        >★</span>
+          data-star-filled={i <= (hov ?? n) ? "true" : "false"}
+        >{i <= (hov ?? n) ? "★" : "☆"}</span>
       ))}
     </div>
   );
@@ -244,36 +246,44 @@ export function TagEditor({
 }
 
 // ── Artwork ──────────────────────────────────────────────────
+// Fondo procedural de un beat SIN portada, dibujado directamente en un <canvas> (mismas operaciones y píxeles que la imagen PNG de antes):
+// codificar el PNG de forma síncrona costaba ~5 ms por tarjeta en el arranque de la Gallery (E80). Sin contexto 2D → degradado, como antes.
+function ProceduralCanvas({ beatId, label, onUnavailable }: { beatId: string; label?: string; onUnavailable: () => void }) {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useLayoutEffect(() => { const c = ref.current; if (c && !drawProceduralBeatBackground(c, beatId)) onUnavailable(); }, [beatId]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <canvas ref={ref} {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }} />;
+}
+
 export function Artwork({
-  beat, size = 160, playing,
+  beat, size = 160, playing, gallery = false,
 }: {
-  beat: { name: string; image_base64: string | null; image_preview_base64?: string | null; color: string; color2: string; id: string };
+  beat: { name: string; image_base64: string | null; image_preview_base64?: string | null; artwork_pending?: boolean; color: string; color2: string; id: string };
   size?: number;
   playing?: boolean;
+  gallery?: boolean;
 }) {
   const artworkSrc = beat.image_preview_base64 || beat.image_base64;
+  // Portada que aún se carga (catálogo): mismo fondo que una portada cuyo <img> todavía no se decodificó. El fondo procedural es el diseño
+  // de los beats SIN portada; antes se generaba también aquí y parpadeaba justo antes de la portada real (E80).
+  const pending = !artworkSrc && beat.artwork_pending === true;
+  const [proceduralUnavailable, setProceduralUnavailable] = useState<string | null>(null);
+  const procedural = !artworkSrc && !pending && proceduralUnavailable !== beat.id;
   const initials = beat.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
-  const proceduralBackground = useMemo(
-    () => (artworkSrc ? null : getProceduralBeatBackgroundDataUrl(beat.id)),
-    [artworkSrc, beat.id],
-  );
-  const backgroundImage = artworkSrc
-    ? undefined
-    : (proceduralBackground ? `url(${proceduralBackground})` : `linear-gradient(135deg, ${beat.color}, ${beat.color2})`);
   return (
     <div style={{
       width: size, height: size, borderRadius: 10, flexShrink: 0,
       position: "relative", overflow: "hidden",
-      backgroundColor: artworkSrc ? "#000" : "#0c0c0c",
-      backgroundImage,
+      backgroundColor: artworkSrc || pending ? "#000" : "#0c0c0c",
+      backgroundImage: artworkSrc || pending || procedural ? undefined : `linear-gradient(135deg, ${beat.color}, ${beat.color2})`,
       backgroundSize: "cover",
       backgroundPosition: "center",
       boxShadow: playing ? "0 0 0 2px rgba(255,255,255,0.15)" : "none",
       transition: "box-shadow 0.2s",
-    }}>
+    }} data-artwork-pending={pending ? "true" : undefined}>
+      {procedural && <ProceduralCanvas beatId={beat.id} label={gallery ? beat.name : undefined} onUnavailable={() => setProceduralUnavailable(beat.id)} />}
       {artworkSrc ? (
-        <img src={artworkSrc ?? undefined} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={beat.name} />
-      ) : (
+        <img src={artworkSrc} style={{ width: "100%", height: "100%", objectFit: "cover" }} alt={beat.name} />
+      ) : pending || (gallery && procedural) ? null : (
         <span style={{
           position: "absolute", bottom: 8, left: 10,
           fontWeight: 300, fontSize: 11,

@@ -1,0 +1,41 @@
+{
+  "window": {
+    "start": 240,
+    "end": 480
+  },
+  "currentBeat": "w5",
+  "selection": {
+    "token": "sel-1",
+    "count": 3,
+    "includes": [
+      "w1",
+      "w700"
+    ]
+  },
+  "draft": {
+    "beat_id": "w2",
+    "field": "name",
+    "value": "borrador"
+  },
+  "queue": [
+    "w999",
+    "w5",
+    "w100000"
+  ],
+  "accounts": {
+    "A": {
+      "prefix": "A-",
+      "n": 300
+    },
+    "B": {
+      "prefix": "B-",
+      "n": 2
+    }
+  },
+  "expect": [
+    "audio continúa",
+    "selección sobrevive evicción",
+    "cola conserva IDs no cargados",
+    "A→B limpia cachés y no mezcla IDs A-/B-"
+  ]
+}

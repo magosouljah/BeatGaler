@@ -1,0 +1,40 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": "b-files",
+      "sort_order": 0,
+      "name": "Beat b-files",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0,
+      "files": [
+        {
+          "cloud_file_id": "a",
+          "type": "mp3",
+          "telegram_file_id": "direct:701",
+          "telegram_message_id": 701
+        },
+        {
+          "cloud_file_id": "b",
+          "type": "mp3",
+          "telegram_file_id": "direct:702",
+          "telegram_message_id": 702
+        },
+        {
+          "cloud_file_id": "c",
+          "type": "hologram",
+          "telegram_file_id": "direct:703",
+          "telegram_message_id": 703,
+          "x_future": {
+            "k": 1
+          }
+        }
+      ]
+    }
+  ],
+  "trash": []
+}

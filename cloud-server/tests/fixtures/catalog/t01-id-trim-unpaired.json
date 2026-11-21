@@ -1,0 +1,44 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "version": 2,
+  "updated_at": 1762560000,
+  "beats": [
+    {
+      "id": " solo",
+      "sort_order": 0,
+      "name": "Beat  solo",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    },
+    {
+      "id": "tail ",
+      "sort_order": 1,
+      "name": "Beat tail ",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    },
+    {
+      "id": "\t tab",
+      "sort_order": 2,
+      "name": "Beat \t tab",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    },
+    {
+      "id": "ok",
+      "sort_order": 3,
+      "name": "Beat ok",
+      "bpm": "120",
+      "key": "C",
+      "tags": [],
+      "rating": 0
+    }
+  ],
+  "trash": []
+}

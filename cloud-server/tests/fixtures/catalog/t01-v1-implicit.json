@@ -1,0 +1,10 @@
+{
+  "schema": "beatgaler.telegram.library",
+  "beats": [
+    {
+      "id": "b-v1",
+      "name": "Old",
+      "sort_order": 0
+    }
+  ]
+}

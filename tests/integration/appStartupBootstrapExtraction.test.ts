@@ -6,6 +6,10 @@ const startup = readFileSync("src/features/startup/useStartupBootstrap.ts", "utf
 const connectivity = readFileSync("src/features/session/useConnectivity.ts", "utf8");
 const cloudEvents = readFileSync("src/features/cloud/useCloudLibraryEvents.ts", "utf8");
 const main = readFileSync("src/main.tsx", "utf8");
+const webExperience = readFileSync("src/app/WebExperience.tsx", "utf8");
+const webEntry = readFileSync("src/app/WebGalleryEntry.tsx", "utf8");
+const webWorkspace = readFileSync("src/app/WebGalleryWorkspace.tsx", "utf8");
+const authGate = readFileSync("src/features/auth/AuthExperienceGate.tsx", "utf8");
 
 function expectOrdered(source: string, markers: string[]): void {
   let previous = -1;
@@ -49,13 +53,24 @@ describe("task 9.3 startup bootstrap extraction", () => {
     expect(startup).toContain('setConnectionState("poor")');
   });
 
-  it("keeps main.tsx initializers and root composition in place", () => {
+  it("keeps public startup isolated and mounts Web Direct only inside the confirmed Gallery workspace", () => {
     expect(main).toContain("installStartupTrace();");
     expect(main).toContain("installWebCsrfFetchCoordinator();");
-    expect(main).toContain("preconnectRememberedWebDirect();");
-    expect(main).toContain("<AuthExperienceGate>");
-    expect(main).toContain("<LibraryUxBridge />");
-    expect(main).toContain("<WebLibraryPagination />");
-    expect(main).toContain("<App />");
+    expect(main).toContain('import WebExperience from "./app/WebExperience";');
+    expect(main).toContain('platform.kind === "web" ? <WebExperience />');
+    expect(main).not.toContain("preconnectRememberedWebDirect();");
+
+    expect(webExperience).toContain('const LandingPage = lazy(() => import("../features/design/LANDING/LandingPage"));');
+    expect(webExperience).toContain('const AuthenticatedPage = lazy(() => import("./WebGalleryEntry"));');
+    expect(webExperience).toContain('path === "/" ? <LandingPage />');
+
+    expect(webEntry).toContain('<AuthExperienceGate initialPhase={initialPhase} onAuthenticated={accountReady}>');
+    expect(webEntry).toContain('<Workspace />');
+    expect(authGate).toContain('if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;');
+    expect(webWorkspace).toContain('import { preconnectRememberedWebDirect } from "../features/playback/webRememberedDirectPreconnect";');
+    expect(webWorkspace).toContain("useEffect(() => { preconnectRememberedWebDirect(); }, []);");
+    expect(webWorkspace).toContain("<LibraryUxBridge />");
+    expect(webWorkspace).toContain("<WebLibraryPagination />");
+    expect(webWorkspace).toContain("<App />");
   });
 });

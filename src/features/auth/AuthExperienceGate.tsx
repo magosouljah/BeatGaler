@@ -93,11 +93,13 @@ async function startWebOAuth(provider: OAuthProvider) {
   };
 }
 
-export default function AuthExperienceGate({ children }: { children: React.ReactNode }) {
+export default function AuthExperienceGate({ children, initialPhase = "login", onAuthenticated }: {
+  children: React.ReactNode; initialPhase?: "login" | "register"; onAuthenticated?: () => void;
+}) {
   const [account, setAccount] = useState<BeatGalerAccount | null>(null);
   const authRunRef = useRef(0);
   const [checking, setChecking] = useState(platform.kind === "web");
-  const [phase, setPhase] = useState<Phase>("login");
+  const [phase, setPhase] = useState<Phase>(initialPhase);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -217,6 +219,8 @@ export default function AuthExperienceGate({ children }: { children: React.React
       window.removeEventListener("offline", offline);
     };
   }, [phase]);
+
+  useEffect(() => { if (account?.id) onAuthenticated?.(); }, [account?.id, onAuthenticated]);
 
   if (platform.kind !== "web") return <>{children}</>;
   if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;
@@ -446,7 +450,7 @@ export default function AuthExperienceGate({ children }: { children: React.React
 
   return <main className="bg-auth-shell" aria-labelledby="beatgaler-auth-title">
     <section className="bg-auth-card">
-      <div className="bg-auth-brand" aria-hidden="true">BG</div>
+      <a className="bg-auth-brand" href="/" aria-label="BeatGaler home">BG</a>
       <h1 ref={headingRef} tabIndex={-1} id="beatgaler-auth-title" className="bg-auth-title">{title}</h1>
       <p className="bg-auth-subtitle">
         {phase === "register" ? "Create one account for your BeatGaler library."
@@ -489,6 +493,19 @@ export default function AuthExperienceGate({ children }: { children: React.React
       </form>}
 
       {phase === "register" && <form className="bg-auth-form" onSubmit={handleRegister}>
+        <div className="bg-auth-social" aria-label="Create account using a provider">
+          <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void beginOAuth("google")}>Continue with Google</UiButton>
+          <UiButton type="button" variant="secondary" fullWidth disabled={busy} onClick={() => void beginOAuth("x")}>Continue with X</UiButton>
+        </div>
+        {(oauthState === "polling" || oauthState === "opening") && <div className="bg-auth-oauth-status" role="status"><UiSpinner label="Waiting for provider sign-in"/><span>Finish sign-in in the provider window.</span><UiButton type="button" variant="ghost" onClick={cancelOAuth}>Cancel</UiButton></div>}
+        {oauthState === "blocked" && <UiFeedback tone="info" className="bg-auth-oauth-blocked">
+          <strong>Popup blocked.</strong> Allow popups or continue in another tab.
+          <div className="bg-auth-inline-actions">
+            <UiButton type="button" variant="secondary" onClick={() => oauthProvider && void beginOAuth(oauthProvider)}>Retry popup</UiButton>
+            {oauthUrl && <a className="bg-auth-link-button" href={oauthUrl} target="_blank" rel="noreferrer">Open new tab</a>}
+          </div>
+        </UiFeedback>}
+        <div className="bg-auth-divider"><span>or create with email</span></div>
         <UiField id="auth-register-username" label="Username" autoFocus value={usernameBase} onChange={event => setUsernameBase(event.target.value.toLowerCase().replace(/[^a-z0-9._]/g, "").slice(0, 20))} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required description="BeatGaler adds four random numbers to normal usernames." />
         <UiField id="auth-register-email" label="Email" type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" autoCapitalize="none" autoCorrect="off" required />
         <UiField id="auth-register-password" label="Password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" minLength={8} required />
