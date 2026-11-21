@@ -17,6 +17,7 @@ import {
 } from "./catalogDirectTypes";
 import { DirectSendError, RESUMABLE_MIN_BYTES, type DirectFailure } from "./catalogDirectCore";
 import { WebTransportWorkerClient } from "../../cloud/webTransportWorkerClient";
+import { getActiveWebAccountId } from "../../auth/activeWebAccount";
 import { WebTransportController, type WebTransportControlApi, type WebTransportRuntime } from "../../cloud/webTransportController";
 import {
   bindWebTransportSession,
@@ -211,11 +212,40 @@ export function createCatalogDirectPort(options: CatalogDirectPortOptions): Dire
 
 export * from "./catalogDirectTypes";
 
+let prewarmedRuntime: { owner: { accountId: string | null }; client: WebTransportWorkerClient } | null = null;
+
+/** El Worker se crea sin sesión. El login completa la identidad cuando Cloud la confirma. */
+export function prewarmDirectRuntime(owner: { accountId: string | null }): void {
+  // Un nuevo intento puede retomar el Worker de un login fallido, sin reasignar una cuenta ya confirmada.
+  if (prewarmedRuntime?.owner.accountId) return;
+  const client = prewarmedRuntime?.client ?? new WebTransportWorkerClient();
+  client.prewarm();
+  prewarmedRuntime = { owner, client };
+}
+
+export async function discardPrewarmedDirectRuntime(): Promise<void> {
+  const pending = prewarmedRuntime;
+  prewarmedRuntime = null;
+  await pending?.client.shutdown();
+}
+
 /** Puerto real del navegador: Worker mtcute existente + control de sesión del catálogo. Se carga de forma diferida (catalogDirectTypes.createLazyDirectPort). */
 export function createWebDirectPort(): DirectPort {
   // Solo desarrollo (LAB): VITE_CATALOG_LAB_RENEW_MARGIN_S adelanta la renovación de la clave para ejercitar la reanudación con archivos pequeños.
   // (también `localStorage["bg:lab:renew-margin-s"]`, para que una sonda la fije solo en su propio perfil de navegador).
   const labStored = (() => { try { return localStorage.getItem("bg:lab:renew-margin-s"); } catch { return null; } })();
   const labMargin = import.meta.env.DEV ? Number(import.meta.env.VITE_CATALOG_LAB_RENEW_MARGIN_S ?? labStored) : NaN;
-  return createCatalogDirectPort({ enabled: () => true, runtime: () => new WebTransportWorkerClient() as unknown as DirectRuntime, ...(Number.isFinite(labMargin) && labMargin > 0 ? { renewMarginS: labMargin } : {}) });
+  return createCatalogDirectPort({
+    enabled: () => true,
+    runtime: () => {
+      const pending = prewarmedRuntime;
+      if (pending?.owner.accountId && pending.owner.accountId === getActiveWebAccountId()) {
+        prewarmedRuntime = null;
+        return pending.client as unknown as DirectRuntime;
+      }
+      void discardPrewarmedDirectRuntime().catch(() => {});
+      return new WebTransportWorkerClient() as unknown as DirectRuntime;
+    },
+    ...(Number.isFinite(labMargin) && labMargin > 0 ? { renewMarginS: labMargin } : {}),
+  });
 }

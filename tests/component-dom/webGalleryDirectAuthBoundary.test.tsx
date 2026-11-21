@@ -28,8 +28,8 @@ vi.mock("../../src/components/AccountGate", () => ({
   resolveBeatGalerCloudApi: vi.fn(async () => "/beatgaler-api"),
 }));
 
-vi.mock("../../src/features/playback/webRememberedDirectPreconnect", () => ({
-  preconnectRememberedWebDirect: mocks.preconnect,
+vi.mock("../../src/features/library/catalog/catalogDirectPort", () => ({
+  prewarmDirectRuntime: mocks.preconnect,
 }));
 
 // T25: la Web monta siempre el workspace del catálogo (sin árbol LEGACY); la frontera de auth se prueba sobre él.
@@ -129,7 +129,7 @@ describe("Web Direct authenticated Gallery mount boundary", () => {
     expect(mocks.preconnect).not.toHaveBeenCalled();
   });
 
-  it("mounts Gallery after account confirmation (no legacy INDEX preconnect, T25), and unmounts it on logout", async () => {
+  it("mounts Gallery after account confirmation without login prewarm, and unmounts it on logout", async () => {
     const pending = deferred<TestAccount | null>();
     mocks.restore.mockReturnValueOnce(pending.promise);
     await mountAt("/gallery");

@@ -8,12 +8,12 @@ function source(path: string): string {
 
 describe("Issue #97 runtime trace contract", () => {
   it("keeps the definitive startup/playback timeline observable", () => {
-    const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
+    const accountGate = source("src/components/AccountGate.tsx");
     const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
     const worker = source("src/features/cloud/webTransport.worker.ts");
     const playback = source("src/features/playback/webPlaybackSource.ts");
 
-    expect(rememberedPreconnect).toContain("DIRECT_REMEMBERED_PRECONNECT_BEGIN");
+    expect(accountGate).toContain("DIRECT_SIGN_IN_PRECONNECT_BEGIN");
     expect(coordinator).toContain("STARTUP_LOCAL_ROUTING_READY");
     expect(coordinator).toContain("DIRECT_START_DISPATCHED");
     expect(worker).toContain("DIRECT_MTPROTO_READY");

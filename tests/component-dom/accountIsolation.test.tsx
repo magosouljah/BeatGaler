@@ -17,7 +17,10 @@ vi.mock("../../src/platform", () => ({
     cloudData: { disconnect: platformMocks.disconnect },
   },
 }));
-vi.mock("../../src/features/playback/webRememberedDirectPreconnect", () => ({ prepareWebDirectForSignIn: vi.fn() }));
+vi.mock("../../src/features/library/catalog/catalogDirectPort", () => ({
+  prewarmDirectRuntime: vi.fn(),
+  discardPrewarmedDirectRuntime: vi.fn(async () => {}),
+}));
 
 import AuthExperienceGate from "../../src/features/auth/AuthExperienceGate";
 import { getActiveWebAccountId, setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";

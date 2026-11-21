@@ -99,14 +99,13 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(accountGate).not.toContain("optimisticRememberedSession");
   });
 
-  it("returns the first MSE URL before stream admission and mounts remembered Direct behind Gallery authentication", () => {
+  it("returns the first MSE URL before stream admission and keeps Gallery behind authentication", () => {
     const playback = source("src/features/playback/webPlaybackSource.ts");
     const main = source("src/main.tsx");
     const experience = source("src/app/WebExperience.tsx");
     const galleryEntry = source("src/app/WebGalleryEntry.tsx");
     const galleryWorkspace = source("src/app/WebGalleryWorkspace.tsx");
     const experienceGate = source("src/features/auth/AuthExperienceGate.tsx");
-    const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
     const adapter = source("src/platform/webAdapter.ts");
     const accountGate = source("src/components/AccountGate.tsx");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
@@ -133,15 +132,8 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(galleryWorkspace).not.toContain("preconnectRememberedWebDirect");
     expect(galleryWorkspace).not.toContain("<App />");
 
-    expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
-    expect(rememberedPreconnect).toContain("hasRememberedWebSessionMarker()");
-    expect(rememberedPreconnect).toContain("if (Boolean((window as any).__TAURI_INTERNALS__)) return;");
-    expect(rememberedPreconnect).toContain("if (!readWebCsrfToken()) {");
-    expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_BEGIN")');
-    expect(rememberedPreconnect).toContain("const coordinator = getWebStartupPlaybackCoordinator();");
-    expect(rememberedPreconnect).toContain("const startup = coordinator.prepareConnection();");
-    expect(rememberedPreconnect).toContain('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")');
-    expect(rememberedPreconnect).toContain("void startup.catch(error =>");
+    expect(accountGate).toContain('import("../features/library/catalog/catalogDirectPort")');
+    expect(accountGate).not.toContain("webRememberedDirectPreconnect");
 
     expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
     expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");

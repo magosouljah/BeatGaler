@@ -2,8 +2,8 @@
 /**
  * M1.B2a - Caracterizacion (fakes) del precalentamiento Direct Web en login, sesion recordada y logout.
  *
- * Mide HOY, solo desde fuera, con la plataforma Web REAL, AccountGate/AuthExperienceGate reales, el coordinador
- * y el transporte reales, y tres dobles: constructor `Worker` falso, `fetch` falso del Cloud y orden logico de eventos
+ * Usa la plataforma Web, AccountGate/AuthExperienceGate y el puerto Direct B reales, con un constructor
+ * `Worker` falso, `fetch` falso del Cloud y orden logico de eventos
  * (no hay reloj de pared: "mismo instante" = misma posicion en el registro de eventos respecto a las peticiones del Cloud).
  *
  * Cada aserto marcado `COMPORTAMIENTO ACTUAL` fija un instante o recuento que M1.B2 debe conservar o justificar (D7:
@@ -15,8 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AuthExperienceGate from "../../src/features/auth/AuthExperienceGate";
 import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import { loginBeatGalerAccount, logoutBeatGalerAccount, restoreBeatGalerSession } from "../../src/components/AccountGate";
-import { preconnectRememberedWebDirect, prepareWebDirectForSignIn } from "../../src/features/playback/webRememberedDirectPreconnect";
+import { createWebDirectPort, discardPrewarmedDirectRuntime, prewarmDirectRuntime } from "../../src/features/library/catalog/catalogDirectPort";
 import { disconnectWebStartupPlaybackCoordinator } from "../../src/features/playback/webStartupPlaybackCoordinator";
+
+const { prepareTempAuth } = vi.hoisted(() => ({ prepareTempAuth: vi.fn(async () => { throw new Error("unexpected MTProto handshake"); }) }));
+vi.mock("../../src/features/cloud/webTempAuth", () => ({ prepareWebTempAuth: prepareTempAuth }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -149,6 +152,7 @@ beforeEach(() => {
   FakeWorker.instances = [];
   routes = {};
   fakeFetch.mockClear();
+  prepareTempAuth.mockClear();
   vi.stubGlobal("Worker", FakeWorker);
   vi.stubGlobal("fetch", fakeFetch);
   localStorage.clear();
@@ -171,6 +175,7 @@ afterEach(async () => {
   if (root) await act(async () => root!.unmount());
   host?.remove();
   host = null; root = null;
+  await discardPrewarmedDirectRuntime();
   await disconnectWebStartupPlaybackCoordinator();
   setActiveWebAccountId(null);
   delete (window as any).__TAURI_INTERNALS__;
@@ -234,7 +239,7 @@ describe("M1.B2a - precalentamiento Direct Web: caracterizacion con dobles", () 
   });
 
   it("E1c el precalentamiento de login es solo el Worker: no abre sesion Direct ni toca el Cloud", async () => {
-    prepareWebDirectForSignIn();
+    prewarmDirectRuntime({ accountId: null });
     await flush();
     // COMPORTAMIENTO ACTUAL (M1.B2 debe conservar o justificar): 1 Worker, 0 mensajes, 0 peticiones.
     expect(workers()).toHaveLength(1);
@@ -262,54 +267,73 @@ describe("M1.B2a - precalentamiento Direct Web: caracterizacion con dobles", () 
     expect(paths()).toEqual(["/auth/session"]);
   });
 
-  it("E2b preconnectRememberedWebDirect con marca y cookie CSRF: crea el Worker de forma SINCRONA y luego pide sesion y /transport/session/start con CSRF", async () => {
-    rememberedSession(true);
-    routes["/auth/session"] = () => json({ user: user("usr_e2b") });
-    routes["/transport/session/start"] = () => json({ error: "service unavailable" }, 503);
+  it("el primer open adopta el Worker del login y solo el puerto lo cierra durante el logout", async () => {
+    const loginReply = deferred<Response>();
+    routes["/auth/login"] = () => loginReply.promise;
+    const login = loginBeatGalerAccount("owner@example.test", "pw");
+    await vi.waitFor(() => expect(workers()).toHaveLength(1));
+    const [prewarmed] = workers();
+    loginReply.resolve(json({ user: user("usr_adoption"), csrf_token: "c" }));
+    await login;
 
-    preconnectRememberedWebDirect();
-    // COMPORTAMIENTO ACTUAL (M1.B2 debe conservar o justificar): el Worker existe en el mismo turno sincrono de la llamada,
-    // antes de cualquier peticion al Cloud.
-    expect(workers()).toHaveLength(1);
-    expect(fetchLog).toEqual([]);
-    expect(workers()[0].url).toContain("webTransport.worker.ts");
-    expect(workers()[0].options).toEqual({ type: "module", name: "galer-cloud-data-plane" });
-    expect(workers()[0].messages).toEqual([]);
+    const reserveReply = deferred<Response>();
+    routes["/catalog/v1/direct/session"] = () => reserveReply.promise;
+    const port = createWebDirectPort();
+    const opening = port.ready();
+    const logoutReply = deferred<Response>();
+    routes["/auth/logout"] = () => logoutReply.promise;
+    let logout: Promise<void> | undefined;
+    try {
+      await vi.waitFor(() => expect(paths()).toEqual(["/auth/login", "/catalog/v1/direct/session"]));
+      expect(workers()).toEqual([prewarmed]);
+      expect(prewarmed.messages).toEqual([]);
 
-    await vi.waitFor(() => expect(paths()).toContain("/transport/session/start"));
-    await flush();
-    // COMPORTAMIENTO ACTUAL: primero /auth/session (restauracion compartida), despues /transport/session/start.
-    expect(paths()).toEqual(["/auth/session", "/transport/session/start"]);
-    const start = fetchLog[1];
-    expect(start.method).toBe("POST");
-    expect(start.credentials).toBe("include");
-    // El CSRF de la cookie del origen acompana la peticion Direct temprana (solo cookie; sessionStorage esta vacio aqui).
-    expect(start.csrf).toBe("csrf-cookie-token");
-    expect(fetchLog[0].csrf).toBeNull();
-    // COMPORTAMIENTO ACTUAL: al fallar la reserva, el controlador cierra ordenadamente: un unico mensaje "shutdown" y terminate.
-    expect(workers()).toHaveLength(1);
-    expect(workers()[0].ops).toEqual(["shutdown"]);
-    expect(workers()[0].terminated).toBe(true);
-    expect(idx("worker:1:post:shutdown")).toBeGreaterThan(idx("fetch:/transport/session/start:response:503"));
-    expect(idx("worker:1:terminate")).toBeGreaterThan(idx("worker:1:post:shutdown"));
+      logout = logoutBeatGalerAccount();
+      await vi.waitFor(() => expect(paths()).toContain("/auth/logout"));
+      await flush();
+      expect(prewarmed.messages).toEqual([]);
+      expect(prewarmed.terminated).toBe(false);
+
+      // Simula el teardown de Gallery mientras la reserva de la sesión sigue en vuelo.
+      const closing = port.close();
+      reserveReply.resolve(json({ error: "service unavailable" }, 503));
+      await closing;
+      await expect(opening).resolves.toBe(false);
+      expect(events).not.toContain("fetch:/auth/logout:response:200");
+      expect(workers()).toEqual([prewarmed]);
+      expect(prewarmed.ops).toEqual(["shutdown"]);
+      expect(events.filter(event => event.endsWith(":terminate"))).toEqual(["worker:1:terminate"]);
+      expect(idx("worker:1:terminate")).toBeGreaterThan(idx("worker:1:post:shutdown"));
+    } finally {
+      reserveReply.resolve(json({ error: "service unavailable" }, 503));
+      logoutReply.resolve(json({ ok: true }));
+      await port.close();
+      await opening;
+      await logout;
+    }
+    expect(events.filter(event => event.endsWith(":terminate"))).toEqual(["worker:1:terminate"]);
   });
 
-  it("E3 sesion recordada SIN cookie CSRF: no crea Worker ni pide nada, aunque haya CSRF en sessionStorage", async () => {
-    rememberedSession(false);
-    sessionStorage.setItem(CSRF_SESSION_KEY, "stale-session-storage-token");
-    preconnectRememberedWebDirect();
-    await flush();
-    // COMPORTAMIENTO ACTUAL (M1.B2 debe conservar o justificar): 0 Workers y 0 peticiones; solo la cookie del origen habilita el preconnect.
-    expect(workers()).toHaveLength(0);
-    expect(fetchLog).toEqual([]);
-  });
-
-  it("E3b sin marca de sesion recordada tampoco se precalienta", async () => {
-    setCsrfCookie("csrf-cookie-token");
-    preconnectRememberedWebDirect();
-    await flush();
-    expect(workers()).toHaveLength(0);
-    expect(fetchLog).toEqual([]);
+  it("el primer open de otra cuenta descarta el Worker del login", async () => {
+    routes["/auth/login"] = () => json({ user: user("usr_login"), csrf_token: "c" });
+    await loginBeatGalerAccount("owner@example.test", "pw");
+    await vi.waitFor(() => expect(workers()).toHaveLength(1));
+    const [prewarmed] = workers();
+    setActiveWebAccountId("usr_other");
+    const reserveReply = deferred<Response>();
+    routes["/catalog/v1/direct/session"] = () => reserveReply.promise;
+    const port = createWebDirectPort();
+    const opening = port.ready();
+    try {
+      await vi.waitFor(() => expect(prewarmed.terminated).toBe(true));
+      expect(prewarmed.ops).toEqual(["shutdown"]);
+      expect(paths()).toEqual(["/auth/login", "/catalog/v1/direct/session"]);
+    } finally {
+      reserveReply.resolve(json({ error: "service unavailable" }, 503));
+      await opening;
+      await port.close();
+    }
+    expect(events.filter(event => event.endsWith(":terminate"))).toEqual(["worker:1:terminate"]);
   });
 
   it("E4 logout con Worker vivo: shutdown + terminate sin esperar a /auth/logout; el siguiente login crea otro Worker", async () => {
@@ -336,7 +360,7 @@ describe("M1.B2a - precalentamiento Direct Web: caracterizacion con dobles", () 
 
     routes["/auth/login"] = () => json({ user: user("usr_e4b"), csrf_token: "c2" });
     await act(async () => { await loginBeatGalerAccount("owner@example.test", "pw"); });
-    // COMPORTAMIENTO ACTUAL: un nuevo coordinador crea un SEGUNDO Worker; el primero sigue terminado y sin mas mensajes.
+    // COMPORTAMIENTO ACTUAL: el nuevo login crea un SEGUNDO Worker; el primero sigue terminado y sin mas mensajes.
     expect(workers()).toHaveLength(2);
     expect(workers()[0].terminated).toBe(true);
     expect(workers()[0].ops).toEqual(["shutdown"]);
@@ -348,7 +372,7 @@ describe("M1.B2a - precalentamiento Direct Web: caracterizacion con dobles", () 
     localStorage.setItem(MARKER_KEY, "1");
     routes["/auth/logout"] = () => json({ ok: true });
     await act(async () => { await logoutBeatGalerAccount(); });
-    // COMPORTAMIENTO ACTUAL (M1.B2 debe conservar o justificar): cerrar no construye el coordinador.
+    // COMPORTAMIENTO ACTUAL (M1.B2 debe conservar o justificar): cerrar no construye un Worker.
     expect(workers()).toHaveLength(0);
     expect(paths()).toEqual(["/auth/logout"]);
   });
@@ -407,18 +431,16 @@ describe("M1.B2a - precalentamiento Direct Web: caracterizacion con dobles", () 
 
     fetchLog = [];
     rememberedSession(true);
-    preconnectRememberedWebDirect();
-    prepareWebDirectForSignIn();
+    routes["/auth/session"] = () => json({ user: user("usr_e6") });
+    await mountGate();
     await flush();
     expect(workers()).toHaveLength(0);
-    expect(fetchLog).toEqual([]);
+    expect(paths()).toEqual(["/auth/session"]);
   });
 
   it("E7 entorno Tauri: el precalentamiento no crea Worker ni peticiones", async () => {
     (window as any).__TAURI_INTERNALS__ = {};
     rememberedSession(true);
-    preconnectRememberedWebDirect();
-    prepareWebDirectForSignIn();
     routes["/auth/login"] = () => json({ user: user("usr_e7"), csrf_token: "c" });
     await act(async () => { await loginBeatGalerAccount("owner@example.test", "pw"); });
     await flush();
@@ -440,17 +462,21 @@ describe("M1.B2a - precalentamiento Direct Web: caracterizacion con dobles", () 
       ["credential_envelope", { ...bootstrapBase, credential_envelope: "x" }],
     ])("una respuesta del Cloud con %s es rechazada y no llega al Worker", async (_name, poisoned) => {
       allowPoisonedResponses = true;
-      rememberedSession(true);
-      routes["/auth/session"] = () => json({ user: user("usr_inv") });
-      routes["/transport/session/start"] = () => json(poisoned);
-      preconnectRememberedWebDirect();
-      await vi.waitFor(() => expect(workers()[0]?.terminated).toBe(true));
+      routes["/auth/login"] = () => json({ user: user("usr_inv"), csrf_token: "c" });
+      routes["/catalog/v1/direct/session"] = () => json(poisoned);
+      routes["/catalog/v1/direct/session/stop"] = () => json({ ok: true });
+      await loginBeatGalerAccount("owner@example.test", "pw");
+      await vi.waitFor(() => expect(workers()).toHaveLength(1));
+      const port = createWebDirectPort();
+      await expect(port.ready()).resolves.toBe(false);
+      expect(workers()[0].terminated).toBe(true);
       // El cliente se niega a usarla: el Worker solo recibe el cierre, nunca initialize ni la respuesta envenenada.
       expect(workers()[0].ops).toEqual(["shutdown"]);
       const sent = serialize(workers()[0].messages);
       expect(sent).not.toContain("SECRET");
       expect(sent).not.toContain("abcdef");
-      expect(paths()).toEqual(["/auth/session", "/transport/session/start"]);
+      expect(prepareTempAuth).not.toHaveBeenCalled();
+      expect(paths()).toEqual(["/auth/login", "/catalog/v1/direct/session", "/catalog/v1/direct/session/stop"]);
     });
   });
 });
