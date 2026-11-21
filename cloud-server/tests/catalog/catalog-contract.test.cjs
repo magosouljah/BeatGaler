@@ -90,6 +90,29 @@ test('partJobId (T16/V09): ids válidos para catalog_jobs con partKeys del clien
   assert.notEqual(partJobId('verify', op, 'y'.repeat(60)), partJobId('verify', op, 'y'.repeat(59) + 'z'));
 });
 
+test('partJobId conserva los IDs sin hash hasta 64 caracteres', () => {
+  assert.equal(contract.partJobId('verify', 'op1', 'MASTER:0'), 'job-verify-op1-MASTER_0');
+  assert.equal(
+    contract.partJobId('verify', 'op1', 'x'.repeat(49)),
+    'job-verify-op1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+  );
+});
+
+test('partJobId conserva los IDs largos con un separador NUL en el hash', () => {
+  const { createHash } = require('node:crypto');
+  const vectors = [
+    ['verify', 'op1', 'x'.repeat(50), 'job-verify-op1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-cd13974834646223'],
+    ['reconcile', 'top-' + 'a'.repeat(60), 'FILES:0:0', 'job-reconcile-top-aaaaaaaaaaaaaaaaaaaaaaaaaaaaa-303b16269f9410e6'],
+  ];
+  const suffix = (input) => createHash('sha256').update(input).digest('hex').slice(0, 16);
+  for (const [kind, operationId, partKey, expected] of vectors) {
+    const id = contract.partJobId(kind, operationId, partKey);
+    assert.equal(id, expected);
+    assert.equal(id.slice(-16), suffix(operationId + '\u0000' + partKey));
+    assert.notEqual(id.slice(-16), suffix(operationId + partKey));
+  }
+});
+
 // E77 — El Cloud no transporta bytes de archivos: ni rutas, ni métodos del gateway, ni carga del módulo de operador desde el runtime.
 test('E77: sin rutas ni métodos de transporte de bytes en el Cloud; el módulo de operador no se carga desde el servidor', () => {
   const read = (...p) => fs.readFileSync(path.join(__dirname, '..', '..', ...p), 'utf8');
