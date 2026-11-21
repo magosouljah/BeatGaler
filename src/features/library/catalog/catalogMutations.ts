@@ -3,14 +3,14 @@
 //  - Import/reemplazo → operación C7 (catalogTransfer): strip ID3 del MASTER, ZIP del PROJECT y progreso se conservan como
 //    preparación de archivos, separados de la autoridad del catálogo; detalle SQL (GET /beats/:id) para versión y archivos; cero INDEX.
 //  - Trash/restore en lotes ≤50 con versiones; un conflicto detiene los lotes siguientes y se reporta (sin éxito global falso).
-//  - "Toda la papelera" y purge: job server-side (BULK_TRASH sobre selección; PURGE → T15 → estado `pending`, nunca éxito ficticio).
+//  - Purge ("vaciar la papelera"): job server-side (PURGE → T15 → estado `pending`, nunca éxito ficticio).
 //  - Referencias de operación por cuenta persistidas (sin tokens ni secretos) para consultar el resultado tras recargar; un checkpoint
 //    en memoria nunca marca una subida como exitosa.
 import type { Beat } from "../../../types";
 import type { BeatAssets, GalerCloudObjectRef } from "../../../domain/beat";
 import { CatalogApiError, type CatalogBeatDto } from "./catalogApi";
 import { assertBeatNameWithinLimit } from "./catalogCommandsApi";
-import { BATCH_MAX, type CatalogBeatDetail, type CatalogBulkOperation, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogPurgeOperation, type CatalogVersionedItem } from "./catalogCommandsApi";
+import { BATCH_MAX, type CatalogBeatDetail, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogPurgeOperation, type CatalogVersionedItem } from "./catalogCommandsApi";
 import { describePart, type CatalogTransfer, type CommitResult, type TransferIntent, type TransferOperationDto, type TransferPartSpec, type TransferRole, type UploadPartResult } from "./catalogTransfer";
 
 export type MutationStage = "preparing" | "master" | "wav" | "artwork" | "project" | "library";
@@ -168,12 +168,6 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
   const trashBeats = (items: CatalogVersionedItem[], o?: { idempotencyKey?: string }) => batched("trash", items, o);
   const restoreBeats = (items: CatalogVersionedItem[], o?: { idempotencyKey?: string }) => batched("restore", items, o);
 
-  /** Toda la papelera / toda la selección: job server-side (BULK_TRASH o BULK_RESTORE), nunca descarga la lista al navegador. */
-  async function bulkOverSelection({ kind, selectionId, selectionVersion, idempotencyKey = newKey() }: { kind: "BULK_TRASH" | "BULK_RESTORE"; selectionId: string; selectionVersion: string; idempotencyKey?: string }): Promise<CatalogBulkOperation> {
-    const op = await commands.createBulkOperation({ kind, selectionId, selectionVersion, idempotencyKey }, options.signal);
-    rememberOperation({ operationId: op.operationId, kind, beatId: null, label: kind === "BULK_TRASH" ? "Mover selección a la papelera" : "Restaurar selección" });
-    return op;
-  }
   /** Purge (T15, C9): intención durable en el servidor; la UI muestra «pendiente» hasta que el estado sea PURGED/PARTIAL/BLOCKED. Nunca éxito inmediato ni delete desde el cliente. */
   async function purgeTrash({ beatIds = null, idempotencyKey = newKey() }: { beatIds?: string[] | null; idempotencyKey?: string } = {}): Promise<{ status: "pending" | "purged" | "partial" | "blocked" | "cancelled"; operationId: string; durable: true; operation: CatalogPurgeOperation }> {
     const op = await commands.requestPurge({ beatIds, idempotencyKey }, options.signal);
@@ -273,6 +267,6 @@ export function createCatalogMutations(options: CatalogMutationsOptions) {
     return runTransfer({ kind: "REPLACE", beatId, expectedVersion, parts: resolved.map((r) => r.spec), metadata: Object.keys(patch).length ? patch : null }, prepared, resolved, { onProgress, kind: "REPLACE", beatId, label: `Reemplazar archivos de «${updated.name || original.name}»` });
   }
 
-  return Object.freeze({ patchBeat, trashBeats, restoreBeats, bulkOverSelection, purgeTrash, purgeState, importBeat, replaceBeat, pendingOperations, resolvePendingTransfers, rememberOperation, forgetOperation, getBeat: (beatId: string) => commands.getBeat(beatId, options.signal), listBeatFiles: (beatId: string) => commands.listBeatFiles(beatId, options.signal) });
+  return Object.freeze({ patchBeat, trashBeats, restoreBeats, purgeTrash, purgeState, importBeat, replaceBeat, pendingOperations, resolvePendingTransfers, rememberOperation, forgetOperation, getBeat: (beatId: string) => commands.getBeat(beatId, options.signal), listBeatFiles: (beatId: string) => commands.listBeatFiles(beatId, options.signal) });
 }
 export type CatalogMutations = ReturnType<typeof createCatalogMutations>;

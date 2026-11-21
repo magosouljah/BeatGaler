@@ -3,16 +3,12 @@
 // nunca un Set creciente de IDs. Select All = conjunto READY del query/revisión + defaultSelected=true; individual = default=false +
 // INCLUDE/EXCLUDE_IDS; Shift = INCLUDE_RANGE por extremos beatId (jamás índices de ventana). Cambiar filtros borra la selección con aviso
 // condicional; cambiar sort la conserva y reinicia solo el ancla; una revisión externa deja la selección en CONFLICT y deshabilita comandos.
-// Editor: un draft con versión de origen; 409 conserva el texto y no reintenta PATCH automáticamente; retry reutiliza la misma operación.
 // Bulk desde Drawer: operación durable sobre la selección congelada, reporte por lote (total/confirmados/no ejecutados/conflicto/cancelados);
-// COMPLETED solo si todo confirmado; cancel no revierte lo confirmado; resume exige revisión explícita. Drop: identidad (beatId/version)
-// capturada al inicio y cancelada si el target se desmonta. Facetas: cache acotada por scope/q/revisión. Rename: preview (ACTIVE/TRASH) →
+// COMPLETED solo si todo confirmado. Facetas: cache acotada por scope/q/revisión. Rename: preview (ACTIVE/TRASH) →
 // confirmación → operación durable → progreso; un resultado parcial nunca se presenta como éxito total. Sin reorden manual Web.
 import { useSyncExternalStore } from "react";
 import { CatalogApiError, type CatalogApi, type CatalogFacetsPage, type CatalogQueryFilters, type CatalogSort, type CatalogState } from "./catalogApi";
 import { type CatalogBulkKind, type CatalogBulkOperation, type CatalogBulkStatus, type CatalogBulkTagsOp, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogRenamePreview, type CatalogSelection, normalizeTagKey } from "./catalogCommandsApi";
-import { metadataPatch } from "./catalogMutations";
-import { validateBeatName } from "../../../lib/metadataValidation";
 
 export interface InteractionQuery { filters: CatalogQueryFilters; sort: CatalogSort; revision: string }
 export type SelectionStatus = "none" | "preparing" | "active" | "pending" | "conflict" | "frozen";
@@ -30,30 +26,11 @@ export interface SelectionState {
   notice: string | null;
   error: string | null;
 }
-export interface EditorDraft { name: string; bpm: string; key: string; tags: string[]; rating: number; color: string; color2: string }
-export type EditorStatus = "editing" | "saving" | "saved" | "conflict" | "error";
-export interface EditorState {
-  beatId: string;
-  originVersion: string;
-  etag: string | null;
-  original: EditorDraft;
-  draft: EditorDraft;
-  dirty: boolean;
-  status: EditorStatus;
-  conflict: { currentVersion: string | null } | null;
-  error: string | null;
-  idempotencyKey: string | null;
-  savedVersion: string | null;
-  returnAnchor: { beatId: string; ordinal: number | null } | null;
-  /** Campos editados por el usuario en esta sesión del editor; los demás siguen al origen al recargar. */
-  touched: Array<keyof EditorDraft>;
-}
 export interface BulkReport { total: number; confirmed: number; notExecuted: number; cancelled: number; conflictBatchSeq: string | number | null; completed: boolean }
 export interface BulkState { operationId: string; kind: CatalogBulkKind; status: CatalogBulkStatus; report: BulkReport; expectedRevision: string | null; error: string | null }
 export type RenameStage = "name" | "preview" | "running" | "done" | "partial" | "error";
 export interface RenameState { from: string; to: string; stage: RenameStage; preview: CatalogRenamePreview | null; operation: BulkState | null; error: string | null }
-export interface DropCapture { token: string; beatId: string; version: string; startedAt: number }
-export interface InteractionSnapshot { selection: SelectionState; editor: EditorState | null; bulk: BulkState | null; rename: RenameState | null; drops: number; facetsCacheSize: number; accountId: string }
+export interface InteractionSnapshot { selection: SelectionState; bulk: BulkState | null; rename: RenameState | null; facetsCacheSize: number; accountId: string }
 
 export interface InteractionStoreOptions {
   commands: CatalogCommandsApi;
@@ -88,13 +65,12 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
   const facetsCacheMax = options.facetsCacheMax ?? 8;
   const consumerId = options.consumerId ?? `web-${Math.random().toString(36).slice(2, 10)}`;
 
-  let snapshot: InteractionSnapshot = { selection: emptySelection(), editor: null, bulk: null, rename: null, drops: 0, facetsCacheSize: 0, accountId: options.accountId() };
+  let snapshot: InteractionSnapshot = { selection: emptySelection(), bulk: null, rename: null, facetsCacheSize: 0, accountId: options.accountId() };
   const listeners = new Set<() => void>();
   const emit = () => { for (const l of listeners) l(); };
   const set = (patch: Partial<InteractionSnapshot>) => { snapshot = { ...snapshot, ...patch }; emit(); };
   const setSelection = (patch: Partial<SelectionState>) => set({ selection: { ...snapshot.selection, ...patch } });
   let generation = 0; // invalida respuestas tardías tras teardown/limpieza
-  const drops = new Map<string, DropCapture & { cancelled: boolean }>();
   const facets = new Map<string, { page: CatalogFacetsPage; at: number }>();
   let currentQuery: InteractionQuery | null = null;
 
@@ -204,48 +180,6 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
   }
   const isSelected = (beatId: string): boolean => (snapshot.selection.status === "none" ? false : snapshot.selection.flags[beatId] ?? snapshot.selection.defaultSelected);
 
-  // ---- editor (un draft dirty con versión de origen; 409 conserva el texto) ----
-  function openEditor(beat: { id: string; version: string; etag?: string | null } & EditorDraft, returnAnchor: { beatId: string; ordinal: number | null } | null = null): void {
-    const original: EditorDraft = { name: beat.name, bpm: beat.bpm, key: beat.key, tags: [...beat.tags], rating: beat.rating, color: beat.color, color2: beat.color2 };
-    set({ editor: { beatId: beat.id, originVersion: beat.version, etag: beat.etag ?? null, original, draft: { ...original, tags: [...original.tags] }, dirty: false, status: "editing", conflict: null, error: null, idempotencyKey: null, savedVersion: null, returnAnchor, touched: [] } });
-  }
-  function setDraft(patch: Partial<EditorDraft>): void {
-    const e = snapshot.editor; if (!e) return;
-    const draft = { ...e.draft, ...patch };
-    const touched = [...new Set([...e.touched, ...(Object.keys(patch) as Array<keyof EditorDraft>)])];
-    set({ editor: { ...e, draft, touched, dirty: Object.keys(metadataPatch(e.original, draft)).length > 0, status: e.status === "saved" ? "editing" : e.status } });
-  }
-  async function saveEditor({ retry = false }: { retry?: boolean } = {}): Promise<EditorState | null> {
-    const e = snapshot.editor; if (!e) return null;
-    const patch: CatalogMetadataPatch = metadataPatch(e.original, e.draft);
-    if (Object.keys(patch).length === 0) { set({ editor: { ...e, status: "saved", dirty: false } }); return snapshot.editor; }
-    if (typeof patch.name === "string") { const nameCheck = validateBeatName(patch.name); if (!nameCheck.valid) { set({ editor: { ...e, status: "error", error: nameCheck.reason } }); return snapshot.editor; } } // sin petición; el texto del usuario se conserva
-    const key = retry && e.idempotencyKey ? e.idempotencyKey : newKey(); // retry = misma operación (misma clave y versión de origen)
-    set({ editor: { ...e, status: "saving", idempotencyKey: key, error: null } });
-    try {
-      const r = await commands.patchBeat(e.beatId, { expectedVersion: e.originVersion, patch, idempotencyKey: key, ifMatch: e.etag });
-      const version = r.beat?.version ?? null;
-      set({ editor: { ...snapshot.editor!, status: "saved", dirty: false, conflict: null, savedVersion: version, originVersion: version ?? e.originVersion, original: { ...e.draft, tags: [...e.draft.tags] }, etag: version ? `W/"${e.beatId.length}-${version}"` : e.etag } });
-    } catch (error) {
-      if (error instanceof CatalogApiError && error.code === "VERSION_CONFLICT") {
-        set({ editor: { ...snapshot.editor!, status: "conflict", conflict: { currentVersion: typeof error.detail.current_version === "string" ? error.detail.current_version : null }, error: "Este beat cambió en otro dispositivo. Tus cambios siguen aquí: revisa y vuelve a guardar." } });
-      } else set({ editor: { ...snapshot.editor!, status: "error", error: messageOf(error) } });
-    }
-    return snapshot.editor;
-  }
-  /** Tras un conflicto, el usuario decide: recargar la versión actual (el draft se conserva) y guardar explícitamente. */
-  async function reloadEditorOrigin(): Promise<void> {
-    const e = snapshot.editor; if (!e) return;
-    const current = await commands.getBeat(e.beatId);
-    const original: EditorDraft = { name: current.name, bpm: current.bpm, key: current.key, tags: [...current.tags], rating: current.rating, color: current.color ?? "", color2: current.color2 ?? "" };
-    // Solo los campos tocados conservan el texto del usuario; el resto adopta el origen fresco (nunca se "re-escribe" lo que otro cambió).
-    const prev = snapshot.editor!;
-    const draft: EditorDraft = { ...original, tags: [...original.tags] };
-    for (const k of prev.touched) (draft as unknown as Record<string, unknown>)[k] = k === "tags" ? [...prev.draft.tags] : prev.draft[k];
-    set({ editor: { ...prev, originVersion: current.version, etag: current.etag, original, draft, dirty: Object.keys(metadataPatch(original, draft)).length > 0, status: "editing", conflict: null, error: null, idempotencyKey: null } });
-  }
-  function closeEditor(): { returnAnchor: EditorState["returnAnchor"] } { const e = snapshot.editor; set({ editor: null }); return { returnAnchor: e?.returnAnchor ?? null }; }
-
   // ---- bulk desde Drawer (operación durable sobre la selección congelada) ----
   async function pollBulk(operationId: string, gen: number): Promise<BulkState> {
     const started = now();
@@ -269,23 +203,6 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
     // la selección fue consumida por la operación: el servidor la dejó FROZEN; la UI vuelve a «sin selección» tras el reporte
     setSelection({ ...emptySelection() });
     return final;
-  }
-  async function cancelBulk(): Promise<BulkState | null> { const b = snapshot.bulk; if (!b) return null; const gen = generation; await commands.cancelOperation(b.operationId); assertAccount(gen); return pollBulk(b.operationId, gen); }
-  async function resumeBulk(revision: string): Promise<BulkState | null> { const b = snapshot.bulk; if (!b) return null; const gen = generation; const op = await commands.resumeOperation(b.operationId, revision); assertAccount(gen); set({ bulk: bulkOf(op) }); return pollBulk(b.operationId, gen); }
-  function dismissBulk(): void { set({ bulk: null }); }
-
-  // ---- drop por identidad estable ----
-  function beginDrop(beatId: string, version: string): DropCapture {
-    const capture = { token: newKey(), beatId, version, startedAt: now(), cancelled: false };
-    drops.set(capture.token, capture); set({ drops: drops.size });
-    return { token: capture.token, beatId, version, startedAt: capture.startedAt };
-  }
-  function cancelDrop(token: string): void { const d = drops.get(token); if (d) d.cancelled = true; drops.delete(token); set({ drops: drops.size }); }
-  /** Devuelve la identidad capturada al inicio o null si el target se desmontó / la captura se canceló. */
-  function completeDrop(token: string, { targetMounted }: { targetMounted: () => boolean }): { beatId: string; version: string } | null {
-    const d = drops.get(token); drops.delete(token); set({ drops: drops.size });
-    if (!d || d.cancelled || !targetMounted()) return null;
-    return { beatId: d.beatId, version: d.version };
   }
 
   // ---- facetas globales (T06) con cache acotado por scope/q/revisión ----
@@ -329,8 +246,8 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
   async function teardown(): Promise<void> {
     generation++;
     const sel = snapshot.selection.selectionId;
-    drops.clear(); facets.clear();
-    snapshot = { selection: emptySelection(), editor: null, bulk: null, rename: null, drops: 0, facetsCacheSize: 0, accountId: options.accountId() };
+    facets.clear();
+    snapshot = { selection: emptySelection(), bulk: null, rename: null, facetsCacheSize: 0, accountId: options.accountId() };
     emit();
     if (sel) await releaseQuietly(sel);
   }
@@ -339,9 +256,7 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getSnapshot: () => snapshot,
     selectAll, toggle, clearSelection, onFiltersChanged, onSortChanged, onRevisionChanged, dismissNotice, refreshFlags, isSelected,
-    openEditor, setDraft, saveEditor, reloadEditorOrigin, closeEditor,
-    startBulk, cancelBulk, resumeBulk, dismissBulk,
-    beginDrop, cancelDrop, completeDrop,
+    startBulk,
     loadFacets, invalidateFacets,
     openRename, setRenameTarget, previewRename, confirmRename, backRename, closeRename,
     teardown, consumerId,
