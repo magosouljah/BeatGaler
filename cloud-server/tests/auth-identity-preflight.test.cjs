@@ -9,7 +9,6 @@ const {
   verifiedEmail,
   analyzeIdentityPreflight,
 } = require('../auth-identity-preflight');
-const { loadIdentityRows } = require('../scripts/auth-identity-preflight.cjs');
 
 function verifiedState(userId, email, extra = {}) {
   return {
@@ -82,14 +81,30 @@ const casefoldMigration = fs.readFileSync(path.join(__dirname, '..', 'migrations
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(username\)/s);
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(email\)/s);
 
-(async () => {
-  const statements = [];
-  await loadIdentityRows({ query: async sql => {
-    statements.push(sql);
-    return { rows: [] };
-  } });
-  assert.match(statements[0], /LEFT JOIN user_email_verifications/);
-  assert.match(statements[0], /verified_email_hash/);
-  assert.doesNotMatch(statements[0], /account-lifecycle-state/);
-  console.log('auth-identity-preflight tests: PASS');
-})().catch(error => { console.error(error); process.exitCode = 1; });
+// The CLI loads dotenv on import. Keep the SQL contract as a source check.
+const preflightCli = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'auth-identity-preflight.cjs'), 'utf8');
+const [, usersQuery] = preflightCli.match(/async function loadIdentityRows\(pool\)[\s\S]*?pool\.query\(`([^`]+)`\)/) ?? [];
+assert.ok(usersQuery, 'identity preflight must load users through the PostgreSQL query');
+assert.match(usersQuery, /LEFT JOIN user_email_verifications/);
+assert.match(usersQuery, /verified_email_hash/);
+assert.doesNotMatch(usersQuery, /account-lifecycle-state/);
+
+{
+  const user = {
+    id: 'changed', username: 'changed#4321', email: 'New@Example.com', password_hash: 'present',
+    verified_email_hash: sha256('old@example.com'),
+  };
+  const currentHash = sha256('new@example.com');
+  const lifecycleState = { email_verified: { changed: { email_hash: currentHash } } };
+  const stale = analyzeIdentityPreflight({ users: [user], lifecycleState });
+  assert.equal(stale.ready, false, 'an old authoritative hash and a matching local mirror cannot verify the new address');
+  assert.deepEqual(stale.blockers, [{ code: 'PASSWORD_EMAIL_UNVERIFIED', user_ids: ['changed'] }]);
+  assert.equal(stale.counts.password_email_ready, 0);
+
+  const verified = analyzeIdentityPreflight({ users: [{ ...user, verified_email_hash: currentHash }], lifecycleState });
+  assert.equal(verified.ready, true);
+  assert.deepEqual(verified.blockers, []);
+  assert.equal(verified.counts.password_email_ready, 1);
+}
+
+console.log('auth-identity-preflight tests: PASS');
