@@ -106,6 +106,40 @@ test('E77: sin rutas ni métodos de transporte de bytes en el Cloud; el módulo 
   assert.equal(manifest.endpoints.some((e) => ['/transfer/upload', '/media/', '/capability'].some((x) => e.path.includes(x)) || e.path.endsWith('/project')), false, 'el manifiesto no declara rutas de bytes');
 });
 
+test('E77: el router montado rechaza las rutas retiradas de bytes', async (t) => {
+  const { CATALOG_PREFIX, createCatalogRouter } = require('../../catalog/routes.js');
+  const resolveContext = t.mock.fn(async () => ({ user_id: 'u1' }));
+  const router = createCatalogRouter({
+    authority: { resolveContext },
+    authenticate: () => ({ id: 'u1' }),
+    queries: {}, commands: {}, operations: {}, direct: {}, media: {},
+  });
+  function dispatch(method, pathname) {
+    return new Promise((resolve, reject) => {
+      const url = CATALOG_PREFIX + pathname;
+      router.handle({ method, url, headers: {} }, {
+        setHeader() {},
+        status(code) { this.statusCode = code; return this; },
+        json(body) { resolve({ status: this.statusCode, body }); },
+      }, (error) => reject(error || new Error('El router no respondió a ' + url)));
+    });
+  }
+  const context = await dispatch('GET', '/context');
+  assert.equal(context.status, 200);
+  assert.deepEqual(resolveContext.mock.calls[0].arguments, [{ userId: 'u1' }]);
+
+  for (const [method, pathname] of [
+    ['PUT', '/transfer/upload/fake-token'],
+    ['GET', '/media/fake-token'],
+    ['PUT', '/operations/op1/parts/PROJECT:0/project'],
+    ['POST', '/operations/op1/parts/MASTER:0/capability'],
+  ]) {
+    const { status, body } = await dispatch(method, pathname);
+    assert.equal(status, 501, method + ' ' + pathname);
+    assert.equal(body.code, 'NOT_IMPLEMENTED', method + ' ' + pathname);
+  }
+});
+
 test('T25: INDEX retirado del runtime — ni rutas legacy de INDEX/transporte/bytes ni módulos INDEX cargados por el servidor', () => {
   const root = path.join(__dirname, '..', '..');
   const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');

@@ -259,6 +259,26 @@ test('inspect: transacción READ ONLY, rol con escritura rechazado salvo --allow
   assert.equal(pool.writes().length, 0);
 });
 
+test('inspect interrumpe la lectura, revierte y libera el cliente ante un fallo SQL', async (t) => {
+  const out = path.join(TMP, 'failed-inspect.json');
+  const readError = Object.assign(new Error('fallo de lectura simulado'), { code: '57014' });
+  const query = t.mock.fn(async (sql) => {
+    if (/has_table_privilege/.test(sql)) throw readError;
+    return { rows: [] };
+  });
+  const release = t.mock.fn(() => {
+    assert.equal(query.mock.calls.at(-1)?.arguments[0], 'ROLLBACK');
+  });
+  const pool = { async connect() { return { query, release }; } };
+
+  await assert.rejects(cli.createNativeCli({ pool }).run(['inspect', '--environment', 'lab', '--out', out]), (error) => error === readError);
+  assert.deepEqual(query.mock.calls.map(({ arguments: [sql] }) => sql).filter((sql) => !sql.includes('has_table_privilege')), [
+    'BEGIN READ ONLY', 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY', 'ROLLBACK',
+  ]);
+  assert.equal(release.mock.callCount(), 1);
+  assert.equal(fs.existsSync(out), false);
+});
+
 test('dry-run por defecto: activate, rebind-chat y reset solo leen (BEGIN READ ONLY), devuelven el plan WOULD_* y writes=0; activate repetido con el mismo manifiesto → ALREADY_ACTIVATED', async () => {
   const auth = write('auth-ok.json', { users: [{ id: 'u1', storageChatId: '-1001' }] });
   // activate sin activación previa, con vault cuyo id coincide con el determinista del importador
