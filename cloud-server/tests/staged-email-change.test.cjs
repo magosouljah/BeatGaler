@@ -19,6 +19,12 @@ function fakeDatabase(now = () => Date.now()) {
     change: null,
     conflictEmail: null,
     verification: null,
+    sessions: [{ userId: 'usr_1' }, { userId: 'usr_other' }],
+    capabilities: [
+      { userId: 'usr_1', status: 'ACTIVE' },
+      { userId: 'usr_1', status: 'AUTHORIZED' },
+      { userId: 'usr_other', status: 'AUTHORIZED' },
+    ],
   };
   const events = [];
   let txSnapshot = null;
@@ -28,11 +34,12 @@ function fakeDatabase(now = () => Date.now()) {
     state.change = snapshot.change;
     state.conflictEmail = snapshot.conflictEmail;
     state.verification = snapshot.verification;
+    state.sessions = snapshot.sessions;
+    state.capabilities = snapshot.capabilities;
   }
 
   async function query(sql, params = []) {
     const text = String(sql).replace(/\s+/g, ' ').trim();
-    events.push(['sql', text, clone(params)]);
     if (text === 'BEGIN') {
       txSnapshot = clone(state);
       return { rows: [] };
@@ -121,8 +128,19 @@ function fakeDatabase(now = () => Date.now()) {
       state.change.confirmed_at = new Date().toISOString();
       return { rows: [] };
     }
-    if (text.startsWith("UPDATE direct_capabilities SET status='REVOKED'")) return { rows: [] };
-    if (text.startsWith('DELETE FROM auth_sessions WHERE user_id=$1')) return { rows: [] };
+    if (text.startsWith("UPDATE direct_capabilities SET status='REVOKED'")) {
+      assert.match(text, /WHERE user_id=\$1 AND status IN \('ACTIVE','AUTHORIZED'\)$/);
+      for (const capability of state.capabilities) {
+        if (capability.userId === params[0] && ['ACTIVE', 'AUTHORIZED'].includes(capability.status)) {
+          capability.status = 'REVOKED';
+        }
+      }
+      return { rows: [] };
+    }
+    if (text === 'DELETE FROM auth_sessions WHERE user_id=$1') {
+      state.sessions = state.sessions.filter(session => session.userId !== params[0]);
+      return { rows: [] };
+    }
     if (text.startsWith('UPDATE auth_email_changes SET old_notice_attempts=old_notice_attempts+1,old_notice_sent_at=now()')) {
       state.change.old_notice_attempts += 1;
       state.change.old_notice_sent_at = new Date().toISOString();
@@ -372,8 +390,12 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
     const revokeIndex = h.db.events.findIndex(event => event[0] === 'revoke');
     const swapIndex = h.db.events.findIndex(event => event[0] === 'email-swap');
     assert.ok(revokeIndex >= 0 && swapIndex > revokeIndex);
-    assert.equal(h.db.events.some(event => event[1]?.startsWith('DELETE FROM auth_sessions WHERE user_id=$1')), true);
-    assert.equal(h.db.events.some(event => event[1]?.startsWith("UPDATE direct_capabilities SET status='REVOKED'")), true);
+    assert.deepEqual(h.db.state.sessions, [{ userId: 'usr_other' }]);
+    assert.deepEqual(h.db.state.capabilities, [
+      { userId: 'usr_1', status: 'REVOKED' },
+      { userId: 'usr_1', status: 'REVOKED' },
+      { userId: 'usr_other', status: 'AUTHORIZED' },
+    ], 'confirm revokes the changed account capabilities only');
     assert.equal(h.deliveries.at(-1).kind, 'email_changed_notice');
     assert.equal(h.deliveries.at(-1).to, 'old@example.com');
     assert.equal(h.db.state.verification.email_hash, sha256('new@example.com'));

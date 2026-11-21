@@ -1,7 +1,6 @@
 // T08 / V05 — Gallery virtualizada del catálogo (plan B §§3–7). Un solo scroller (el `[data-library-scroll]` de AppShell, pasado
 // por ref), filas absolutas sobre un track de altura acotada, placeholders de frontera con reintento contextual, sin pager y
-// sin re-sort/filtro local. Las tarjetas se montan solo en el rango y se desmontan de verdad al salir. Composición de producto
-// apagada en T08: este componente se usa en fixtures; AppShell lo monta en T16.
+// sin re-sort/filtro local. Las tarjetas se montan solo en el rango y se desmontan de verdad al salir.
 import React, { useEffect, useRef, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import type { CatalogBeatDto } from "./catalogApi";
 import type { CatalogQueryStore, CatalogStoreSnapshot } from "./catalogQueryStore";

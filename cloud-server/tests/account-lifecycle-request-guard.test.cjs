@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createAccountLifecycleRuntime } = require('../account-lifecycle');
 const { installLifecycleRequestGuard } = require('../account-lifecycle-request-guard');
+const { installSessionSecurity, SESSION_COOKIE } = require('../session-security');
 const { runD8RoResolutionsTests } = require('./d8-ro-resolutions.test.cjs');
 
 function sha256(value) {
@@ -22,6 +23,11 @@ function response() {
   };
 }
 
+function registerMiddleware(...handlers) {
+  this.__stack.push(...handlers);
+  return this;
+}
+
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-lifecycle-guard-'));
   const now = 1_800_000_000_000;
@@ -33,9 +39,7 @@ async function main() {
   }));
 
   const runtime = createAccountLifecycleRuntime({ dataDir: dir, now: () => now });
-  const application = {
-    use(...handlers) { this.__stack.push(...handlers); return this; },
-  };
+  const application = { use: registerMiddleware };
   const express = { application };
   installLifecycleRequestGuard(express, runtime);
   const app = Object.create(application);
@@ -77,6 +81,35 @@ async function main() {
     'lifecycle guard must be installed after SessionSecurity so Web cookies/rotation aliases are normalized first');
   assert.ok(roResolutionInstall >= 0 && roResolutionInstall < sessionInstall,
     'D8 RO OAuth route interception must register before server-core while SessionSecurity still normalizes requests at runtime');
+
+  {
+    const express = { application: { use: registerMiddleware } };
+    installSessionSecurity(express, { dataDir: dir, now: () => now });
+    installLifecycleRequestGuard(express, runtime);
+    const app = Object.create(express.application);
+    app.__stack = [];
+    app.use((_req, _res, next) => next());
+    app.use((_req, res) => res.json({ reached: true }));
+
+    function requestWithCookie() {
+      const req = {
+        method: 'GET', path: '/transport/session/start',
+        headers: { cookie: `${SESSION_COOKIE}=${token}`, 'x-beatgaler-client': 'web' },
+      };
+      const res = response();
+      let index = 0;
+      const next = () => app.__stack[index++](req, res, next);
+      next();
+      return res;
+    }
+
+    runtime._test.revokedSessionHashes.delete(hash);
+    assert.deepEqual(requestWithCookie().body, { reached: true });
+    runtime._test.revokedSessionHashes.add(hash);
+    const denied = requestWithCookie();
+    assert.equal(denied.statusCode, 401, 'lifecycle revocation must block a normalized cookie before the route');
+    assert.equal(denied.body.code, 'SESSION_REQUIRED', 'the lifecycle guard must report the normalized cookie revocation');
+  }
 
   fs.rmSync(dir, { recursive: true, force: true });
   await runD8RoResolutionsTests();
