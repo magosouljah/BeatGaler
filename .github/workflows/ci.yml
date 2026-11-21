@@ -1,0 +1,90 @@
+# CI de V1 en `main`: Web y Cloud se comprueban en cada push que cambie código, pruebas, scripts o migraciones SQL.
+# El catálogo PostgreSQL (suites con su descriptor y PG efímero) sigue en catalog-checks.yml; aquí no se repite.
+# Los workflows de pull_request existentes no se tocan (pueden ser checks requeridos de la protección de main).
+# Sin secretos, AWS, Telegram ni producción: PostgreSQL es un service container desechable sin datos.
+name: CI V1 - Web y Cloud
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'cloud-server/**'
+      - 'scripts/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig*.json'
+      - '.node-version'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-v1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web (typecheck, unit, component-dom, integration, guardas, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Instalar dependencias bloqueadas
+        run: npm ci --no-audit --no-fund
+      - name: Pruebas Web (npm run test:web)
+        run: npm run test:web
+      - name: Build Web como producción
+        env:
+          VITE_CATALOG_API_ENABLED: 'true'
+        run: npm run build:web
+
+  cloud:
+    name: Cloud (unitarias + integración PostgreSQL efímero)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16@sha256:c1b3783309b6499c795eed7c20135a1a4d25cae1b575c3d52c6f536129a1b109
+        env:
+          POSTGRES_USER: bg_ci_admin
+          # Contenedor efímero del job; no es credencial de ningún entorno real.
+          POSTGRES_PASSWORD: bg-ci-ephemeral
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bg_ci_admin -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: cloud-server/package-lock.json
+      - name: Instalar dependencias de cloud-server sin scripts
+        run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
+      - name: Cloud unitarias (scripts/run-cloud-tests.mjs)
+        run: node scripts/run-cloud-tests.mjs
+      - name: Cloud integración PostgreSQL efímero
+        env:
+          BEATGALER_CLOUD_TEST_ADMIN_URL: postgres://bg_ci_admin:bg-ci-ephemeral@127.0.0.1:5432/postgres
+        run: node scripts/run-cloud-tests.mjs --integration

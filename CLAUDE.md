@@ -70,6 +70,8 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 ## 8. Pruebas
 
 - Línea base y comandos aislados: `E:\777\app\BeatGaler-arq\linea-base-20261121\LINEA-BASE.md`. Reutilizarla; repetir solo las suites afectadas por un cambio.
+- `npm test` = `test:web` (typecheck, unit TS, component-dom, integration, `test:node`, `test:regressions:v1`) + `test:cloud` (`scripts/run-cloud-tests.mjs` + catálogo `unit`/`faults`). Sin Rust/Desktop ni guardas de release (`npm run test:regressions` completo las incluye).
+- `scripts/run-cloud-tests.mjs` **se niega** a ejecutarse si `cloud-server/` tiene credenciales/estado locales (hay módulos que los leen por ruta fija): usar un worktree limpio. Integración: `--integration` con `BEATGALER_CLOUD_TEST_ADMIN_URL` de un PG efímero en loopback (nunca el 5432 local). CI: `.github/workflows/ci.yml` (push a `main`) + `catalog-checks.yml`.
 - Catálogo: `node scripts/catalog-check.cjs unit|faults|T08|T11|T13` (local, sin DB). Las suites con `catalog-test-db` solo corren en CI (`catalog-checks`, descriptor fail-closed); no parchear el descriptor.
 - Distinguir pruebas de comportamiento de las que solo inspeccionan texto fuente; las segundas no protegen una refactorización.
 - Lo verificado en código ≠ verificado en funcionamiento; un PASS con fakes ≠ evidencia de proveedor real.
