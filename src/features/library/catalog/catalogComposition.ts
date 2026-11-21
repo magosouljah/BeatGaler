@@ -1,5 +1,5 @@
-// T08 — Frontera de composición por autoridad (plan B §3, NATIVO r2.1 §2). APAGADA en T08: la rama de producto se habilita en T16
-// (capa 2) tras V06–V09. Con el flag apagado no se hace ninguna petición de catálogo y la composición LEGACY sigue intacta.
+// T08 — Frontera de composición por autoridad (plan B §3, NATIVO r2.1 §2). Con el flag apagado no se hace ninguna petición
+// de catálogo y se devuelve `mode: legacy`; desde T25 la Web muestra el aviso de catálogo obligatorio.
 // Con el flag encendido: resolver /context antes de elegir adaptador; POSTGRES nunca construye WebGalerCloudTransport para
 // metadata ni cae a LEGACY ante error (fail-closed: estado visible).
 import type { CatalogApi, CatalogContextResolution } from "./catalogApi";

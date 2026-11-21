@@ -1374,13 +1374,6 @@ app.get("/transport/status", (req, res) => {
 });
 
 
-const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
-const LIBRARY_INDEX_BACKUP_POINTER_PREFIX = "BG_BACKUPS_V1="; // legacy reader only
-const LIBRARY_INDEX_COW_PREFIX = "BG_COW_V1=";
-const LIBRARY_INDEX_BACKUP_LIMIT = Math.max(1, Math.min(10, Number(process.env.INDEX_BACKUP_COUNT || 3)));
-const LIBRARY_INDEX_CAPTION_MAX = 1000;
-
-
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`BeatGaler Cloud API escuchando en http://0.0.0.0:${PORT}`);
   console.log(`Transport: Telegram Direct MTProto (MASTER + managed bot pool)`);

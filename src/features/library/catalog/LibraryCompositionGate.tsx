@@ -1,5 +1,5 @@
 // T16 / V08-A — Puerta de composición por autoridad (plan B §3; NATIVO r2.1 §2/§3.3; C12-r4 §2).
-// LEGACY conserva su árbol actual intacto (children); POSTGRES monta el workspace del catálogo (Gallery virtualizada, sin pager, sin
+// LEGACY muestra el contenido de `legacy` (en Web, el aviso de catálogo obligatorio); POSTGRES monta el workspace del catálogo (Gallery virtualizada, sin pager, sin
 // cache global de beats ni reload/reconcile INDEX); un contexto bloqueado o desconocido NUNCA monta el camino LEGACY: muestra el estado
 // con el copy de plan B §7 (fail-closed). El cambio de autoridad/cuenta remonta de forma controlada mediante la clave de composición.
 import { useEffect, type ReactNode } from "react";
@@ -20,7 +20,7 @@ export type LibraryCompositionState = { status: "resolving" } | { status: "resol
 
 export interface LibraryCompositionGateProps {
   state: LibraryCompositionState;
-  /** Árbol LEGACY actual (pager + App). Solo se monta con `mode: legacy`. */
+  /** Contenido alternativo que se monta con `mode: legacy`. */
   legacy: ReactNode;
   /** Workspace POSTGRES (V05–V07). Solo se monta con `mode: catalog`. */
   catalog: (composition: Extract<LibraryComposition, { mode: "catalog" }>) => ReactNode;
