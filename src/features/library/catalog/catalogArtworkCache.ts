@@ -5,6 +5,8 @@
 // Disco acotado: LRU por bytes (el último uso se persiste, como mucho una vez por hora y entrada); en memoria solo vive un índice sin bytes.
 // Dos almacenes: `meta` (registros pequeños; el índice se carga de aquí sin tocar imágenes) y `blobs`. Fallos de IndexedDB (modo privado, cuota,
 // bloqueo) = caché vacía: nunca bloquean ni retrasan la Gallery más allá de `readTimeoutMs`.
+import { createIdbConnection, evictLeastRecentlyUsed, resolveIdbFactory, safe } from "./catalogIdb";
+
 export const ARTWORK_CACHE_DEFAULTS = Object.freeze({ maxBytes: 256 * 1024 * 1024, maxEntryBytes: 16 * 1024 * 1024, touchEveryMs: 60 * 60 * 1000, readTimeoutMs: 1000, dbName: "beatgaler-catalog-artwork" });
 
 export interface ArtworkMeta { key: string; account: string; beatId: string; size: number; storedAt: number; lastUsed: number }
@@ -39,23 +41,13 @@ export function memoryArtworkBackend(): ArtworkBackend {
   };
 }
 
-function indexedDbArtworkBackend(dbName: string, timeoutMs: number): ArtworkBackend | null {
-  if (typeof indexedDB === "undefined") return null;
-  let dbp: Promise<IDBDatabase> | null = null;
-  const open = () => (dbp ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const req = indexedDB.open(dbName, 1);
-    req.onupgradeneeded = () => { for (const s of ["meta", "blobs"]) if (!req.result.objectStoreNames.contains(s)) req.result.createObjectStore(s); };
-    req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); req.onblocked = () => reject(new Error("indexedDB blocked"));
-  }));
-  // Una transacción por operación; `meta` y `blobs` se escriben/borran juntos (nunca una imagen sin registro ni un registro sin imagen).
-  const tx = <T>(mode: IDBTransactionMode, stores: string[], fn: (t: IDBTransaction) => IDBRequest<T> | null): Promise<T | undefined> => Promise.race([
-    open().then((db) => new Promise<T | undefined>((resolve, reject) => {
-      const t = db.transaction(stores, mode); const r = fn(t); let out: T | undefined;
-      if (r) r.onsuccess = () => { out = r.result; };
-      t.oncomplete = () => resolve(out); t.onerror = () => reject(t.error); t.onabort = () => reject(t.error ?? new Error("indexedDB aborted"));
-    })),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("indexedDB timeout")), mode === "readonly" ? timeoutMs : timeoutMs * 8)),
-  ]);
+function indexedDbArtworkBackend(factory: IDBFactory | null, dbName: string, timeoutMs: number): ArtworkBackend | null {
+  if (!factory) return null;
+  // Política propia: plazo por operación (lectura `timeoutMs`, escritura ×8), la operación acaba en oncomplete/onabort, el rechazo de open() queda
+  // cacheado y no hay onversionchange. Una transacción por operación; `meta` y `blobs` se escriben/borran juntos (nunca una imagen sin registro
+  // ni un registro sin imagen). Claves fuera de línea (= `key` de la portada).
+  const conn = createIdbConnection({ factory, name: dbName, version: 1, stores: [{ name: "meta" }, { name: "blobs" }], timeoutMs, settle: "transaction", retryOpen: false, closeOnVersionChange: false });
+  const tx = <T>(mode: IDBTransactionMode, stores: string[], fn: (t: IDBTransaction) => IDBRequest<T> | null): Promise<T | undefined> => conn.run<T>(mode, stores, fn);
   return {
     async metas() { return ((await tx<ArtworkMeta[]>("readonly", ["meta"], (t) => t.objectStore("meta").getAll() as IDBRequest<ArtworkMeta[]>)) ?? []); },
     async read(key) { const v = await tx<Blob | undefined>("readonly", ["blobs"], (t) => t.objectStore("blobs").get(key) as IDBRequest<Blob | undefined>); return v instanceof Blob ? v : null; },
@@ -65,19 +57,18 @@ function indexedDbArtworkBackend(dbName: string, timeoutMs: number): ArtworkBack
   };
 }
 
-export function createArtworkCache(options: { maxBytes?: number; maxEntryBytes?: number; touchEveryMs?: number; backend?: ArtworkBackend; now?: () => number; dbName?: string } = {}): ArtworkCache {
+export function createArtworkCache(options: { maxBytes?: number; maxEntryBytes?: number; touchEveryMs?: number; backend?: ArtworkBackend; now?: () => number; dbName?: string; /** IDBFactory inyectable (pruebas); por defecto el global. */ idb?: IDBFactory | null } = {}): ArtworkCache {
   const maxBytes = options.maxBytes ?? ARTWORK_CACHE_DEFAULTS.maxBytes;
   const maxEntryBytes = options.maxEntryBytes ?? ARTWORK_CACHE_DEFAULTS.maxEntryBytes;
   const touchEveryMs = options.touchEveryMs ?? ARTWORK_CACHE_DEFAULTS.touchEveryMs;
   const now = options.now ?? (() => Date.now());
-  let backend: ArtworkBackend = options.backend ?? indexedDbArtworkBackend(options.dbName ?? ARTWORK_CACHE_DEFAULTS.dbName, ARTWORK_CACHE_DEFAULTS.readTimeoutMs) ?? memoryArtworkBackend();
+  let backend: ArtworkBackend = options.backend ?? indexedDbArtworkBackend(resolveIdbFactory(options.idb), options.dbName ?? ARTWORK_CACHE_DEFAULTS.dbName, ARTWORK_CACHE_DEFAULTS.readTimeoutMs) ?? memoryArtworkBackend();
   const metrics: ArtworkCacheMetrics = { hits: 0, misses: 0, puts: 0, evictions: 0, bytes: 0, entries: 0 };
   // Índice en memoria (sin bytes), cargado una sola vez y de forma perezosa: el arranque de la Gallery no lo espera.
   let index: Promise<Map<string, ArtworkMeta>> | null = null;
   const loadIndex = () => (index ??= backend.metas().catch(() => { backend = memoryArtworkBackend(); return [] as ArtworkMeta[]; }).then((list) => {
     const m = new Map(list.map((e) => [e.key, e])); metrics.entries = m.size; metrics.bytes = list.reduce((n, e) => n + e.size, 0); return m;
   }));
-  const safe = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => { try { return await fn(); } catch { return fallback; } };
   async function forget(idx: Map<string, ArtworkMeta>, key: string): Promise<void> {
     const e = idx.get(key); if (!e) return;
     idx.delete(key); metrics.bytes -= e.size; metrics.entries = idx.size;
@@ -100,10 +91,8 @@ export function createArtworkCache(options: { maxBytes?: number; maxEntryBytes?:
     const meta: ArtworkMeta = { key, account, beatId, size: blob.size, storedAt: now(), lastUsed: now() };
     if (!(await safe(async () => { await backend.write(meta, blob); return true; }, false))) return false;
     idx.set(key, meta); metrics.bytes += meta.size; metrics.entries = idx.size; metrics.puts++;
-    for (const e of [...idx.values()].sort((a, b) => a.lastUsed - b.lastUsed)) { // LRU por bytes; la entrada recién guardada es la más reciente
-      if (metrics.bytes <= maxBytes || e.key === key) break;
-      await forget(idx, e.key); metrics.evictions++;
-    }
+    // LRU por bytes; la entrada recién guardada es la más reciente y nunca se expulsa
+    metrics.evictions += await evictLeastRecentlyUsed(idx.entries(), { totalBytes: () => metrics.bytes, maxBytes, protectKey: key, evict: (k) => forget(idx, k) });
     return true;
   }
   async function dropBeat(account: string, beatId: string): Promise<void> {

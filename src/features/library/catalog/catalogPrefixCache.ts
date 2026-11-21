@@ -4,6 +4,7 @@
 // vuelve a verificar el archivo entero mientras suena (SHA progresivo) y una discrepancia borra la entrada.
 // Memoria y disco acotados: LRU por bytes (límite configurable); en memoria solo un índice pequeño, los bytes viven en IndexedDB.
 // Fallos de IndexedDB (privado, cuota, bloqueo) = caché vacía: nunca bloquean la reproducción.
+import { createIdbConnection, evictLeastRecentlyUsed, resolveIdbFactory, safe } from "./catalogIdb";
 import { Sha256 } from "./catalogTransfer";
 
 export const PREFIX_BYTES = 128 * 1024;
@@ -48,25 +49,19 @@ function memoryBackend(): Backend {
   };
 }
 
-function indexedDbBackend(dbName: string, store: string, timeoutMs: number): Backend | null {
-  if (typeof indexedDB === "undefined") return null;
-  let dbp: Promise<IDBDatabase> | null = null;
-  const open = () => (dbp ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const req = indexedDB.open(dbName, 1);
-    req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains(store)) req.result.createObjectStore(store); };
-    req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); req.onblocked = () => reject(new Error("indexedDB blocked"));
-  }));
-  const run = <T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => Promise.race([
-    open().then((db) => new Promise<T>((resolve, reject) => { const t = db.transaction(store, mode); const r = fn(t.objectStore(store)); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); })),
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("indexedDB timeout")), mode === "readonly" ? timeoutMs : timeoutMs * 8)),
-  ]);
+function indexedDbBackend(factory: IDBFactory | null, dbName: string, store: string, timeoutMs: number): Backend | null {
+  if (!factory) return null;
+  // Política propia: plazo por operación (lectura `timeoutMs`, escritura ×8), la operación acaba en el onsuccess de la petición (antes de confirmar la
+  // transacción), el rechazo de open() queda cacheado y no hay onversionchange. Las claves son fuera de línea (`cuenta|sha`).
+  const conn = createIdbConnection({ factory, name: dbName, version: 1, stores: [{ name: store }], timeoutMs, settle: "request", retryOpen: false, closeOnVersionChange: false });
+  const run = <T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => conn.run<T>(mode, [store], (t) => fn(t.objectStore(store))) as Promise<T>;
   return {
     async get(k) { const v = await run<PrefixEntry | undefined>("readonly", (s) => s.get(k) as IDBRequest<PrefixEntry | undefined>); return v ? { ...v, bytes: new Uint8Array(v.bytes) } : null; },
     async set(k, v) { await run("readwrite", (s) => s.put(v, k)); },
     async delete(k) { await run("readwrite", (s) => s.delete(k)); },
     async index() {
       const out: Array<{ key: string; size: number; lastUsed: number; account: string; fileSha256: string }> = [];
-      const db = await open();
+      const db = await conn.open(); // el recorrido del índice no lleva plazo (como antes)
       await new Promise<void>((resolve, reject) => {
         const req = db.transaction(store, "readonly").objectStore(store).openCursor();
         req.onsuccess = () => { const c = req.result; if (!c) { resolve(); return; } const v = c.value as PrefixEntry; out.push({ key: String(c.key), size: v.bytes.byteLength, lastUsed: v.lastUsed, account: v.account, fileSha256: v.fileSha256 }); c.continue(); };
@@ -77,10 +72,10 @@ function indexedDbBackend(dbName: string, store: string, timeoutMs: number): Bac
   };
 }
 
-export function createPrefixCache(options: { maxBytes?: number; backend?: "memory" | "indexeddb"; now?: () => number; dbName?: string } = {}): PrefixCache {
+export function createPrefixCache(options: { maxBytes?: number; backend?: "memory" | "indexeddb"; now?: () => number; dbName?: string; /** IDBFactory inyectable (pruebas); por defecto el global. */ idb?: IDBFactory | null } = {}): PrefixCache {
   const maxBytes = options.maxBytes ?? PREFIX_CACHE_DEFAULTS.maxBytes;
   const now = options.now ?? (() => Date.now());
-  const idb = options.backend === "memory" ? null : indexedDbBackend(options.dbName ?? PREFIX_CACHE_DEFAULTS.dbName, PREFIX_CACHE_DEFAULTS.store, PREFIX_CACHE_DEFAULTS.readTimeoutMs);
+  const idb = options.backend === "memory" ? null : indexedDbBackend(resolveIdbFactory(options.idb), options.dbName ?? PREFIX_CACHE_DEFAULTS.dbName, PREFIX_CACHE_DEFAULTS.store, PREFIX_CACHE_DEFAULTS.readTimeoutMs);
   let backend: Backend = idb ?? memoryBackend();
   let broken = false;
   const metrics: PrefixCacheMetrics = { hits: 0, misses: 0, puts: 0, evictions: 0, rejected: 0, bytes: 0, entries: 0 };
@@ -92,17 +87,11 @@ export function createPrefixCache(options: { maxBytes?: number; backend?: "memor
     metrics.entries = index.size; metrics.bytes = [...index.values()].reduce((n, e) => n + e.size, 0);
     return index;
   };
-  const safe = async <T>(fn: () => Promise<T>, fallback: T): Promise<T> => { try { return await fn(); } catch { return fallback; } };
 
   async function evict(): Promise<void> {
     const idx = await loadIndex();
     if (metrics.bytes <= maxBytes) return;
-    const order = [...idx.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-    for (const [k, e] of order) {
-      if (metrics.bytes <= maxBytes) break;
-      await safe(() => backend.delete(k), undefined);
-      idx.delete(k); metrics.bytes -= e.size; metrics.evictions++;
-    }
+    metrics.evictions += await evictLeastRecentlyUsed(idx.entries(), { totalBytes: () => metrics.bytes, maxBytes, evict: async (k, e) => { await safe(() => backend.delete(k), undefined); idx.delete(k); metrics.bytes -= e.size; } });
     metrics.entries = idx.size;
   }
 
