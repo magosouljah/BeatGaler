@@ -691,6 +691,18 @@
           ],
           "kind": "node-test",
           "timeout_ms": 900000
+        },
+        {
+          "id": "catalog-f3-equivalence-integration",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-concurrency=1",
+            "cloud-server/tests/catalog/catalog-f3-equivalence.integration.cjs"
+          ],
+          "kind": "node-test",
+          "timeout_ms": 900000
         }
       ]
     },
