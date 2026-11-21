@@ -1,5 +1,5 @@
 // T16 / V08-A — Puerta de composición por autoridad (plan B §3; NATIVO r2.1 §2/§3.3; C12-r4 §2).
-// LEGACY muestra el contenido de `legacy` (en Web, el aviso de catálogo obligatorio); POSTGRES monta el workspace del catálogo (Gallery virtualizada, sin pager, sin
+// LEGACY (flag apagado o inválido) muestra el estado fail-closed «catálogo obligatorio», sin montar ningún árbol INDEX; POSTGRES monta el workspace del catálogo (Gallery virtualizada, sin pager, sin
 // cache global de beats ni reload/reconcile INDEX); un contexto bloqueado o desconocido NUNCA monta el camino LEGACY: muestra el estado
 // con el copy de plan B §7 (fail-closed). El cambio de autoridad/cuenta remonta de forma controlada mediante la clave de composición.
 import { useEffect, type ReactNode } from "react";
@@ -16,22 +16,25 @@ function BlockedState({ composition }: { composition: Extract<LibraryComposition
   );
 }
 
+// T25: INDEX retirado. Con el flag apagado la Web no compone nada legacy: estado fail-closed visible.
+function LegacyRetired() {
+  return <main className="bg-product-gallery" data-catalog-mode="legacy-retired" role="status">This BeatGaler version requires the PostgreSQL catalog.</main>;
+}
+
 export type LibraryCompositionState = { status: "resolving" } | { status: "resolved"; composition: LibraryComposition; key: string };
 
 export interface LibraryCompositionGateProps {
   state: LibraryCompositionState;
-  /** Contenido alternativo que se monta con `mode: legacy`. */
-  legacy: ReactNode;
   /** Workspace POSTGRES (V05–V07). Solo se monta con `mode: catalog`. */
   catalog: (composition: Extract<LibraryComposition, { mode: "catalog" }>) => ReactNode;
 }
 
-export function LibraryCompositionGate({ state, legacy, catalog }: LibraryCompositionGateProps) {
+export function LibraryCompositionGate({ state, catalog }: LibraryCompositionGateProps) {
   if (state.status === "resolving") {
     return <main className="bg-product-gallery" data-catalog-mode="resolving" aria-busy="true" aria-label="Verificando la biblioteca" data-library-composition="resolving" />;
   }
   const c = state.composition;
-  if (c.mode === "legacy") return <div data-library-composition="legacy" key={state.key}>{legacy}</div>;
+  if (c.mode === "legacy") return <div data-library-composition="legacy" key={state.key}><LegacyRetired /></div>;
   if (c.mode === "catalog") return <div data-library-composition="catalog" data-catalog-epoch={c.resolution.context.authority_epoch} key={state.key}>{catalog(c)}</div>;
   // blocked: unknown/reset/quarantine/unauthenticated/offline → estado visible, ningún fallback a INDEX
   return <BlockedState composition={c} key={state.key} />;
