@@ -32,7 +32,7 @@ export type CatalogBulkTagsOp = { op: "add" | "remove"; tags: string[] };
 export interface CatalogPatchResult { noop: boolean; beat: CatalogBeatDto | null; revision: string; eventSeq?: string; operationId: string; replay: boolean }
 export interface CatalogVersionedItem { beatId: string; expectedVersion: string }
 export interface CatalogBatchResult { items: Array<{ beatId: string; version: string }>; revision: string; operationId: string; replay: boolean }
-export interface CatalogQuerySet { setId: string; status: "BUILDING" | "READY" | "STALE" | "FAILED" | "CANCELLED"; scope: string; baseRevision: string; memberCount: number; checkpointSeq: number; predicateHash: string; errorCode: string | null; created?: boolean }
+export interface CatalogQuerySet { setId: string; status: "BUILDING" | "READY" | "STALE" | "FAILED" | "CANCELLED" | "RELEASED"; scope: string; baseRevision: string; memberCount: number; checkpointSeq: number; predicateHash: string; errorCode: string | null; created?: boolean }
 export interface CatalogQuerySetQuery { state?: CatalogState; q?: string; includeTags?: string[]; excludeTags?: string[]; includeMode?: "any" | "all"; sort?: CatalogSort }
 export type CatalogSelectionStatus = "ACTIVE" | "FROZEN" | "CONFLICT" | "RELEASED";
 export interface CatalogSelection { selectionId: string; setId: string; sort: CatalogSort; defaultSelected: boolean; selectionVersion: string; status: CatalogSelectionStatus; count: number; baseRevision: string; currentRevision?: string; stale?: boolean; flags?: Record<string, boolean>; replay?: boolean; created?: boolean }
