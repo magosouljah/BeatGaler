@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { listMigrations, assertInitialSchemaContract } = require('../postgres-migrations.js');
 
@@ -118,6 +119,29 @@ for (const file of fs.readdirSync(migrationDir).filter(name => name.endsWith('.s
   const contents = fs.readFileSync(path.join(migrationDir, file), 'utf8');
   assert.match(contents, /^\s*BEGIN;/i);
   assert.match(contents, /COMMIT;\s*$/i);
+}
+
+// Exercise the loader's rejection path without executing SQL or editing migrations.
+const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-schema-boundaries-'));
+try {
+  const name = '0001_fixture.sql';
+  const file = path.join(fixtureDir, name);
+  const valid = 'BEGIN;\nSELECT 1;\nCOMMIT;\n';
+  fs.writeFileSync(file, valid);
+  assert.equal(listMigrations(fixtureDir)[0].sql, valid);
+  for (const [missing, sql] of [
+    ['BEGIN', 'SELECT 1;\nCOMMIT;\n'],
+    ['COMMIT', 'BEGIN;\nSELECT 1;\n'],
+  ]) {
+    fs.writeFileSync(file, sql);
+    assert.throws(
+      () => listMigrations(fixtureDir),
+      { message: `Migration must be transaction-bounded: ${name}` },
+      `loader must reject a migration without ${missing}`,
+    );
+  }
+} finally {
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
 }
 
 console.log(`PASS PostgreSQL schema contract: ${migrations.length} migration(s)`);

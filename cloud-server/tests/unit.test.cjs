@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const Module = require('module');
+const { test: nodeTest } = require('node:test');
 
 function test(name, fn) {
   try {
@@ -60,7 +61,7 @@ passed += test('lower temporary grant cannot downgrade a higher base plan', () =
 }) ? 1 : 0;
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-direct-unit-'));
-const poolFile = path.join(tmp, 'transport-bots.json');
+const poolFile = path.join(tmp, 'pool-fixture.json');
 const stateFile = path.join(tmp, 'transport-pool-state.json');
 fs.writeFileSync(poolFile, JSON.stringify({ bots: [
   { id: 'Bot01', token: 'fake-1' },
@@ -141,7 +142,7 @@ passed += test('pool state drops obsolete FIFO while preserving configured bots'
   assert.deepEqual(direct.poolStatus().queue, []);
 }) ? 1 : 0;
 
-const { stripPermanentSecrets } = require('../productive-temp-auth-boundary.js');
+const { installProductiveTempAuthBoundary, stripPermanentSecrets } = require('../productive-temp-auth-boundary.js');
 const { wrapWebTransportSession } = require('../web-transport-envelope.js');
 
 passed += test('productive transport boundary strips permanent credentials before client response', () => {
@@ -192,12 +193,41 @@ passed += test('canonical Cloud entrypoint installs temporary-auth boundary befo
   assert(installAt >= 0 && coreAt > installAt);
 
   const boundarySource = fs.readFileSync(path.join(__dirname, '..', 'productive-temp-auth-boundary.js'), 'utf8');
-  for (const route of ['/transport/session/start', '/transport/session/heartbeat', '/transport/operation/begin']) {
-    assert(boundarySource.includes(route));
-  }
   assert(boundarySource.includes('mode: "galer-direct-temp-mtproto"'));
   assert(boundarySource.includes('temp_auth_required'));
 }) ? 1 : 0;
 
+nodeTest('registered transport routes sanitize responses before sending them', async () => {
+  const routes = new Map();
+  const application = { post(route, ...handlers) { routes.set(route, handlers); } };
+  installProductiveTempAuthBoundary({ application });
+
+  const permanent = {
+    bot_token: 'fixture-bot-token',
+    telegram_api_id: 123,
+    telegram_api_hash: 'fixture-api-hash',
+    credential_envelope: { ciphertext: 'fixture-envelope' },
+  };
+  const denied = { ok: false, error: 'denied' };
+  const refresh = { ok: true, session_id: 'session-1' };
+  const retry = { ...refresh, refresh_required: true, temp_auth_required: true };
+  const cases = [
+    ['/transport/session/start', { ...denied, ...permanent }, denied],
+    ['/transport/session/heartbeat', { ...refresh, ...permanent, credential_refresh: permanent }, retry],
+    ['/transport/operation/begin', { ...refresh, ...permanent, credential_refresh: permanent }, retry],
+  ];
+  for (const [route, body, expected] of cases) {
+    application.post(route, (_req, res) => res.json(body));
+    const actual = await new Promise(resolve => {
+      const req = { path: route, body: {} };
+      const res = { json: resolve };
+      const handlers = routes.get(route).values();
+      const next = () => handlers.next().value(req, res, next);
+      next();
+    });
+    assert.deepEqual(actual, expected, route);
+  }
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`PASS cloud/direct unit tests: ${passed}/13`);
+console.log(`PASS cloud/direct synchronous checks: ${passed}/13`);
