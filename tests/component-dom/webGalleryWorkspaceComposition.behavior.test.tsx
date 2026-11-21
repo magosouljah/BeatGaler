@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // T25 — Comportamiento de la Gallery Web tras retirar INDEX: la composición decide qué se monta y la Web nunca vuelve al árbol LEGACY
-// (App + pipeline INDEX) ni dispara la preconexión Direct «recordada» del pipeline antiguo. Sustituye a aserciones de texto fuente
+// (App + pipeline INDEX) ni dispara el precalentamiento reservado al login. Sustituye a aserciones de texto fuente
 // obsoletas de tests/integration (appStartupBootstrapExtraction, issue97PlaybackOptimization, issue97RuntimeWebFollowup).
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   composition: { state: { status: "resolving" } as unknown, services: null as unknown },
   accountId: "acc-1" as string | null,
   workspaceProps: [] as Array<Record<string, unknown>>,
-  rememberedPreconnect: vi.fn(),
+  prewarm: vi.fn(),
   useLibraryComposition: vi.fn(),
 }));
 
@@ -25,9 +25,8 @@ vi.mock("../../src/features/library/catalog/CatalogGalleryWorkspace", () => ({
     return React.createElement("section", { "data-test-catalog-workspace": true });
   },
 }));
-vi.mock("../../src/features/playback/webRememberedDirectPreconnect", () => ({
-  preconnectRememberedWebDirect: mocks.rememberedPreconnect,
-  prepareWebDirectForSignIn: mocks.rememberedPreconnect,
+vi.mock("../../src/features/library/catalog/catalogDirectPort", () => ({
+  prewarmDirectRuntime: mocks.prewarm,
 }));
 
 import WebGalleryWorkspace from "../../src/app/WebGalleryWorkspace";
@@ -54,7 +53,7 @@ beforeEach(() => {
   mocks.composition = { state: { status: "resolving" }, services: null };
   mocks.accountId = "acc-1";
   mocks.workspaceProps.length = 0;
-  mocks.rememberedPreconnect.mockReset();
+  mocks.prewarm.mockReset();
   mocks.useLibraryComposition.mockReset();
 });
 
@@ -102,7 +101,7 @@ describe("WebGalleryWorkspace tras T25 (catálogo PostgreSQL como única autorid
     expect(host!.querySelector("[data-test-catalog-workspace]")).toBeNull();
   });
 
-  it("nunca dispara la preconexión Direct «recordada» del pipeline INDEX (la del catálogo vive en createCatalogServices)", async () => {
+  it("nunca dispara el precalentamiento Direct reservado al login", async () => {
     for (const state of [{ status: "resolving" }, ready()]) {
       mocks.composition = { state, services: { tag: "services" } };
       await render();
@@ -110,6 +109,6 @@ describe("WebGalleryWorkspace tras T25 (catálogo PostgreSQL como única autorid
       host!.remove();
     }
     root = null; host = null;
-    expect(mocks.rememberedPreconnect).not.toHaveBeenCalled();
+    expect(mocks.prewarm).not.toHaveBeenCalled();
   });
 });

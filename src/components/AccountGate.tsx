@@ -4,6 +4,7 @@ import { platform } from "../platform";
 import { getWebAccountGeneration, setActiveWebAccountId } from "../features/auth/activeWebAccount";
 import { playTrace } from "../features/playback/playTrace";
 import { formatSignupVerificationCode } from "../features/auth/signupVerificationCode";
+import { isCatalogClientEnabled } from "../features/library/catalog/catalogComposition";
 import { UiButton, UiFeedback, UiField, UiSpinner } from "./ui/DesignPrimitives";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
@@ -222,7 +223,7 @@ function clearLocalSessionState(): void {
   try { sessionStorage.removeItem(CSRF_KEY); } catch {}
 }
 
-async function authRequest(path: string, body: Record<string, unknown> = {}, token?: string): Promise<any> {
+async function authRequest(path: string, body: Record<string, unknown> = {}, token?: string, onDispatched?: () => void): Promise<any> {
   let base: string;
   try { base = await resolveBeatGalerCloudApi(); }
   catch (error) { throw networkFailure(error); }
@@ -233,12 +234,14 @@ async function authRequest(path: string, body: Record<string, unknown> = {}, tok
     if (csrf) headers["X-BeatGaler-CSRF"] = csrf;
   }
   if (token && !(platform.kind === "web" && token === BROWSER_SESSION_SENTINEL)) headers.Authorization = `Bearer ${token}`;
-  const result = await fetchJson(`${base}${path}`, {
+  const pending = fetchJson(`${base}${path}`, {
     method: "POST",
     headers,
     credentials: platform.kind === "web" ? "include" : "same-origin",
     body: JSON.stringify(body),
   }, path === "/auth/register" ? 45000 : 20000);
+  onDispatched?.();
+  const result = await pending;
   if (platform.kind === "web" && result?.csrf_token) sessionStorage.setItem(CSRF_KEY, String(result.csrf_token));
   return result;
 }
@@ -331,16 +334,36 @@ export async function resumeBeatGalerSignup(signupId = "", continuationSecret = 
   return result as PendingBeatGalerSignup;
 }
 
+let signInPrewarm: { accountId: string | null } | null = null;
+let discardDirectPrewarm: (() => Promise<void>) | undefined;
+
+function discardSignInPrewarm(): Promise<void> | undefined {
+  signInPrewarm = null;
+  const discard = discardDirectPrewarm;
+  discardDirectPrewarm = undefined;
+  return discard?.();
+}
+
 export async function loginBeatGalerAccount(email: string, password: string, mfaCode = ""): Promise<BeatGalerAccount> {
   if (logoutBeatGalerAccountInFlight) await logoutBeatGalerAccountInFlight;
-  if (platform.kind === "web") {
-    void import("../features/playback/webRememberedDirectPreconnect")
-      .then(({ prepareWebDirectForSignIn }) => prepareWebDirectForSignIn())
-      .catch(() => {});
-  }
+  const prewarm = platform.kind === "web" && isCatalogClientEnabled() && typeof window !== "undefined"
+    && !(window as any).__TAURI_INTERNALS__ && (typeof navigator === "undefined" || navigator.onLine !== false);
+  const owner: { accountId: string | null } | null = prewarm ? { accountId: null } : null;
+  if (owner) signInPrewarm = owner;
+  // Start loading in parallel, but don't construct the Worker until login has been dispatched.
+  const directPort = owner ? import("../features/library/catalog/catalogDirectPort").catch(() => null) : null;
+  const onDispatched = owner && directPort ? () => {
+    void directPort.then(module => {
+      if (!module || signInPrewarm !== owner) return;
+      playTrace("DIRECT_SIGN_IN_PRECONNECT_BEGIN");
+      module.prewarmDirectRuntime(owner);
+      discardDirectPrewarm = module.discardPrewarmedDirectRuntime;
+    }).catch(() => {});
+  } : undefined;
   const generation = getWebAccountGeneration();
-  const result = await authRequest("/auth/login", { email, password, mfaCode, beatgalerUserId: await getBeatGalerInstallationId() });
+  const result = await authRequest("/auth/login", { email, password, mfaCode, beatgalerUserId: await getBeatGalerInstallationId() }, undefined, onDispatched);
   if (platform.kind === "web" && generation !== getWebAccountGeneration()) throw new Error("Sign-in was cancelled by an account change.");
+  if (owner && typeof result.user?.id === "string") owner.accountId = result.user.id.trim() || null;
   return await storeSession(result);
 }
 
@@ -382,6 +405,7 @@ export function restoreBeatGalerSession(): Promise<BeatGalerAccount | null> {
       clearLocalSessionState();
       if (platform.kind === "web") setActiveWebAccountId(null);
       if (platform.kind === "web") {
+        void discardSignInPrewarm()?.catch(() => {});
         void platform.cloudData.disconnect().catch(() => {});
       }
       try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
@@ -571,7 +595,7 @@ export function logoutBeatGalerAccount(): Promise<void> {
       try { if (token) await authRequest("/auth/logout", { beatgalerUserId: await getBeatGalerInstallationId() }, token); } catch {}
     })();
     const disconnect = platform.cloudData.disconnect().catch(() => {});
-    await Promise.all([remote, disconnect]);
+    await Promise.all([remote, disconnect, discardSignInPrewarm()?.catch(() => {})]);
     clearLocalSessionState();
     try { await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase()); } catch {}
   })();

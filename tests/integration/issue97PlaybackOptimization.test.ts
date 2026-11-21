@@ -82,33 +82,26 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(coordinator).toContain('playTrace("INDEX_WAIT_DIRECT_READY"');
   });
 
-  // T25: la Gallery ya no dispara esta preconexión al montarse (ver webGalleryWorkspaceComposition.behavior.test.tsx); el módulo
-  // sigue vivo para AccountGate (prepareWebDirectForSignIn) y su comportamiento está en webRememberedDirectPreconnect.behavior.test.ts.
-  it("keeps remembered Direct off public startup, route-free and behind the CSRF guard", () => {
+  it("keeps login prewarm off public startup and Gallery mount", () => {
     const main = source("src/main.tsx");
     const experience = source("src/app/WebExperience.tsx");
     const galleryEntry = source("src/app/WebGalleryEntry.tsx");
     const workspace = source("src/app/WebGalleryWorkspace.tsx");
     const authGate = source("src/features/auth/AuthExperienceGate.tsx");
-    const rememberedPreconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
+    const accountGate = source("src/components/AccountGate.tsx");
     const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
 
     expect(main).not.toContain("preconnectRememberedWebDirect();");
+    expect(main).not.toContain("prewarmDirectRuntime");
     expect(main).not.toContain("platform.cloudAuth.syncSession(null, \"\")");
     expect(experience).toContain('path === "/" ? <LandingPage />');
     expect(galleryEntry).toContain('<AuthExperienceGate initialPhase={initialPhase} onAuthenticated={accountReady}>');
     expect(authGate).toContain('if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;');
     expect(workspace).not.toContain("preconnectRememberedWebDirect");
+    expect(workspace).not.toContain("prewarmDirectRuntime");
 
-    expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
-    expect(rememberedPreconnect).toContain("if (!hasRememberedWebSessionMarker()) return;");
-    expect(rememberedPreconnect).toContain("if (!readWebCsrfToken()) {");
-    const coordinatorAcquire = rememberedPreconnect.indexOf("const coordinator = getWebStartupPlaybackCoordinator();");
-    const coordinatorStart = rememberedPreconnect.indexOf("const startup = coordinator.prepareConnection();", coordinatorAcquire);
-    const dispatched = rememberedPreconnect.indexOf('playTrace("DIRECT_REMEMBERED_PRECONNECT_DISPATCHED")', coordinatorStart);
-    expect(coordinatorAcquire).toBeGreaterThanOrEqual(0);
-    expect(coordinatorStart).toBeGreaterThan(coordinatorAcquire);
-    expect(dispatched).toBeGreaterThan(coordinatorStart);
+    expect(accountGate).not.toContain("webRememberedDirectPreconnect");
+    expect(accountGate).not.toContain("webStartupPlaybackCoordinator");
     expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
   });
 
