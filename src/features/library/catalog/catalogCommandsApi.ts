@@ -11,7 +11,8 @@ export function assertBeatNameWithinLimit(name: unknown): void {
   const r = validateBeatName(name);
   if (!r.valid) throw new CatalogApiError(400, "INPUT_INVALID", r.reason, { reason: "NAME_TOO_LONG", field: "name" });
 }
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
+import { catalogHttpError, createCatalogHttp, readCatalogJson } from "./catalogHttp";
+import type { PlaybackApi } from "./catalogPlaybackSession";
 
 export interface CatalogWriteHeaders { era: string; epoch: string }
 export interface CatalogBeatFile { fileId: string; role: string; revision: string; filename: string | null; mime: string | null; sizeBytes: string; status: string; verified: boolean; slot: string | null; partCount: number; current: boolean }
@@ -57,18 +58,13 @@ export interface CatalogCommandsOptions {
 export const BATCH_MAX = 50;
 
 export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
-  const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  const baseUrl = options.baseUrl ?? (() => getResolvedCloudApiBase());
-  const token = options.token ?? (() => getBeatGalerAuthToken());
-  const csrf = options.csrf ?? (() => { try { return sessionStorage.getItem("beatgaler:web-csrf:v1"); } catch { return null; } });
-  const timeoutMs = options.timeoutMs ?? 20_000;
+  const http = createCatalogHttp(options, 20_000);
 
+  // Política: toda escritura lleva CSRF, era/época del contexto y Content-Type; idempotencia e If-Match cuando el comando los aporta.
   async function request<T>(method: "GET" | "POST" | "PATCH", path: string, { body, signal, idempotencyKey, ifMatch }: { body?: unknown; signal?: AbortSignal; idempotencyKey?: string; ifMatch?: string | null } = {}): Promise<{ status: number; body: T }> {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const bearer = token();
-    if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    const headers: Record<string, string> = {};
     if (method !== "GET") {
-      const c = csrf();
+      const c = http.csrf();
       if (c) headers["X-BeatGaler-CSRF"] = c;
       const h = options.headers();
       headers["X-Catalog-Era"] = h.era; headers["X-Catalog-Epoch"] = h.epoch;
@@ -76,22 +72,9 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
     }
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
     if (ifMatch) headers["If-Match"] = ifMatch;
-    const controller = new AbortController();
-    const onAbort = () => controller.abort();
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
-    try {
-      response = await fetchImpl(`${baseUrl()}${path}`, { method, headers, credentials: "include", body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      throw Object.assign(new Error("Could not reach BeatGaler Cloud."), { name: "CatalogNetworkError", cause: error });
-    } finally { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); }
-    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!response.ok) {
-      const code = typeof payload.code === "string" ? payload.code : response.status === 401 ? "UNAUTHENTICATED" : `HTTP_${response.status}`;
-      throw new CatalogApiError(response.status, code, typeof payload.error === "string" ? payload.error : `Galer Cloud HTTP ${response.status}`, (payload.detail as Record<string, unknown>) ?? {});
-    }
+    const response = await http.send(method, path, { headers, body, signal });
+    const payload = await readCatalogJson(response);
+    if (!response.ok) throw catalogHttpError(response, payload);
     return { status: response.status, body: payload as T };
   }
   const enc = encodeURIComponent;
@@ -140,6 +123,16 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
     getPurge: async (operationId: string, signal?: AbortSignal) => (await request<CatalogPurgeOperation>("GET", `/catalog/v1/operations/${enc(operationId)}`, { signal })).body,
     renamePreview: async (from: string, to: string, signal?: AbortSignal) => (await request<CatalogRenamePreview>("POST", "/catalog/v1/tags/rename/preview", { body: { from, to }, signal })).body,
     renameTag: async (from: string, to: string, idempotencyKey: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", "/catalog/v1/tags/rename", { body: { from, to }, idempotencyKey, signal })).body,
+    // Comandos musicales del servidor (T14): rondas Shuffle y vecinos de orden, con el mismo transporte que el resto de comandos
+    // (timeout, CatalogNetworkError, 401 → UNAUTHENTICATED). La idempotencia de next/consume viaja en el CUERPO (contrato de routes.js).
+    startRound: async (input: Parameters<PlaybackApi["startRound"]>[0]) => (await request<Awaited<ReturnType<PlaybackApi["startRound"]>>>("POST", "/catalog/v1/playback/rounds", { body: input })).body,
+    nextInRound: async (input: Parameters<PlaybackApi["nextInRound"]>[0]) => (await request<Awaited<ReturnType<PlaybackApi["nextInRound"]>>>("POST", `/catalog/v1/playback/rounds/${enc(input.roundId)}/next`, { body: input })).body,
+    consumeInRound: async (input: Parameters<PlaybackApi["consumeInRound"]>[0]) => (await request<Awaited<ReturnType<PlaybackApi["consumeInRound"]>>>("POST", `/catalog/v1/playback/rounds/${enc(input.roundId)}/consume`, { body: input })).body,
+    releaseRound: async (roundId: string) => (await request<unknown>("POST", `/catalog/v1/playback/rounds/${enc(roundId)}/release`, { body: {} })).body,
+    neighbor: async (input: Parameters<PlaybackApi["neighbor"]>[0]) => {
+      const p = new URLSearchParams({ direction: input.direction, sort: input.sort }); if (input.beatId) p.set("beatId", input.beatId);
+      return (await request<Awaited<ReturnType<PlaybackApi["neighbor"]>>>("GET", `/catalog/v1/query-sets/${enc(input.setId)}/neighbor?${p}`)).body;
+    },
   });
 }
 export type CatalogCommandsApi = ReturnType<typeof createCatalogCommandsApi>;

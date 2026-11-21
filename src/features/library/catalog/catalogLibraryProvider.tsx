@@ -4,7 +4,6 @@
 // mutaciones T13, transferencias T12); cualquier otro estado → bloqueado (fail-closed, sin fallback a INDEX). El cambio de cuenta
 // invalida y remonta: todos los servicios tienen teardown por cuenta.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
 import { CatalogApiError, createCatalogApi, filtersKey, type CatalogApi, type CatalogContext } from "./catalogApi";
 import { browserFirstBlockCache, identityOf, type FirstBlockCache } from "./catalogFirstBlockCache";
 import { parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
@@ -114,29 +113,9 @@ export function createCatalogServices({ api, accountId, context, fetchImpl, base
   // Restauración desde el MAIN en segundo plano, diferida para no competir con el primer bloque ni con la Playbar.
   const syncDelay = prefixSyncDelayMs === undefined ? MAIN_PACK_DEFAULTS.openDelayMs : prefixSyncDelayMs;
   const syncTimer = mainPack && syncDelay !== null ? setTimeout(() => { void mainPack.open(); }, syncDelay) : null;
-  // Comandos musicales del servidor (T14) sobre el mismo transporte HTTP que los comandos (sin RNG en cliente).
-  // V09 hallazgo: sin `baseUrl` explícito debe resolverse la misma base del Cloud que el resto de clientes (misma origin del proxy web);
-  // antes el default "" enviaba rounds/neighbor a la origin de Vite (404) y Next/Shuffle/Prev no avanzaban.
-  const base = baseUrl ?? (() => getResolvedCloudApiBase());
-  const bearerOf = token ?? (() => getBeatGalerAuthToken());
-  const csrfOf = csrf ?? (() => { try { return sessionStorage.getItem("beatgaler:web-csrf:v1"); } catch { return null; } });
-  const call = async <T,>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> => {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const bearer = bearerOf(); if (bearer) headers.Authorization = `Bearer ${bearer}`;
-    if (method === "POST") { headers["Content-Type"] = "application/json"; headers["X-Catalog-Era"] = context.authority_era; headers["X-Catalog-Epoch"] = context.authority_epoch; const c = csrfOf(); if (c) headers["X-BeatGaler-CSRF"] = c; }
-    const f = fetchImpl ?? fetch;
-    const r = await f(`${base()}${path}`, { method, headers, credentials: "include", body: body === undefined ? undefined : JSON.stringify(body) });
-    const payload = (await r.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!r.ok) { const { CatalogApiError } = await import("./catalogApi"); throw new CatalogApiError(r.status, typeof payload.code === "string" ? payload.code : `HTTP_${r.status}`, typeof payload.error === "string" ? payload.error : "playback command failed", (payload.detail as Record<string, unknown>) ?? {}); }
-    return payload as T;
-  };
-  const playbackApi: PlaybackApi = {
-    startRound: (input) => call("POST", "/catalog/v1/playback/rounds", input),
-    nextInRound: (input) => call("POST", `/catalog/v1/playback/rounds/${encodeURIComponent(input.roundId)}/next`, input),
-    consumeInRound: (input) => call("POST", `/catalog/v1/playback/rounds/${encodeURIComponent(input.roundId)}/consume`, input),
-    releaseRound: (roundId) => call("POST", `/catalog/v1/playback/rounds/${encodeURIComponent(roundId)}/release`, {}),
-    neighbor: (input) => { const p = new URLSearchParams({ direction: input.direction, sort: input.sort }); if (input.beatId) p.set("beatId", input.beatId); return call("GET", `/catalog/v1/query-sets/${encodeURIComponent(input.setId)}/neighbor?${p}`); },
-  };
+  // Comandos musicales del servidor (T14): los sirve `commands` con su mismo transporte (base del Cloud, timeout, CatalogNetworkError,
+  // 401 → UNAUTHENTICATED). Antes había aquí un `call` propio sin timeout ni error de red tipado (piloto F1).
+  const playbackApi: PlaybackApi = commands;
   const sets = new Map<string, Promise<{ setId: string; memberCount: number }>>();
   const playback = createCatalogPlaybackSession({
     api: playbackApi,

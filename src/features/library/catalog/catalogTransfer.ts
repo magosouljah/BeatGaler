@@ -8,7 +8,7 @@
 //  - 403 (capacidad inválida/expirada, permanente, cerco) → error visible; no se improvisa otra identidad.
 // Los hashes declarados se calculan en streaming (SHA-256 incremental, sin cargar el archivo completo en memoria).
 import { CatalogApiError } from "./catalogApi";
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
+import { catalogHttpError, createCatalogHttp, readCatalogJson } from "./catalogHttp";
 import { DirectSendError, type DirectFailure } from "./catalogDirectCore";
 import { DIRECT_UNAVAILABLE_MESSAGE, DIRECT_WAIT, DirectUnavailableError, type DirectPort } from "./catalogDirectTypes";
 
@@ -177,47 +177,32 @@ const retryAfterMs = (error: CatalogApiError, header: string | null): number => 
 const defaultKey = (): string => (globalThis.crypto && "randomUUID" in globalThis.crypto ? globalThis.crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 export function createCatalogTransfer(options: CatalogTransferOptions) {
-  const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  const baseUrl = options.baseUrl ?? (() => getResolvedCloudApiBase());
-  const token = options.token ?? (() => getBeatGalerAuthToken());
-  const csrf = options.csrf ?? (() => { try { return sessionStorage.getItem("beatgaler:web-csrf:v1"); } catch { return null; } });
+  const http = createCatalogHttp(options, TRANSFER_DEFAULTS.timeoutMs);
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const timeoutMs = options.timeoutMs ?? TRANSFER_DEFAULTS.timeoutMs;
   const maxSendAttempts = options.maxSendAttempts ?? TRANSFER_DEFAULTS.maxSendAttempts;
   const pollIntervalMs = options.pollIntervalMs ?? TRANSFER_DEFAULTS.pollIntervalMs;
   const maxPollMs = options.maxPollMs ?? TRANSFER_DEFAULTS.maxPollMs;
   const newKey = options.idempotencyKey ?? defaultKey;
 
   interface Reply<T> { status: number; body: T; headers: Headers }
+  // Política: toda escritura lleva CSRF y era/época; Content-Type si hay cuerpo; cabeceras propias del comando (Idempotency-Key…).
+  // Un 429/503 con Retry-After lo expone como detail.retry_after_ms (salvo que el servidor ya lo envíe) y la respuesta conserva cabeceras.
   async function request<T>(method: "GET" | "POST" | "PUT", path: string, { body, signal, extraHeaders = {} }: { body?: unknown; signal?: AbortSignal; extraHeaders?: Record<string, string> } = {}): Promise<Reply<T>> {
-    const headers: Record<string, string> = { Accept: "application/json", ...extraHeaders };
-    const bearer = token();
-    if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    const headers: Record<string, string> = { ...extraHeaders };
     if (method !== "GET") {
-      const c = csrf();
+      const c = http.csrf();
       if (c) headers["X-BeatGaler-CSRF"] = c;
       const h = options.headers();
       headers["X-Catalog-Era"] = h.era; headers["X-Catalog-Epoch"] = h.epoch;
     }
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    const controller = new AbortController();
-    const onAbort = () => controller.abort();
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
-    try {
-      response = await fetchImpl(`${baseUrl()}${path}`, { method, headers, credentials: "include", body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      throw Object.assign(new Error("Could not reach BeatGaler Cloud."), { name: "CatalogNetworkError", cause: error });
-    } finally { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); }
-    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const response = await http.send(method, path, { headers, body, signal });
+    const payload = await readCatalogJson(response);
     if (!response.ok) {
-      const code = typeof payload.code === "string" ? payload.code : response.status === 401 ? "UNAUTHENTICATED" : `HTTP_${response.status}`;
       const detail = { ...((payload.detail as Record<string, unknown>) ?? {}) };
       const ra = response.headers.get("retry-after");
       if (ra && detail.retry_after_ms === undefined) detail.retry_after_ms = Number(ra) * 1000;
-      throw new CatalogApiError(response.status, code, typeof payload.error === "string" ? payload.error : `Galer Cloud HTTP ${response.status}`, detail);
+      throw catalogHttpError(response, payload, detail);
     }
     return { status: response.status, body: payload as T, headers: response.headers };
   }

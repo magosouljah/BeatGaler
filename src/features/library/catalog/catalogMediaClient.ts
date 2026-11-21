@@ -8,7 +8,7 @@
 //    primero en memoria y en la caché persistente (IndexedDB) por (cuenta, época, archivo, revisión) — sin petición al Cloud ni a Telegram —.
 //  - Eventos autoritativos (reemplazo/trash/denegación) → `invalidate(beatId)`; cambio de cuenta/logout → `teardown()` libera todo.
 import { CatalogApiError } from "./catalogApi";
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
+import { catalogHttpError, createCatalogHttp, readCatalogJson } from "./catalogHttp";
 import { sha256Hex } from "./catalogTransfer";
 import { DIRECT_UNAVAILABLE_MESSAGE, DIRECT_WAIT, type DirectPort } from "./catalogDirectTypes";
 import type { PrefixCache } from "./catalogPrefixCache";
@@ -51,15 +51,11 @@ export interface CatalogMediaClientOptions {
 export const MEDIA_DEFAULTS = Object.freeze({ artworkBudgetBytes: 32 * 1024 * 1024, artworkConcurrency: 4, grantSkewMs: 30_000, timeoutMs: 60_000 });
 
 export function createCatalogMediaClient(options: CatalogMediaClientOptions) {
-  const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  const baseUrl = options.baseUrl ?? (() => getResolvedCloudApiBase());
-  const token = options.token ?? (() => getBeatGalerAuthToken());
-  const csrf = options.csrf ?? (() => { try { return sessionStorage.getItem("beatgaler:web-csrf:v1"); } catch { return null; } });
+  const http = createCatalogHttp(options, MEDIA_DEFAULTS.timeoutMs);
   const now = options.now ?? (() => Date.now());
   const budget = options.artworkBudgetBytes ?? MEDIA_DEFAULTS.artworkBudgetBytes;
   const concurrency = options.artworkConcurrency ?? MEDIA_DEFAULTS.artworkConcurrency;
   const skew = options.grantSkewMs ?? MEDIA_DEFAULTS.grantSkewMs;
-  const timeoutMs = options.timeoutMs ?? MEDIA_DEFAULTS.timeoutMs;
   const direct = options.direct ?? null;
   const createURL = options.createObjectURL ?? ((b: Blob) => URL.createObjectURL(b));
   const revokeURL = options.revokeObjectURL ?? ((u: string) => URL.revokeObjectURL(u));
@@ -78,20 +74,16 @@ export function createCatalogMediaClient(options: CatalogMediaClientOptions) {
 
   const assertAccount = () => { if (options.accountId() !== account) throw Object.assign(new Error("media client belongs to another account"), { code: "ACCOUNT_CHANGED" }); };
   // Solo METADATOS (JSON): el Cloud no sirve bytes de archivos.
+  // Política: POST con CSRF y era/época; Content-Type solo si hay cuerpo. Éxito con JSON estricto; un 403 cuenta como denegado.
   async function request<T>(method: "POST" | "GET", path: string, { signal, body }: { signal?: AbortSignal; body?: unknown } = {}): Promise<{ status: number; json: T | null }> {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const bearer = token(); if (bearer) headers.Authorization = `Bearer ${bearer}`;
-    if (method === "POST") { const c = csrf(); if (c) headers["X-BeatGaler-CSRF"] = c; const h = options.headers(); headers["X-Catalog-Era"] = h.era; headers["X-Catalog-Epoch"] = h.epoch; }
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const controller = new AbortController(); const onAbort = () => controller.abort(); signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
-    try { response = await fetchImpl(`${baseUrl()}${path}`, { method, headers, credentials: "include", body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal }); } catch (error) { if (signal?.aborted) throw error; throw Object.assign(new Error("Could not reach BeatGaler Cloud."), { name: "CatalogNetworkError", cause: error }); } finally { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); }
+    const headers: Record<string, string> = {};
+    if (method === "POST") { const c = http.csrf(); if (c) headers["X-BeatGaler-CSRF"] = c; const h = options.headers(); headers["X-Catalog-Era"] = h.era; headers["X-Catalog-Epoch"] = h.epoch; }
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const response = await http.send(method, path, { headers, body, signal });
     if (!response.ok) {
-      const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      const code = typeof payload.code === "string" ? payload.code : response.status === 401 ? "UNAUTHENTICATED" : `HTTP_${response.status}`;
+      const payload = await readCatalogJson(response);
       if (response.status === 403) metrics.denied++;
-      throw new CatalogApiError(response.status, code, typeof payload.error === "string" ? payload.error : `Galer Cloud HTTP ${response.status}`, (payload.detail as Record<string, unknown>) ?? {});
+      throw catalogHttpError(response, payload);
     }
     return { status: response.status, json: (await response.json()) as T };
   }

@@ -1,7 +1,7 @@
 // T08 — Cliente tipado de /catalog/v1 (CONTRATO C5, NATIVO r2.1 §3.3, api-manifest.json v2 `delivered`).
 // Solo metadata por HTTP: nunca construye WebGalerCloudTransport ni toca Telegram/INDEX. Las credenciales son la sesión
 // Cloud existente (bearer + cookie). Errores estables como CatalogApiError{status, code, detail}; nunca "lista vacía" ante error.
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
+import { CatalogApiError, catalogHttpError, createCatalogHttp, readCatalogJson } from "./catalogHttp";
 
 export type CatalogSort = "manual" | "rating" | "name" | "bpm";
 export type CatalogState = "ACTIVE" | "TRASH";
@@ -87,18 +87,8 @@ export interface CatalogListRequest extends Partial<CatalogQueryFilters> {
   edge?: "last" | null;
 }
 
-export class CatalogApiError extends Error {
-  readonly status: number;
-  readonly code: string;
-  readonly detail: Record<string, unknown>;
-  constructor(status: number, code: string, message: string, detail: Record<string, unknown> = {}) {
-    super(message);
-    this.name = "CatalogApiError";
-    this.status = status;
-    this.code = code;
-    this.detail = detail;
-  }
-}
+// La clase vive en el núcleo HTTP (catalogHttp) y se reexporta aquí: es la misma clase para todos los clientes (instanceof estable).
+export { CatalogApiError };
 export const isCatalogApiError = (error: unknown): error is CatalogApiError => error instanceof CatalogApiError;
 
 export type CatalogContextResolution =
@@ -136,40 +126,19 @@ function buildQuery(req: CatalogListRequest): string {
 }
 
 export function createCatalogApi(options: CatalogApiOptions = {}) {
-  const fetchImpl = options.fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  const baseUrl = options.baseUrl ?? (() => getResolvedCloudApiBase());
-  const token = options.token ?? (() => getBeatGalerAuthToken());
-  const csrf = options.csrf ?? (() => { try { return sessionStorage.getItem("beatgaler:web-csrf:v1"); } catch { return null; } });
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const http = createCatalogHttp(options, DEFAULT_TIMEOUT_MS);
 
+  // Política: lecturas sin cabeceras de escritura; POST (provisión) con CSRF y Content-Type, sin era/época (aún no hay contexto).
   async function request<T>(method: "GET" | "POST", path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    const bearer = token();
-    if (bearer) headers.Authorization = `Bearer ${bearer}`;
+    const headers: Record<string, string> = {};
     if (method === "POST") {
       headers["Content-Type"] = "application/json";
-      const c = csrf();
+      const c = http.csrf();
       if (c) headers["X-BeatGaler-CSRF"] = c;
     }
-    const controller = new AbortController();
-    const onAbort = () => controller.abort();
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let response: Response;
-    try {
-      response = await fetchImpl(`${baseUrl()}${path}`, { method, headers, credentials: "include", body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      throw Object.assign(new Error("Could not reach BeatGaler Cloud."), { name: "CatalogNetworkError", cause: error });
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    }
-    const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
-    if (!response.ok) {
-      const code = typeof payload.code === "string" ? payload.code : response.status === 401 ? "UNAUTHENTICATED" : `HTTP_${response.status}`;
-      throw new CatalogApiError(response.status, code, typeof payload.error === "string" ? payload.error : `Galer Cloud HTTP ${response.status}`, (payload.detail as Record<string, unknown>) ?? {});
-    }
+    const response = await http.send(method, path, { headers, body, signal });
+    const payload = await readCatalogJson(response);
+    if (!response.ok) throw catalogHttpError(response, payload);
     return payload as T;
   }
 
