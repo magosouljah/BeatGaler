@@ -188,6 +188,24 @@ test('F3-EQ-03 · REPLACE conserva campos omitidos y aplica crop: null; IMPORT c
     { id: added.beatId, name: 'Nuevo', bpm: '', key: '', tags: [], rating: 0, color: '', color2: '' });
 }));
 
+test('F3-EQ-03b · PATCH y REPLACE con crop: null borran el recorte con el mismo resultado', () => withDb(async (pool) => {
+  const patchLib = await nativeLibrary(pool);
+  const replaceLib = await nativeLibrary(pool);
+  const beat = { id: 'b0003', name: 'Recorte', bpm: '90', key: 'A', tags: ['trap'], rating: 2, image_crop: { x: 0, y: 0, w: 1, h: 1, unit: 'ratio' }, extra_field: 'keep' };
+  await seedBeats(pool, patchLib, [beat]);
+  await seedBeats(pool, replaceLib, [beat]);
+  const patched = await mkCommands(pool).patchBeat({ ...patchLib, beatId: beat.id, idempotencyKey: key(), expectedVersion: '1', patch: { crop: null } });
+  assert.equal(patched.noop, false);
+  await commitTransfer(mkOperations(pool), replaceLib,
+    { kind: 'REPLACE', beatId: beat.id, expectedVersion: '1', parts: [master(2000)], metadata: { crop: null } }, 6000);
+
+  const patchedBeat = await beatProjection(pool, patchLib, beat.id);
+  assert.deepEqual(JSON.parse(patchedBeat.legacy_json), { ...beat, image_crop: null });
+  // Mismo documento, SHA, bytes y search_text por ambos caminos (commands.js:48 y operations.js:414).
+  assert.deepEqual(await beatProjection(pool, replaceLib, beat.id), patchedBeat);
+  assert.deepEqual(await tagProjections(pool, replaceLib, beat.id), await tagProjections(pool, patchLib, beat.id));
+}));
+
 test('F3-EQ-06 · PATCH idéntico es no-op y REPLACE con MASTER nuevo suma versión, revisión y evento', () => withDb(async (pool) => {
   const lib = await nativeLibrary(pool);
   const ops = mkOperations(pool);
