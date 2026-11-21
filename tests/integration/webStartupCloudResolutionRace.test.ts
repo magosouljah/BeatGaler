@@ -28,12 +28,14 @@ describe("Web startup Cloud resolution race", () => {
     expect(ticketIndex).toBeGreaterThan(resolveIndex);
   });
 
-  it("keeps the earliest preconnect but requires current-origin cookie CSRF", () => {
+  // Antes comparaba índices y pasaba en vacío (-1 < n) aunque el arranque ya no preconecta; el arranque público no abre Direct.
+  it("keeps remembered preconnect off public startup and requires current-origin cookie CSRF", () => {
     const main = source("src/main.tsx");
     const preconnect = source("src/features/playback/webRememberedDirectPreconnect.ts");
     const session = source("src/features/auth/webSessionBootstrap.ts");
 
-    expect(main.indexOf("preconnectRememberedWebDirect();")).toBeLessThan(main.indexOf("ReactDOM.createRoot"));
+    expect(main).toContain("ReactDOM.createRoot");
+    expect(main).not.toContain("preconnectRememberedWebDirect");
     expect(preconnect).toContain("readWebCsrfCookieToken");
     expect(preconnect).toContain("const readWebCsrfToken = readWebCsrfCookieToken;");
     expect(session).toContain("export function readWebCsrfCookieToken(): string");

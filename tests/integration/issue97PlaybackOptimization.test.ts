@@ -82,7 +82,9 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(coordinator).toContain('playTrace("INDEX_WAIT_DIRECT_READY"');
   });
 
-  it("dispatches remembered Direct on authenticated Gallery mount, route-free and behind the CSRF guard", () => {
+  // T25: la Gallery ya no dispara esta preconexión al montarse (ver webGalleryWorkspaceComposition.behavior.test.tsx); el módulo
+  // sigue vivo para AccountGate (prepareWebDirectForSignIn) y su comportamiento está en webRememberedDirectPreconnect.behavior.test.ts.
+  it("keeps remembered Direct off public startup, route-free and behind the CSRF guard", () => {
     const main = source("src/main.tsx");
     const experience = source("src/app/WebExperience.tsx");
     const galleryEntry = source("src/app/WebGalleryEntry.tsx");
@@ -96,7 +98,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(experience).toContain('path === "/" ? <LandingPage />');
     expect(galleryEntry).toContain('<AuthExperienceGate initialPhase={initialPhase} onAuthenticated={accountReady}>');
     expect(authGate).toContain('if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;');
-    expect(workspace).toContain("useEffect(() => { preconnectRememberedWebDirect(); }, []);");
+    expect(workspace).not.toContain("preconnectRememberedWebDirect");
 
     expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
     expect(rememberedPreconnect).toContain("if (!hasRememberedWebSessionMarker()) return;");

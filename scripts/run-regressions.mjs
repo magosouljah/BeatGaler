@@ -6,6 +6,7 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const buildDir = path.join(root, ".regression-build");
 const localTsc = path.join(root, "node_modules", "typescript", "bin", "tsc");
+const skipRelease = process.argv.includes("--skip-release");
 
 function fail(message) {
   console.error(`FAIL regression guard: ${message}`);
@@ -233,14 +234,17 @@ try {
     readFileSync(path.join(root, "cloud-server", "server.js"), "utf8"),
     readFileSync(path.join(root, "cloud-server", "server-core.js"), "utf8"),
   ].join("\n");
-  const cloudIndexPublication = readFileSync(path.join(root, "cloud-server", "library-index-publication.js"), "utf8");
+  // T25 (b52649f): el Cloud ya no sirve la papelera/INDEX legacy (library-index-publication.js eliminado). Las guardas de ese flujo
+  // en el servidor se sustituyen por guardas de retirada; las de Desktop (Rust) siguen vigilando su propio código fuente.
+  const retiredCloudRoute = (route) => new RegExp(`app\\.(get|post|put|patch|delete)\\(\\s*["'\`]${route.replace(/[/.*+?^${}()|[\]\\]/g, "\\$&")}["'\`]`).test(cloudServer);
 
   const forbiddenEmptyRecovery = /if \(!settings\?\.telegram_cloud_connected\) return;\s*if \(beats\.length !== 0\) return;\s*void recoverTelegramLibraryOnceIfEmpty\(\);/;
   if (forbiddenEmptyRecovery.test(app)) fail("App.tsx reintroduced automatic Telegram recovery whenever beats becomes empty; Remove All can resurrect stale cards.");
   if (!app.includes('an empty library is a valid, authoritative state')) fail("App.tsx lost the empty-library mutation invariant comment; review Remove All recovery behavior.");
   if (!settingsPanel.includes("setTrashItems([]);")) fail("Settings Trash must disappear immediately after permanent-delete confirmation.");
   if (!settingsPanel.includes("Deleting ${requested} beat")) fail("Settings Trash lost its non-blocking background-delete status.");
-  if (!settingsPanel.includes("const remaining = await platform.trash.listBeats();")) fail("Settings Trash must recover real rows through the platform boundary if background deletion could not be queued.");
+  // E58 (be37174): la papelera de Ajustes usa la del catálogo cuando la composición la aporta (trashSource) y, si no, platform.trash.
+  if (!settingsPanel.includes("const remaining = await (props.trashSource ?? platform.trash).listBeats();")) fail("Settings Trash must recover real rows through the platform boundary if background deletion could not be queued.");
   if (!rustCommands.includes('metadata_display_name')) fail("Cloud Trash insertion must prefer BeatMeta.name over synthetic import-* paths.");
   if (!rustCommands.includes('beat_meta_json FROM trash ORDER BY trashed_at DESC')) fail("Trash listing must recover names from beat metadata for already-broken rows.");
   if (!rustCommands.includes('/beats/delete-topics-batch')) fail("Rust Trash purge must use the batch permanent-delete endpoint.");
@@ -248,20 +252,13 @@ try {
   if (!rustCommands.includes("pub async fn purge_trash_now")) fail("Empty Trash Tauri command must be async so Cloud/index I/O cannot block the UI thread.");
   if (!rustCommands.includes("tauri::async_runtime::spawn_blocking")) fail("Empty Trash blocking curl/index commit must run on Tauri spawn_blocking.");
   if (!rustCommands.includes("retrying automatically")) fail("Empty Trash must automatically retry one transient Cloud enqueue failure.");
-  if (!cloudServer.includes('app.post("/beats/delete-topics-batch"')) fail("Cloud Server lost the batch permanent-delete endpoint.");
-  if (!cloudServer.includes("pendingTopicDeletes.set")) fail("Cloud Trash must persist physical Telegram cleanup jobs before returning.");
-  if (!cloudServer.includes("cleanup_background: true")) fail("Cloud Trash endpoint must advertise background physical cleanup.");
-  if (!cloudServer.includes("function schedulePendingTopicDeletes")) fail("Cloud Trash lost the non-blocking background cleanup scheduler.");
   if (cloudServer.includes("await flushPendingTopicDeletes(account, beatgalerUserId)")) fail("Library requests must never block on physical Telegram Trash cleanup.");
-  if (!cloudServer.includes("workerCount = Math.min(4")) fail("Background Telegram cleanup lost bounded concurrency.");
-  if (!cloudServer.includes("TOPIC_ID_INVALID")) fail("Already-missing Telegram topics must count as successfully deleted, including TOPIC_ID_INVALID.");
   if (!rustCommands.includes("fn direct_permanently_delete_beats") || !rustCommands.includes('/transport/trash/purge')) fail("Permanent delete must request the scoped Cloud purge before topic cleanup.");
-  if (!cloudServer.includes('app.post("/transport/trash/purge"')) fail("Cloud Server lost the authorized permanent-delete route.");
-  if (!/deleted:\s*\[\.\.\.\(manifest\.deleted\s*\|\|\s*\[\]\),\s*\.\.\.remaining\.map\(/.test(cloudIndexPublication)) fail("Cloud permanent delete must retain tombstones in the single INDEX so stale clients cannot resurrect deleted beats.");
-  if (!cloudIndexPublication.includes('const result = await publish({ userId: uid, chatId, manifest: candidate')) fail("Cloud permanent delete must publish the tombstoned INDEX before confirming purge.");
   if (!rustCommands.includes("direct_publish_existing_index(user_id, &manifest, expected_message_id)")) fail("Direct Trash moves must publish the INDEX through the authorized path.");
-  if (!cloudServer.includes('Legacy server-side library index upload is disabled')) fail("MASTER/server library upsert must remain disabled in Direct mode.");
-  if (!cloudServer.includes('index_owner: "desktop-transport-bot"')) fail("Permanent-delete Topic cleanup must acknowledge that the Desktop transport bot owns index mutation.");
+  // La papelera nativa (TRASH→PURGED y limpieza física durable) vive en cloud-server/catalog/purge.js y la prueban las suites T15/faults.
+  for (const route of ["/beats/delete-topics-batch", "/transport/trash/purge", "/library/upsert", "/library/get"]) {
+    if (retiredCloudRoute(route)) fail(`Retired legacy Cloud route ${route} was registered again (T25).`);
+  }
 
   const emptyTrashBlock = settingsPanel.match(/const emptyTrash = \(\) => \{[\s\S]*?\n  \};\n  const emptyPresetTrash/);
   if (!emptyTrashBlock) fail("Could not locate Settings emptyTrash implementation.");
@@ -360,7 +357,9 @@ try {
   if (!audioConflictModal.includes("Skip this beat") || !audioConflictModal.includes("__skip__")) fail("One unwanted audio conflict can cancel the whole batch again.");
   if (!audioConflictModal.includes("for (const conflict of conflicts)")) fail("Audio conflicts are no longer resolved deterministically one at a time.");
   const telegramRetry = readFileSync(path.join(root, "cloud-server", "telegram-retry.js"), "utf8");
-  if (!cloudServer.includes('withTelegramFloodWait')) fail("Telegram 429 flood-wait handling disappeared from the cloud server.");
+  // T25: server-core ya no llama a Telegram; las operaciones MASTER restantes (pin/membresía) viven en direct-transport-control.js.
+  const directTransportControl = readFileSync(path.join(root, "cloud-server", "direct-transport-control.js"), "utf8");
+  if (!directTransportControl.includes('withTelegramFloodWait')) fail("Telegram 429 flood-wait handling disappeared from the Cloud MASTER transport.");
   if (!telegramRetry.includes("retry\\s+after") || !telegramRetry.includes("retry_after")) fail("Telegram retry helper no longer understands Bot API retry_after responses.");
   console.log("PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, Telegram flood-wait, and authoritative final sync");
 
@@ -503,6 +502,11 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!transportControl.includes("const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`") || !transportControl.includes("fs.fsyncSync(fd)") || !transportControl.includes("fs.renameSync(tmp, file)")) fail("Transport pool durable state is no longer flushed and replaced atomically.");
   console.log("PASS Phase 11 recovery/corruption guard: authoritative INDEX wins recovery, sidecar writes fail closed, corrupt outputs are rejected, journals roll back, and pool state stays atomic");
 
+  // --skip-release: `npm test` (Web + Cloud V1) no ejecuta las guardas de release/Desktop (updater, empaquetado Windows,
+  // VERSION, workflows macOS, publicación por rama); siguen disponibles con `npm run test:regressions`.
+  if (skipRelease) {
+    console.log("SKIP release/Desktop guards (phase12 updater, Windows packaging, VERSION, macOS workflow, github-save): run without --skip-release");
+  } else {
   execFileSync(process.execPath, [path.join(root, "scripts", "regression-phase12.mjs")], {
     cwd: root,
     stdio: "inherit",
@@ -532,13 +536,14 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (/BeatGaler-V\d+-macOS/i.test(macWorkflow)) fail("macOS artifact name reintroduced a version-specific hardcode.");
   if (!macWorkflow.includes("npm run version:check")) fail("macOS workflow must verify VERSION before building.");
   console.log("PASS release guard: macOS workflow builds the selected ref without a hardcoded V-number");
+  }
 } finally {
   rmSync(buildDir, { recursive: true, force: true });
 }
 
 // GitHub publishing guard: branch names must come from VERSION and pushes must use an
 // explicit heads refspec so a same-named tag can never recreate the old refspec collision.
-{
+if (!skipRelease) {
   const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   const githubSave = readFileSync(path.join(root, "scripts", "github-save.mjs"), "utf8");
   if (packageJson.scripts?.["github:save"] !== "node scripts/github-save.mjs") fail("package.json lost the one-command github:save entry point.");

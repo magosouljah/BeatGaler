@@ -129,8 +129,9 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(experience).toContain('path === "/" ? <LandingPage />');
     expect(galleryEntry).toContain('<AuthExperienceGate initialPhase={initialPhase} onAuthenticated={accountReady}>');
     expect(experienceGate).toContain('if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;');
-    expect(galleryWorkspace).toContain("useEffect(() => { preconnectRememberedWebDirect(); }, []);");
-    expect(galleryWorkspace).toContain("<App />");
+    // T25: la Gallery no monta App ni esta preconexión (comportamiento en webGalleryWorkspaceComposition.behavior.test.tsx).
+    expect(galleryWorkspace).not.toContain("preconnectRememberedWebDirect");
+    expect(galleryWorkspace).not.toContain("<App />");
 
     expect(rememberedPreconnect).toContain('import { getWebStartupPlaybackCoordinator } from "./webStartupPlaybackCoordinator";');
     expect(rememberedPreconnect).toContain("hasRememberedWebSessionMarker()");
@@ -166,7 +167,8 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(sessionControl).toContain('if (csrf) headers["X-BeatGaler-CSRF"] = csrf;');
     expect(sessionControl).toContain('credentials: "include"');
     expect(sessionControl).toContain("export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic>");
-    expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic)");
+    // Direct B (E7x) añadió un segundo parámetro opcional (TemporarySessionOptions); se fija solo el primero.
+    expect(sessionControl).toContain("export async function bindWebTransportSession(bootstrap: WebTransportSessionPublic");
     expect(sessionControl).toContain("return bindWebTransportSession(await reserveWebTransportSession());");
     expect(sessionControl).not.toContain("startupBeatIds");
 
@@ -195,14 +197,13 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(controller).toContain("if (bootstrap) await this.api.stop(bootstrap).catch(() => {});");
   });
 
-  it("resolves an existing beat topic by vault rather than installation", () => {
+  // T25 (b52649f): los topics por beat y su resolución en server-core se retiraron con INDEX (los topics están cancelados); la retirada de
+  // rutas la prueba cloud-server/tests/catalog/catalog-contract.test.cjs. Queda el contrato del transporte legacy del navegador.
+  it("keeps the retired beat-topic resolution out of the Cloud and the legacy browser transport hint-free", () => {
     const server = source("cloud-server/server-core.js");
     const transport = source("src/features/cloud/webGalerCloudTransport.ts");
-    expect(server).toContain("function storedBeatTopicCandidates(chatId, userId, beatId)");
-    expect(server).toContain("key.endsWith(suffix)");
-    expect(server).toContain("Number(current?.chatId) === Number(chatId)");
-    expect(server).toContain("Number(a.messageThreadId) - Number(b.messageThreadId)");
-    expect(server).toContain("adoptCanonicalBeatTopic(chatId, userId, beatId, name, current)");
+    expect(server).not.toContain("function storedBeatTopicCandidates(");
+    expect(server).not.toContain("adoptCanonicalBeatTopic(");
     expect(transport).not.toContain("hintedThreadId");
     expect(transport).toContain("return { ...uploaded, thread_id: threadId };");
   });

@@ -119,8 +119,9 @@ const configure = requireCall(boot, 'directPersistentAssignments.configure');
 if (compact(configure.arguments[0]) !== '{pool}') fail('Persistent assignment runtime must receive the PostgreSQL pool.');
 const installStart = requireCall(boot, 'installPersistentDirectSessionStart');
 const installMembership = requireCall(boot, 'installPersistentDirectMembershipActivation');
+// T25 (b52649f): el arranque ya no fija ni recupera INDEX, así que la sesión Direct ya no recibe indexPinAuthority.
 for (const [install, expectedOptions] of [
-  [installStart, '{directTransport,persistentAssignments:directPersistentAssignments,indexPinAuthority,}'],
+  [installStart, '{directTransport,persistentAssignments:directPersistentAssignments,}'],
   [installMembership, '{directTransport,persistentAssignments:directPersistentAssignments,}'],
 ]) {
   if (compact(install.arguments[0]) !== expectedOptions) fail('Direct runtime wrapper is not wired to the PostgreSQL assignment runtime.');
@@ -334,30 +335,18 @@ if (!rust.includes('DATA_PLANE_READY')) fail('Direct data-plane readiness diagno
 if (!rust.includes('"op": "replace_index"') || !rust.includes('"op": "get_index"')) fail('Desktop index path is no longer Direct.');
 if (!rust.includes('fn direct_move_beats_to_trash')) fail('Offline Trash no longer mutates the current index through the transport bot.');
 if (!rust.includes('fn direct_permanently_delete_beats')) fail('Permanent Trash delete no longer mutates the current index through the transport bot.');
-if (!server.includes('Legacy server-side library index upload is disabled')) fail('Server-side MASTER library upsert was re-enabled.');
-if (!server.includes('Legacy server-side library index download is disabled')) fail('Server-side MASTER library reads were re-enabled for normal clients.');
-
-// Control-plane routes authenticate before touching leases or membership.
-const routeBlock = route => {
-  const registration = one(calls(coreAst, 'app.post').filter(call => call.arguments[0]?.text === route), `route ${route}`);
-  const handler = registration.arguments.at(-1);
-  if (!handler || (!ts.isArrowFunction(handler) && !ts.isFunctionExpression(handler)) || !ts.isBlock(handler.body)) fail(`Missing route handler boundary ${route}.`);
-  return handler.body;
-};
-for (const route of ['/transport/session/start', '/transport/session/activate', '/transport/session/heartbeat', '/transport/session/stop', '/transport/operation/begin', '/transport/operation/end', '/transport/operation/renew', '/transport/index/commit']) {
-  const handler = routeBlock(route);
-  const first = handler.statements[0];
-  const traceBeforeAuth = ts.isExpressionStatement(first) && calls(first, 'criticalPathTrace.write').length === 1;
-  const authIndex = traceBeforeAuth ? 1 : 0;
-  const authCall = requireCall(handler.statements[authIndex], 'authenticatedTransportAccount');
-  const authGuard = handler.statements[authIndex + 1];
-  if (!ts.isIfStatement(authGuard) || compact(authGuard.expression) !== '!auth' || !ts.isReturnStatement(authGuard.thenStatement)) fail(`Unauthenticated ${route} must return before doing work.`);
-  before(authCall, authGuard, `${route} must authenticate before checking authorization.`);
+// T25 (b52649f): server-core ya no registra la biblioteca INDEX de MASTER ni las rutas de sesión/operación del transporte legacy
+// (antes se exigía que autenticaran; ahora no existen). Que nadie las vuelva a registrar. La sesión Direct B nativa y su autenticación
+// viven en /catalog/v1/direct/* y las prueban las suites del catálogo; la retirada completa, catalog-contract.test.cjs («T25»).
+const registeredCoreRoutes = ['get', 'post', 'put', 'patch', 'delete']
+  .flatMap(method => calls(coreAst, `app.${method}`))
+  .map(call => call.arguments[0])
+  .filter(arg => arg && ts.isStringLiteralLike(arg))
+  .map(arg => arg.text);
+if (registeredCoreRoutes.length < 10) fail('server-core route inventory is unexpectedly small; the AST guard no longer sees route registrations.');
+for (const route of ['/library/upsert', '/library/get', '/transport/session/start', '/transport/session/activate', '/transport/session/heartbeat', '/transport/session/stop', '/transport/operation/begin', '/transport/operation/end', '/transport/operation/renew', '/transport/index/commit']) {
+  if (registeredCoreRoutes.includes(route)) fail(`Retired legacy route ${route} was registered again in server-core.`);
 }
-const activateRoute = routeBlock('/transport/session/activate');
-const choice = one(nodes(activateRoute, node => ts.isVariableDeclaration(node) && node.name.getText() === 'activationMethod'), 'explicit repair routing');
-if (!ts.isConditionalExpression(choice.initializer) || compact(choice.initializer.condition) !== 'req.body?.repairMembership===true' || choice.initializer.whenTrue.text !== 'repairMembership' || choice.initializer.whenFalse.text !== 'activateSession') fail('Membership repair must be requested explicitly with repairMembership === true.');
-requireCall(activateRoute, 'directTransport[activationMethod]');
 
 // The control module keeps credentials internally; the installed HTTP boundary
 // must strip permanent secrets before returning temporary authorization.

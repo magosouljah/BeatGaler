@@ -53,7 +53,10 @@ describe("task 9.3 startup bootstrap extraction", () => {
     expect(startup).toContain('setConnectionState("poor")');
   });
 
-  it("keeps public startup isolated and mounts Web Direct only inside the confirmed Gallery workspace", () => {
+  // T25: la Gallery Web ya no monta App/pager/puente LEGACY ni la preconexión Direct «recordada»; Direct B se abre en
+  // createCatalogServices tras /context autenticado. Comportamiento cubierto en tests/component-dom/webGalleryWorkspaceComposition.behavior.test.tsx,
+  // webGalleryDirectAuthBoundary.test.tsx y catalogDirect.test.ts («preconexión»). Aquí solo queda el cableado de entrada.
+  it("keeps public startup isolated and mounts the Gallery workspace only behind the confirmed account", () => {
     expect(main).toContain("installStartupTrace();");
     expect(main).toContain("installWebCsrfFetchCoordinator();");
     expect(main).toContain('import WebExperience from "./app/WebExperience";');
@@ -67,10 +70,6 @@ describe("task 9.3 startup bootstrap extraction", () => {
     expect(webEntry).toContain('<AuthExperienceGate initialPhase={initialPhase} onAuthenticated={accountReady}>');
     expect(webEntry).toContain('<Workspace />');
     expect(authGate).toContain('if (account?.id) return <React.Fragment key={account.id}>{children}</React.Fragment>;');
-    expect(webWorkspace).toContain('import { preconnectRememberedWebDirect } from "../features/playback/webRememberedDirectPreconnect";');
-    expect(webWorkspace).toContain("useEffect(() => { preconnectRememberedWebDirect(); }, []);");
-    expect(webWorkspace).toContain("<LibraryUxBridge />");
-    expect(webWorkspace).toContain("<WebLibraryPagination />");
-    expect(webWorkspace).toContain("<App />");
+    expect(webWorkspace).not.toContain("preconnectRememberedWebDirect");
   });
 });

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { validatePublicBrowserEnv } from '../scripts/v1-public-browser-guard.mjs';
 
 const env = { V1_PUBLIC_CANARY_ACK: 'READ_ONLY_NO_CHARGES', V1_EXPECTED_SOURCE_SHA: 'a'.repeat(40),
@@ -10,7 +11,10 @@ const env = { V1_PUBLIC_CANARY_ACK: 'READ_ONLY_NO_CHARGES', V1_EXPECTED_SOURCE_S
 
 test('public browser guard requires explicit disposable account and confines artifacts', () => {
   const result = validatePublicBrowserEnv(env, '/workspace');
-  assert.equal(result.runDir, '/workspace/tmp/v1-public/v1-public-20261017-a');
+  // Independiente de la plataforma: el guard resuelve con path nativo (en Windows '/workspace' es 'X:\workspace').
+  const relative = path.relative(path.resolve('/workspace'), result.runDir);
+  assert.equal(path.isAbsolute(result.runDir), true);
+  assert.equal(relative.split(path.sep).join('/'), 'tmp/v1-public/v1-public-20261017-a');
   assert(!JSON.stringify(result).includes('redacted'));
   assert.throws(() => validatePublicBrowserEnv({ ...env, V1_PUBLIC_ACCOUNT_DISPOSABLE: '' }, '/workspace'), /DISPOSABLE/);
   assert.throws(() => validatePublicBrowserEnv({ ...env, V1_PUBLIC_RUN_ID: '../step14' }, '/workspace'), /RUN_ID/);
