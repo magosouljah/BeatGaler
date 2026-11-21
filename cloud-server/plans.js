@@ -1,63 +1,20 @@
 // Legacy JSON/rollback plan projection; preserve already-issued grants.
 // PostgreSQL Web commerce and runtime access use billing-access-resolver.js.
 
-const MB = 1024 * 1024;
+const { PLAN_DEFINITIONS } = require("./plan-definitions");
 
-const PLAN_CATALOG = Object.freeze({
-  free: Object.freeze({
-    id: "free",
-    label: "Free",
-    quotas: Object.freeze({
-      max_beats: 20,
-      max_project_zip_bytes: 500 * MB,
-      youtube_uploads_per_day: 3,
-      youtube_uploads_per_month: 31,
-      max_active_devices: 2,
-      max_simultaneous_sessions: 1,
-    }),
-    entitlements: Object.freeze({
-      upload_project: false,
-      bulk_youtube_upload: "none",
-      early_access: false,
-    }),
-  }),
-  paid_entry: Object.freeze({
-    id: "paid_entry",
-    label: "Paid Entry",
-    quotas: Object.freeze({
-      max_beats: 100,
-      max_project_zip_bytes: 1024 * MB,
-      youtube_uploads_per_day: 10,
-      youtube_uploads_per_month: 60,
-      max_active_devices: 3,
-      max_simultaneous_sessions: 2,
-    }),
-    entitlements: Object.freeze({
-      upload_project: true,
-      bulk_youtube_upload: "limited",
-      early_access: false,
-    }),
-  }),
-  highest_paid: Object.freeze({
-    id: "highest_paid",
-    label: "Highest Paid",
-    quotas: Object.freeze({
-      // null is the API representation of "Unlimited". Enforcement may still
-      // apply private anti-abuse hard caps that are not a marketed quota.
-      max_beats: null,
-      max_project_zip_bytes: 1900 * MB,
-      youtube_uploads_per_day: null,
-      youtube_uploads_per_month: null,
-      max_active_devices: null,
-      max_simultaneous_sessions: 2,
-    }),
-    entitlements: Object.freeze({
-      upload_project: true,
-      bulk_youtube_upload: "full",
-      early_access: true,
-    }),
-  }),
-});
+const PLAN_CATALOG = Object.freeze(Object.fromEntries(
+  Object.entries(PLAN_DEFINITIONS).map(([id, plan]) => [id, Object.freeze({
+    id: plan.id,
+    label: plan.label,
+    quotas: Object.freeze({ ...plan.quotas, ...plan.jsonQuotas }),
+    entitlements: plan.capabilities,
+  })]),
+));
+
+const PLAN_RANKS = Object.freeze(Object.fromEntries(
+  Object.entries(PLAN_DEFINITIONS).map(([id, plan]) => [id, plan.rank]),
+));
 
 // Growth architecture only. Redemption/generation endpoints come later.
 // Both code families grant DAYS of plan access. "unlock" is a collectible / special
@@ -87,7 +44,7 @@ function ensurePlanState(user) {
 }
 
 function planRank(planId) {
-  return ({ free: 0, paid_entry: 1, highest_paid: 2 })[normalizePlanId(planId)] || 0;
+  return PLAN_RANKS[normalizePlanId(planId)] || 0;
 }
 
 function effectivePlanForUser(user, now = Date.now()) {
