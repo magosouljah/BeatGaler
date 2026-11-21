@@ -15,8 +15,8 @@ function libraryDiagnostic(event: string, detail: string): void {
  * Single serialization point for authoritative library operations.
  *
  * Rules:
- *  - Galer T-Library INDEX is the authority.
- *  - Only one INDEX read/commit transaction may be in flight from this renderer.
+ *  - Reads and commits delegate to the platform library. The Web PostgreSQL catalog uses its own workspace.
+ *  - Only one library reload or commit may be in flight from this renderer.
  *  - Refresh replaces local state from the authority; it never merges a stale render snapshot.
  *  - Callers may update React/local cache only after this manager resolves.
  *  - A failed authority read never erases the last verified snapshot, but it still

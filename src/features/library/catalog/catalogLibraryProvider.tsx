@@ -1,5 +1,5 @@
 // T16 / V08-A — Resolución de la composición por autoridad y servicios del provider POSTGRES (plan B §3; NATIVO r2.1 §2/§3.3).
-// Con el flag apagado (por defecto) no se hace ninguna petición y la composición es LEGACY. Con el flag encendido se resuelve
+// Con el flag apagado explícitamente no se hace ninguna petición y se devuelve `mode: legacy`. Con el flag encendido se resuelve
 // GET /context ANTES de elegir adaptador: `ready` → POSTGRES (store acotado V04, InteractionStore V07-A, sesión musical V06, medios T14,
 // mutaciones T13, transferencias T12); cualquier otro estado → bloqueado (fail-closed, sin fallback a INDEX). El cambio de cuenta
 // invalida y remonta: todos los servicios tienen teardown por cuenta.
