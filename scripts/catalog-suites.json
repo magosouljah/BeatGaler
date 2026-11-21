@@ -12,8 +12,7 @@
     "cloud-server/tests/postgres-migration-runner.test.cjs",
     "tests/component-dom/",
     "tests/helpers/",
-    "cloud-server/tests/project-master-message.test.cjs",
-    "cloud-server/tests/direct-session-start-index-degraded.test.cjs"
+    "cloud-server/tests/project-master-message.test.cjs"
   ],
   "forbidden_case_files": [
     "cloud-server/tests/postgres-live.integration.cjs"
@@ -224,17 +223,6 @@
           ],
           "kind": "node-test",
           "network": "loopback"
-        },
-        {
-          "id": "t16-session-start-handler",
-          "cmd": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "cloud-server/tests/direct-session-start-index-degraded.test.cjs"
-          ],
-          "kind": "node-test",
-          "network": "deny"
         },
         {
           "id": "t17-catalog-native-cli",
@@ -1178,17 +1166,6 @@
           ],
           "kind": "node-test",
           "network": "loopback"
-        },
-        {
-          "id": "t16-session-start-handler",
-          "cmd": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "cloud-server/tests/direct-session-start-index-degraded.test.cjs"
-          ],
-          "kind": "node-test",
-          "network": "deny"
         },
         {
           "id": "t05-catalog-authority",

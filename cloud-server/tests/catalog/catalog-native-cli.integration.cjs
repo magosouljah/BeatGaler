@@ -159,7 +159,10 @@ test('rebind-chat + reset de un vault legacy sin catálogo: reset exige rebind p
   const fence = createLegacyFence({ pool });
   await rejects(fence.assertLegacyEntryAllowed({ userId: v.userId, entry: 'index/publish' }), 'LEGACY_CLIENT_UNSUPPORTED');
   await rejects(fence.assertLegacyEntryAllowed({ chatId: v.chatId, entry: 'index/publish' }), 'LEGACY_CLIENT_UNSUPPORTED');
-  await fence.assertLegacyEntryAllowed({ userId: other.userId, chatId: other.chatId, entry: 'index/publish' });
+  // Cercado ampliado (producción 2026-11-20): un vault elegible como nativo queda cercado ANTES de provisionar (no puede publicarse INDEX
+  // entre el alta y POST /library/provision). `other` se creó tras la activación, luego es elegible y también se rechaza.
+  assert.equal((await pool.query('SELECT catalog_native_eligible FROM vaults WHERE id = $1', [other.vaultId])).rows[0].catalog_native_eligible, true);
+  await rejects(fence.assertLegacyEntryAllowed({ userId: other.userId, chatId: other.chatId, entry: 'index/publish' }), 'LEGACY_CLIENT_UNSUPPORTED');
   await assert.rejects(pool.query('UPDATE vaults SET telegram_chat_id = $1 WHERE id = $2', ['-100777', v.vaultId]), (e) => e.code === 'BGR03');
   const rb2 = { environment_id: 'lab', user_id: v.userId, vault_id: v.vaultId, from_chat_id: newChat, to_chat_id: '-100777', approval_ref: 'purp-rebind-2' };
   await pool.query("INSERT INTO control_plane_flush_quarantine(user_id, field, value_sha256) VALUES ($1, 'telegram_chat_id', $2)", [v.userId, H]);
