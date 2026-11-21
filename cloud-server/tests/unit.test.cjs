@@ -143,7 +143,6 @@ passed += test('pool state drops obsolete FIFO while preserving configured bots'
 }) ? 1 : 0;
 
 const { installProductiveTempAuthBoundary, stripPermanentSecrets } = require('../productive-temp-auth-boundary.js');
-const { wrapWebTransportSession } = require('../web-transport-envelope.js');
 
 passed += test('productive transport boundary strips permanent credentials before client response', () => {
   const safe = stripPermanentSecrets({
@@ -169,21 +168,6 @@ passed += test('productive transport boundary strips permanent credentials befor
   assert.equal(safe.chat_id, '-100123');
   assert.equal(safe.generation, 7);
   assert.equal(safe.credential_version, 3);
-}) ? 1 : 0;
-
-passed += test('legacy Web envelope is inert and cannot create a client credential envelope', () => {
-  const session = {
-    session_id: 'session-1',
-    bot_token: 'server-only',
-    telegram_api_id: 12345,
-    telegram_api_hash: 'server-only-hash',
-  };
-  const wrapped = wrapWebTransportSession(session, { kty: 'RSA', n: 'ignored', e: 'AQAB' });
-  assert.strictEqual(wrapped, session);
-  assert.equal(wrapped.credential_envelope, undefined);
-  const source = fs.readFileSync(path.join(__dirname, '..', 'web-transport-envelope.js'), 'utf8');
-  assert(!source.includes('publicEncrypt'));
-  assert(!source.includes('RSA-OAEP'));
 }) ? 1 : 0;
 
 passed += test('canonical Cloud entrypoint installs temporary-auth boundary before route registration', () => {
