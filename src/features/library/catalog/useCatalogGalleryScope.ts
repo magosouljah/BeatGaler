@@ -157,14 +157,16 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   useEffect(() => {
     const q = search.trim();
     const t = setTimeout(() => {
-      const filters: CatalogQueryFilters = { ...snapshot.filters, q, includeTags: [...includedTags].sort(), excludeTags: [...excludedTags].sort() };
-      const same = filters.q === snapshot.filters.q && filters.includeTags.join(",") === [...snapshot.filters.includeTags].join(",") && filters.excludeTags.join(",") === [...snapshot.filters.excludeTags].join(",");
+      // El orden puede haber cambiado mientras el filtro estaba pendiente.
+      const current = store.getSnapshot();
+      const filters: CatalogQueryFilters = { ...current.filters, q, includeTags: [...includedTags].sort(), excludeTags: [...excludedTags].sort() };
+      const same = filters.q === current.filters.q && filters.includeTags.join(",") === current.filters.includeTags.join(",") && filters.excludeTags.join(",") === current.filters.excludeTags.join(",");
       if (same) return;
-      void interactionStore.onFiltersChanged({ filters, sort: snapshot.sort, revision });
-      void store.setQuery(filters, snapshot.sort);
+      void interactionStore.onFiltersChanged({ filters, sort: current.sort, revision: current.revision ?? context.revision });
+      void store.setQuery(filters, current.sort);
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [search, includedTags, excludedTags]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, includedTags, excludedTags, store, interactionStore, context.revision]);
   useEffect(() => { void session.setQuery(query); }, [filtersKey, snapshot.sort, revision]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (snapshot.revision) interactionStore.onRevisionChanged(snapshot.revision); }, [snapshot.revision, interactionStore]);
   const setSearch = useCallback((value: string) => setSearchState(value), []);
