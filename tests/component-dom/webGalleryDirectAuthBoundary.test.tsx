@@ -39,9 +39,6 @@ vi.mock("../../src/app/WebGalleryWorkspace", () => ({
 vi.mock("../../src/features/library/LibraryUxBridge", () => ({
   default: () => null,
 }));
-vi.mock("../../src/features/library/WebLibraryPagination", () => ({
-  default: () => null,
-}));
 vi.mock("../../src/features/design/LANDING/LandingPage", () => ({
   default: () => React.createElement("main", { "data-test-public-landing": true }, "Public Landing"),
 }));
