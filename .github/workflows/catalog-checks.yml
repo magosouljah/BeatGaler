@@ -40,6 +40,39 @@ on:
       - tests/component-dom/playbarNextRecovery.test.ts
       - tests/component-dom/uiPolish.test.tsx
       - cloud-server/postgres-migrations.js
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/catalog-checks.yml
+      - scripts/catalog-check.cjs
+      - scripts/catalog-suites.json
+      - cloud-server/tests/helpers/**
+      - cloud-server/tests/catalog-harness/**
+      - cloud-server/tests/catalog/**
+      - cloud-server/tests/fixtures/catalog/**
+      - cloud-server/catalog/**
+      - cloud-server/migrations/**
+      - cloud-server/catalog-*.js
+      - src/lib/metadataValidation.ts
+      - src/features/library/catalog/**
+      - tests/component-dom/catalog*
+      - tests/helpers/catalogFakeApi.ts
+      - tests/catalog-harness/run-vitest.mjs
+      - tests/catalog-harness/run-typecheck.mjs
+      - cloud-server/server-core.js
+      - cloud-server/server.js
+      - cloud-server/direct-capability-boundary.js
+      - cloud-server/postgres-auth-multiprocess-compat.js
+      - cloud-server/tests/postgres-schema.test.cjs
+      - cloud-server/tests/postgres-migration-runner.test.cjs
+      - cloud-server/tests/project-master-message.test.cjs
+      - tests/catalog-harness/run-browser-harness.mjs
+      - tests/component-dom/addBeatRename.test.tsx
+      - tests/component-dom/importPickDrop.test.tsx
+      - tests/component-dom/playbarNextRecovery.test.ts
+      - tests/component-dom/uiPolish.test.tsx
+      - cloud-server/postgres-migrations.js
   workflow_dispatch:
     inputs:
       suite:
