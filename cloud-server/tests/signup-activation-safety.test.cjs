@@ -53,23 +53,47 @@ async function main() {
   }
 
   {
-    const seen = [];
-    let occupiedChecks = 0;
+    const heldLocks = new Set();
+    const lockKey = 'username-base:pepito';
+    const userId = 'usr_casefold';
+    const seed = usernameSeed(userId);
+    const usernameAt = offset => `pepito#${String((seed + offset) % 10_000).padStart(4, '0')}`;
+    const users = new Set([usernameAt(0).toUpperCase(), usernameAt(1)]);
     const client = {
-      async query(sql, params) {
-        seen.push([String(sql), params]);
-        if (String(sql).includes('SELECT id FROM users WHERE lower(username)')) {
-          occupiedChecks += 1;
-          return { rows: occupiedChecks <= 2 ? [{ id: `busy_${occupiedChecks}` }] : [] };
+      async query(sql, [value]) {
+        if (sql === 'SELECT pg_advisory_lock(hashtextextended($1, 0))') {
+          assert.equal(heldLocks.has(value), false);
+          heldLocks.add(value);
+          return { rows: [] };
         }
-        return { rows: [] };
+        if (sql === 'SELECT pg_advisory_unlock(hashtextextended($1, 0))') {
+          assert.equal(heldLocks.delete(value), true);
+          return { rows: [] };
+        }
+        if (sql === 'SELECT id FROM users WHERE lower(username)=lower($1) LIMIT 1') {
+          assert.ok(heldLocks.has(lockKey), 'availability check requires the normalized username lock');
+          const occupied = [...users].some(username => username.toLowerCase() === value.toLowerCase());
+          return { rows: occupied ? [{ id: 'busy' }] : [] };
+        }
+        throw new Error(`unexpected username claim query: ${sql}`);
       },
     };
-    const candidate = await withCasefoldUsernameClaim(client, 'pepito', 'usr_casefold', async value => value);
-    assert.match(candidate, /^pepito#[0-9]{4}$/);
-    assert.equal(occupiedChecks, 3);
-    assert.equal(seen.some(([sql, params]) => sql.includes('pg_advisory_lock') && params[0] === 'username-base:pepito'), true);
-    assert.equal(seen.some(([sql, params]) => sql.includes('pg_advisory_unlock') && params[0] === 'username-base:pepito'), true);
+    const candidate = await withCasefoldUsernameClaim(client, ' PePiTo ', userId, async username => {
+      await Promise.resolve();
+      assert.ok(heldLocks.has(lockKey), 'the lock must survive until async claim work completes');
+      users.add(username);
+      return username;
+    });
+    assert.equal(candidate, usernameAt(2));
+    assert.equal(heldLocks.size, 0);
+
+    const failure = new Error('synthetic claim failure');
+    await assert.rejects(withCasefoldUsernameClaim(client, 'pepito', userId, async username => {
+      assert.equal(username, usernameAt(3));
+      assert.ok(heldLocks.has(lockKey));
+      throw failure;
+    }), error => error === failure);
+    assert.equal(heldLocks.size, 0, 'a rejected claim releases the username lock');
   }
 
   {

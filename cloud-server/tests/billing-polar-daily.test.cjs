@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { createCommercialCatalog } = require('../billing-commercial-catalog');
-const { validateProviderProductForOffer } = require('../billing-polar-sandbox');
+const { POLAR_SDK_ENTRY, validateProviderProductForOffer } = require('../billing-polar-sandbox');
 const { MODE,ENTRY,HIGHEST,ENV,readConfig,createCatalog,validateDailyProduct,createAdapter } = require('../scripts/polar-sandbox-daily-config.cjs');
 const { databaseName,sanitize,identity,writeState,readState,orderEvidence,assertBefore,proveRenewal } = require('../scripts/polar-sandbox-daily-state.cjs');
 const { dbUrl,verifyMarker } = require('../scripts/polar-sandbox-daily-e2e.cjs');
@@ -76,6 +76,46 @@ test('daily validator rejects production and factory excludes clock mutation',()
   assert.equal(createAdapter(cfg).rescheduleSubscriptionRenewal,undefined);
   assert.throws(()=>createAdapter({...cfg,environment:'production'}));
 });
+test('daily adapter schedules Highest without changing the current billing period', async t => {
+  const config = readConfig(env());
+  const offer = createCatalog(config).offers[HIGHEST];
+  const subscription = { id: 'sub', current_period_end: '2026-09-13T00:00:00.000Z' };
+  const requests = [];
+  const unexpected = () => assert.fail('unexpected Polar SDK operation');
+  const client = {
+    products: {
+      list: unexpected,
+      async get(id) {
+        requests.push(['product', id]);
+        return product(offer);
+      },
+    },
+    checkouts: { create: unexpected, get: unexpected },
+    customerSessions: { create: unexpected },
+    customers: { get: unexpected, getExternal: unexpected },
+    payments: { get: unexpected, list: unexpected },
+    orders: { get: unexpected, list: unexpected },
+    refunds: { create: unexpected },
+    subscriptions: {
+      get: unexpected, list: unexpected, revoke: unexpected,
+      async update(id, body) {
+        requests.push(['update', id, body]);
+        return { ...subscription, pending_update: { product_id: body.product_id } };
+      },
+    },
+  };
+  t.mock.method(require(POLAR_SDK_ENTRY), 'createPolar', () => client);
+  const change = await createAdapter(config).scheduleSubscriptionChange({ subscriptionId: 'sub', offerId: HIGHEST });
+  const productId = offer.providerMapping.productId;
+
+  assert.deepEqual(requests, [
+    ['product', productId],
+    ['update', 'sub', { product_id: productId, proration_behavior: 'next_period' }],
+  ]);
+  assert.equal(change.effective, 'next_period');
+  assert.equal(change.subscription.current_period_end, subscription.current_period_end);
+  assert.deepEqual(change.subscription.pending_update, { product_id: productId });
+});
 test('runner contains no acceleration or implicit database cleanup',async()=>{
   const source=await fs.readFile(path.join(__dirname,'../scripts/polar-sandbox-daily-e2e.cjs'),'utf8');
   assert.doesNotMatch(source,/rescheduleSubscriptionRenewal|RENEWAL_ACCELERATION|DROP DATABASE|current_billing_period_end\s*:/);
@@ -118,7 +158,10 @@ test('order period must come from financial line items; no subscription fallback
   const e=orderEvidence({id:'A',current_period_start:'2026-09-12',current_period_end:'2026-09-13'});assert.equal(e.periodEnd,null);
 });
 test('guard rejects production daily without external effects',()=>{
-  const result=spawnSync(process.execPath,[path.join(__dirname,'../scripts/polar-sandbox-e2e-guard.cjs'),'start'],{env:{...env(),[ENV.environment]:'production'},encoding:'utf8'});
+  const guard=path.join(__dirname,'helpers','catalog-net-guard.cjs');
+  const result=spawnSync(process.execPath,['--require',guard,path.join(__dirname,'../scripts/polar-sandbox-e2e-guard.cjs'),'start'],{
+    env:{...env(),[ENV.environment]:'production',CATALOG_NET_POLICY:'deny',CATALOG_NET_REPORT:process.env.CATALOG_NET_REPORT || ''},encoding:'utf8',
+  });
   assert.equal(result.status,2);assert.match(result.stderr,/DAILY_SANDBOX_ONLY/);
 });
 module.exports={env,fixture};
