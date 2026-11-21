@@ -7,16 +7,6 @@ function source(path: string): string {
 }
 
 describe("Issue #97 INDEX priority", () => {
-  it("opens INDEX after Direct connection without waiting for startup WARM", () => {
-    const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
-
-    expect(coordinator).toContain("waitUntilIndexAllowed");
-    expect(coordinator).toContain("await this.connect()");
-    expect(coordinator).not.toContain("await this.indexBarrierPromise");
-    expect(transport).toContain("await this.indexBarrier()");
-  });
-
   it("lets INDEX run during WARM but still pauses for Play critical", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
 

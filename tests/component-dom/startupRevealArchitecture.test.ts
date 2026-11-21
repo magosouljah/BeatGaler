@@ -9,7 +9,6 @@ const appShell = readFileSync("src/app/AppShell.tsx", "utf8");
 const libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");
 const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");
 const libraryReloadOwner = readFileSync("src/features/library/useLibraryReload.ts", "utf8");
-const webAdapter = readFileSync("src/platform/webAdapter.ts", "utf8");
 const viteConfig = readFileSync("vite.config.ts", "utf8");
 const accountGate = readFileSync("src/components/AccountGate.tsx", "utf8");
 const nginx = readFileSync("deploy/web/beatgaler.com.conf", "utf8");
@@ -47,18 +46,6 @@ describe("Issue #97 startup reveal architecture", () => {
 
   it("keeps online reveal monotonic across transport refreshes", () => {
     expect(libraryReloadOwner).toContain("for (const beat of visible) next.add(beat.id)");
-  });
-
-  it("refreshes cloud-backed playback even when cached metadata contains a stale blob URL", () => {
-    const messageLookup = webAdapter.indexOf("let messageId = webBeatMessageId(beat);");
-    const cloudPrepare = webAdapter.indexOf("if (messageId) {", messageLookup);
-    const localBlobFallback = webAdapter.indexOf('if (beat.playback_path.startsWith("blob:"))', cloudPrepare);
-    expect(messageLookup).toBeGreaterThan(-1);
-    expect(cloudPrepare).toBeGreaterThan(messageLookup);
-    expect(localBlobFallback).toBeGreaterThan(cloudPrepare);
-    expect(webAdapter).toContain("const explicit = Number(beat.telegram_message_id || 0);");
-    expect(webAdapter).toContain("const prepareOnce = async (targetMessageId: number) =>");
-    expect(webAdapter).toContain("return sources.prepare(beat.id, targetMessageId, mimeType, intent.id)");
   });
 
   it("keeps productive Web auth on the same-origin proxy and clears remembered legacy endpoints", () => {

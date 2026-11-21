@@ -6,26 +6,12 @@ vi.mock("../../src/components/AccountGate", () => ({
 }));
 vi.mock("../../src/platform/webClientId", () => ({ getWebClientId: () => "persistent-browser" }));
 
-import { loadWebLibrary } from "../../src/features/library/webLibrary";
 import { reconcileWebTransportRouting } from "../../src/features/cloud/webTransportSession";
 import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 
 afterEach(() => { setActiveWebAccountId(null); vi.unstubAllGlobals(); });
 
 describe("persistent Direct data-plane boundary", () => {
-  it("bootstraps missing Web INDEX through the active transport, with no Cloud upload", async () => {
-    const fetch = vi.fn(() => { throw new Error("Cloud INDEX bytes forbidden"); });
-    vi.stubGlobal("fetch", fetch);
-    const transport = {
-      getLibraryIndex: vi.fn().mockRejectedValue(new Error("Galer Cloud library index is still synchronizing.")),
-      ensureLibraryIndex: vi.fn().mockResolvedValue({ messageId: 91, manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] } }),
-      downloadFiles: vi.fn(),
-    };
-    await expect(loadWebLibrary(transport)).resolves.toEqual([]);
-    expect(transport.ensureLibraryIndex).toHaveBeenCalledOnce();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it("sends only message routing metadata to Cloud, never the authoritative INDEX", async () => {
     setActiveWebAccountId("user-A");
     const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) }));

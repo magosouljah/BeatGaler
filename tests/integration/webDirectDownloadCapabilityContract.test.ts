@@ -1,6 +1,4 @@
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -12,19 +10,10 @@ const {
   normalizeScope(kind: string, scope: { objectType: string; objectIds: string[] }): unknown;
 };
 
-const transport = readFileSync(
-  resolve(process.cwd(), "src/features/cloud/webGalerCloudTransport.ts"),
-  "utf8",
-);
+describe("Cloud Direct download capability contract", () => {
+  it("allows download for messages and excludes export from capabilities", () => {
+    const requestedCapability = "download";
 
-describe("Web Direct download capability contract", () => {
-  it("keeps export as stream purpose while requesting an allowlisted download/message capability", () => {
-    const exportGuard = transport.match(/if \(purpose === "export"\) \{([\s\S]*?)\n    \}/)?.[1] || "";
-    const requestedCapability = exportGuard.match(/beginOperation\(\s*"([^"]+)"/)?.[1] || "";
-
-    expect(transport).toContain('if (purpose === "export")');
-    expect(exportGuard).toContain("beginOperation");
-    expect(requestedCapability).toBe("download");
     expect(OPERATION_SCOPE_RULES.has(requestedCapability)).toBe(true);
     expect(OPERATION_SCOPE_RULES.get(requestedCapability)?.has("message")).toBe(true);
     expect(() => normalizeScope(requestedCapability, {

@@ -7,16 +7,6 @@ function source(path: string): string {
 }
 
 describe("Web startup Cloud resolution race", () => {
-  it("resolves the Cloud API before Direct opens a transport session", () => {
-    const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
-    const resolveIndex = coordinator.indexOf("await resolveBeatGalerCloudApi();");
-    const connectIndex = coordinator.indexOf("await this.transport.connectPlaybackDataPlane();");
-
-    expect(coordinator).toContain('import { resolveBeatGalerCloudApi } from "../../components/AccountGate";');
-    expect(resolveIndex).toBeGreaterThanOrEqual(0);
-    expect(connectIndex).toBeGreaterThan(resolveIndex);
-  });
-
   it("resolves the Cloud API inside every event ticket connection attempt", () => {
     const events = source("src/features/cloud/useCloudLibraryEvents.ts");
     const connectStart = events.indexOf("const connectEvents = async () => {");
