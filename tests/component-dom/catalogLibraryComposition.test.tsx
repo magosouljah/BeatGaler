@@ -23,16 +23,16 @@ const resolved = (composition: LibraryComposition, key = "k"): LibraryCompositio
 
 describe("LibraryCompositionGate", () => {
   it("legacy monta exactamente los children; catalog monta el workspace y no los children; bloqueado/desconocido muestra copy y nunca LEGACY; resolving no monta nada", () => {
-    const el1 = mount(<LibraryCompositionGate state={resolved({ mode: "legacy", reason: "flag-off" })} legacy={<div data-legacy-tree="true">pager+app</div>} catalog={() => <div data-catalog-tree="true" />} />);
-    expect(el1.querySelector("[data-legacy-tree]")).not.toBeNull(); expect(el1.querySelector("[data-catalog-tree]")).toBeNull(); expect(el1.querySelector("[data-library-composition]")?.getAttribute("data-library-composition")).toBe("legacy");
-    const el2 = mount(<LibraryCompositionGate state={resolved({ mode: "catalog", resolution: { status: "ready", context: ctx, provisioned: false } })} legacy={<div data-legacy-tree="true" />} catalog={() => <div data-catalog-tree="true" />} />);
+    const el1 = mount(<LibraryCompositionGate state={resolved({ mode: "legacy", reason: "flag-off" })} catalog={() => <div data-catalog-tree="true" />} />);
+    expect(el1.querySelector("[data-catalog-mode='legacy-retired'][role='status']")).not.toBeNull(); expect(el1.querySelector("[data-catalog-tree]")).toBeNull(); expect(el1.querySelector("[data-library-composition]")?.getAttribute("data-library-composition")).toBe("legacy");
+    const el2 = mount(<LibraryCompositionGate state={resolved({ mode: "catalog", resolution: { status: "ready", context: ctx, provisioned: false } })} catalog={() => <div data-catalog-tree="true" />} />);
     expect(el2.querySelector("[data-catalog-tree]")).not.toBeNull(); expect(el2.querySelector("[data-legacy-tree]")).toBeNull(); expect(el2.querySelector("[data-library-composition]")?.getAttribute("data-catalog-epoch")).toBe("7");
     for (const [status, copy] of [["reset_required", "reinicio nativo"], ["quarantined", "cuarentena"], ["unauthenticated", "Sign in again"], ["offline", "Reconnect"], ["unavailable", "no está disponible"]] as const) {
-      const el = mount(<LibraryCompositionGate state={resolved({ mode: "blocked", resolution: { status, error: new Error("x") } as never })} legacy={<div data-legacy-tree="true" />} catalog={() => <div data-catalog-tree="true" />} />);
+      const el = mount(<LibraryCompositionGate state={resolved({ mode: "blocked", resolution: { status, error: new Error("x") } as never })} catalog={() => <div data-catalog-tree="true" />} />);
       expect(el.querySelector("[data-legacy-tree]")).toBeNull(); expect(el.querySelector("[data-catalog-tree]")).toBeNull();
       expect(el.querySelector("[data-library-composition]")?.getAttribute("data-blocked-status")).toBe(status); expect(el.textContent).toContain(copy);
     }
-    const el3 = mount(<LibraryCompositionGate state={{ status: "resolving" }} legacy={<div data-legacy-tree="true" />} catalog={() => <div data-catalog-tree="true" />} />);
+    const el3 = mount(<LibraryCompositionGate state={{ status: "resolving" }} catalog={() => <div data-catalog-tree="true" />} />);
     expect(el3.querySelector("[data-legacy-tree]")).toBeNull(); expect(el3.querySelector("[data-library-composition='resolving']")).not.toBeNull();
   });
 });
@@ -40,7 +40,7 @@ describe("LibraryCompositionGate", () => {
 function Probe({ accountId, enabled, api, onState }: { accountId: string | null; enabled: boolean; api: ReturnType<typeof createCatalogFakeApi>; onState: (s: ReturnType<typeof useLibraryComposition>) => void }) {
   const r = useLibraryComposition({ accountId, enabled, api: api as never });
   onState(r);
-  return <LibraryCompositionGate state={r.state} legacy={<div data-legacy-tree="true" />} catalog={() => <div data-catalog-tree="true" />} />;
+  return <LibraryCompositionGate state={r.state} catalog={() => <div data-catalog-tree="true" />} />;
 }
 
 describe("useLibraryComposition", () => {
