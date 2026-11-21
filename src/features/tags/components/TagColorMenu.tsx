@@ -12,10 +12,11 @@ export default function TagColorMenu({
     const onAnyClick = () => onClose();
     const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("beatcard:close-menus", onClose);
-    setTimeout(() => window.addEventListener("click", onAnyClick), 10);
+    const clickListenerTimer = setTimeout(() => window.addEventListener("click", onAnyClick), 10);
     window.addEventListener("contextmenu", onAnyClick, true);
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      clearTimeout(clickListenerTimer);
       window.removeEventListener("beatcard:close-menus", onClose);
       window.removeEventListener("click", onAnyClick);
       window.removeEventListener("contextmenu", onAnyClick, true);
