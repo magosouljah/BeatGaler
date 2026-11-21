@@ -29,4 +29,32 @@ Notas: el estado del gateway fake es en memoria → no reinicies el Cloud con la
 - `node scripts/catalog-lab/probe-add-beat.mjs`: flujo real de «Add beat» (nombre válido, nombre > 50 con paso de renombrado, guardado en PostgreSQL por la API, reproducción desde el proveedor FAKE). El selector nativo de archivos se sustituye por un `File` inyectado.
 - `node scripts/catalog-lab/probe-chrome-geometry.mjs`: geometría de la barra superior (Tag Bar, sombra, guía y toolbar) a 1440/1920/1024/390 px.
 
-Nota: la línea `[catalog] ... gateway=none` del Cloud se refiere al gateway real por entorno (apagado en el LAB). En el LAB el gateway **FAKE** va inyectado por `lab-preload.cjs` (ver `[lab] gateway=FAKE ACTIVO` en `cloud.log`).
+Nota: la línea `[catalog] ... gateway=none` del Cloud se refiere al gateway real por entorno (apagado en el LAB). En el LAB el gateway **FAKE** va inyectado por `lab-preload.cjs` (ver `[lab] preload active: Telegram FAKE` en `cloud.log`).
+
+## Humo V1 (`probe-smoke-v1.mjs`) — LAB con dobles, no proveedor real
+
+Landing → login (cuenta del LAB) → Gallery sembrada → reproducir (`currentTime` avanza) → «Add beat» (File inyectado, `file-inject.mjs`; tarjeta del ID creado) → editar en el Drawer (persiste tras recargar) → papelera (ID exacto fuera de la lista activa y dentro de TRASH; HTTP 200 + esquema obligatorios). Imprime `STEP <id> PASS|FAIL <ms> <causa>`; código 1 si falla alguno.
+
+Preflight (antes de abrir navegador): aborta si `cloud.log` no contiene `[lab] preload active: Telegram FAKE` o el doble `/lab-telegram` (puerto Cloud+5) no escucha; exige Chrome y ChromeDriver **locales** (`SMOKE_CHROME`, `SMOKE_CHROMEDRIVER`, o detección: Chrome en Archivos de programa y `%TEMP%\chromedriver\*\chromedriver-win64\chromedriver.exe`); no descarga nada.
+
+PowerShell (variables fijadas una vez para up, sonda, mutación y down):
+```
+$env:TEMP='E:\777\tmp'; $env:TMP='E:\777\tmp'; $env:DIRECT_DIAGNOSTICS_DIR='E:\777\tmp\diag'
+$env:LAB_PG_PORT='54359'; $env:LAB_CLOUD_PORT='4190'; $env:LAB_WEB_PORT='1490'; $env:LAB_STATE_DIR='tmp/catalog-lab-smoke'; $env:LAB_PG_DIR='/tmp/bg-catlab-smoke'; $env:LAB_SYNTH_AUDIO='1'
+# $env:SMOKE_CHROMEDRIVER='C:\ruta\chromedriver.exe'   # si no está en %TEMP%\chromedriver
+node scripts/catalog-lab/lab.cjs up --no-legacy --seed 30
+node scripts/catalog-lab/probe-smoke-v1.mjs; $LASTEXITCODE            # 0 = PASS
+$env:SMOKE_PLAY_SELECTOR='[data-no-existe]'; node scripts/catalog-lab/probe-smoke-v1.mjs; $LASTEXITCODE   # mutación: STEP 4 FAIL, código 1
+Remove-Item Env:SMOKE_PLAY_SELECTOR
+node scripts/catalog-lab/lab.cjs down                                  # siempre
+```
+
+Git Bash (`MSYS_NO_PATHCONV=1` evita que `LAB_PG_DIR` se reescriba a una ruta de Windows):
+```
+export MSYS_NO_PATHCONV=1 TEMP='E:\777\tmp' TMP='E:\777\tmp' DIRECT_DIAGNOSTICS_DIR='E:\777\tmp\diag' \
+  LAB_PG_PORT=54359 LAB_CLOUD_PORT=4190 LAB_WEB_PORT=1490 LAB_STATE_DIR=tmp/catalog-lab-smoke LAB_PG_DIR=/tmp/bg-catlab-smoke LAB_SYNTH_AUDIO=1
+node scripts/catalog-lab/lab.cjs up --no-legacy --seed 30
+node scripts/catalog-lab/probe-smoke-v1.mjs; echo $?
+SMOKE_PLAY_SELECTOR='[data-no-existe]' node scripts/catalog-lab/probe-smoke-v1.mjs; echo $?
+node scripts/catalog-lab/lab.cjs down
+```

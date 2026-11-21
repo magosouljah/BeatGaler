@@ -55,7 +55,9 @@ export async function createRun({ kind, args }) {
   }
   const chromeArgs = [...(args.headed ? [] : ['--headless=new']), '--window-size=1440,900', `--user-data-dir=${path.join(L.STATE_DIR, `${kind}-${args.browser}-profile`)}`, '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--force-device-scale-factor=1', '--enable-precise-memory-info', '--no-first-run'];
   const caps = { browserName, 'goog:loggingPrefs': { browser: 'ALL', performance: 'ALL' } };
-  if (browserName === 'chrome') caps['goog:chromeOptions'] = { args: chromeArgs }; else caps['ms:edgeOptions'] = { args: chromeArgs };
+  if (browserName === 'chrome') caps['goog:chromeOptions'] = { args: chromeArgs, ...(args.chromeBinary ? { binary: args.chromeBinary } : {}) }; else caps['ms:edgeOptions'] = { args: chromeArgs };
+  // Opcional (humo V1): driver local explícito => WebdriverIO no resuelve ni descarga ChromeDriver.
+  if (args.chromedriver && browserName === 'chrome') caps['wdio:chromedriverOptions'] = { binary: args.chromedriver };
   let browser;
   try { browser = await remote({ logLevel: 'error', capabilities: caps }); }
   catch (e) { rec('BROWSER', 'NO EJECUTADO', { reason: `no se pudo abrir ${args.browser}: ${String(e.message).slice(0, 200)}` }); fs.writeFileSync(path.join(OUT, `${kind}-results.json`), JSON.stringify({ kind, browser: args.browser, results }, null, 2)); return null; }
