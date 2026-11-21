@@ -9,6 +9,7 @@ const {
   verifiedEmail,
   analyzeIdentityPreflight,
 } = require('../auth-identity-preflight');
+const { loadIdentityRows } = require('../scripts/auth-identity-preflight.cjs');
 
 function verifiedState(userId, email, extra = {}) {
   return {
@@ -81,7 +82,7 @@ const casefoldMigration = fs.readFileSync(path.join(__dirname, '..', 'migrations
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(username\)/s);
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(email\)/s);
 
-// The CLI loads dotenv on import. Keep the SQL contract as a source check.
+// Guarda de texto adicional sobre la misma consulta (la prueba de comportamiento está al final).
 const preflightCli = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'auth-identity-preflight.cjs'), 'utf8');
 const [, usersQuery] = preflightCli.match(/async function loadIdentityRows\(pool\)[\s\S]*?pool\.query\(`([^`]+)`\)/) ?? [];
 assert.ok(usersQuery, 'identity preflight must load users through the PostgreSQL query');
@@ -107,4 +108,15 @@ assert.doesNotMatch(usersQuery, /account-lifecycle-state/);
   assert.equal(verified.counts.password_email_ready, 1);
 }
 
-console.log('auth-identity-preflight tests: PASS');
+// Comportamiento: la consulta real que emite loadIdentityRows con un pool falso (el runner precarga no-dotenv).
+(async () => {
+  const statements = [];
+  await loadIdentityRows({ query: async sql => {
+    statements.push(sql);
+    return { rows: [] };
+  } });
+  assert.match(statements[0], /LEFT JOIN user_email_verifications/);
+  assert.match(statements[0], /verified_email_hash/);
+  assert.doesNotMatch(statements[0], /account-lifecycle-state/);
+  console.log('auth-identity-preflight tests: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });
