@@ -51,6 +51,36 @@ test('el almacén de archivos no escribe fuera de su directorio y no deja parcia
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('BLOCKING cubre los hallazgos que impiden reactivar', () => {
-  assert.deepEqual([...b.BLOCKING].sort(), ['BYTES_MISMATCH', 'BYTES_MISSING', 'PROVIDER_UNREACHABLE', 'UNRECOVERABLE']);
+test('finalizeRestore bloquea cada hallazgo crítico y reconcilia los informativos', async () => {
+  const cases = {
+    BYTES_MISMATCH: 'BLOCKED',
+    BYTES_MISSING: 'BLOCKED',
+    PROVIDER_UNREACHABLE: 'BLOCKED',
+    UNRECOVERABLE: 'BLOCKED',
+    PRESENT_CONFIRMED: 'RECONCILED',
+    DELETED_CONFIRMED: 'RECONCILED',
+    BYTES_RESTORED: 'RECONCILED',
+    JOURNAL_NOT_IN_SQL: 'RECONCILED',
+  };
+  for (const [kind, status] of Object.entries(cases)) {
+    const finding = { user_id: 'u1', object_id: 'obj1', kind };
+    const runs = new Map([['restore-1', 'HELD'], ['otro-restore', 'HELD']]);
+    const pool = {
+      async query(sql, [id, kinds]) {
+        if (sql.includes('FROM catalog_restore_findings')) {
+          return { rows: id === 'restore-1' && kinds.includes(kind) ? [finding] : [] };
+        }
+        const update = /^UPDATE catalog_restore_runs SET status = '(BLOCKED|RECONCILED)'/.exec(sql);
+        assert.ok(update && runs.has(id), sql);
+        runs.set(id, update[1]);
+        return { rows: [], rowCount: 1 };
+      },
+    };
+    const result = await b.createCatalogBackup({ pool }).finalizeRestore({ restoreId: 'restore-1' });
+    assert.deepEqual(result, {
+      restoreId: 'restore-1', status, blocking: status === 'BLOCKED' ? [finding] : [],
+    }, kind);
+    assert.equal(runs.get('restore-1'), status, kind);
+    assert.equal(runs.get('otro-restore'), 'HELD', kind);
+  }
 });

@@ -1,7 +1,7 @@
 'use strict';
 // T05-N — Autoridad nativa y cerco de capa 1 sin PostgreSQL real (pools falsos, red denegada). NATIVO r2.1 §3, §5.1, §6.2, §8.5, §12.
 // Las pruebas contra PostgreSQL real están en catalog-authority.integration.cjs (suite T05 del runner).
-process.env.DIRECT_DIAGNOSTICS_DIR = process.env.DIRECT_DIAGNOSTICS_DIR || require('path').join(__dirname, '..', '..', '..', 'tmp', 't05-diag');
+process.env.DIRECT_DIAGNOSTICS_DIR ||= require('node:path').join(require('node:os').tmpdir(), 'diag');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const authority = require('../../catalog/authority.js');
@@ -242,4 +242,18 @@ test('§6.1 deshabilitado: la autoridad no expone ninguna ruta de borrado de cue
   assert.deepEqual(Object.keys(a).filter((k) => /delet|purge|remove/i.test(k)), []);
   const src = require('fs').readFileSync(require.resolve('../../catalog/authority.js'), 'utf8');
   assert.equal(/INSERT INTO catalog_account_deletions/.test(src), false);
+});
+
+test('§6.1: el arranque de la autoridad rechaza habilitar borrado antes de usar el pool', (t) => {
+  const query = t.mock.fn();
+  const connect = t.mock.fn();
+  for (const flag of ['true', '1']) {
+    assert.throws(() => authority.createCatalogAuthority({
+      env: { ...ENV_ON, BEATGALER_ACCOUNT_DELETION_ENABLED: flag },
+      pool: { query, connect },
+      controlPlaneAuthority: 'postgres',
+    }), /BEATGALER_ACCOUNT_DELETION_ENABLED cannot be enabled/, flag);
+  }
+  assert.equal(query.mock.callCount(), 0);
+  assert.equal(connect.mock.callCount(), 0);
 });

@@ -2,9 +2,11 @@
 // G4: la plantilla S3 y los scripts de backup/restore cumplen las propiedades de seguridad exigidas (sin tocar AWS ni PostgreSQL).
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const root = path.join(__dirname, '..', '..', '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const cfn = JSON.parse(read('deploy/backup/backup-bucket.cfn.json'));
@@ -39,4 +41,47 @@ test('scripts: sintaxis bash válida, guardas de seguridad y ningún secreto en 
   assert.match(backup, /aes-256-cbc -pbkdf2 -iter 600000/); assert.match(backup, /--sse aws:kms/); assert.match(backup, /permisos 600/);
   assert.match(backup, /NO respalda los bytes/);
   assert.match(read('deploy/backup/README.md'), /S3 \*\*no\*\* respalda los audios/);
+});
+
+test('restore rechaza un destino inseguro y un manifiesto corrupto antes de descifrar o tocar PostgreSQL', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-restore-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const encrypted = 'fixture';
+  const manifest = {
+    encrypted: { sha256: createHash('sha256').update(encrypted).digest('hex') },
+    dump: { sha256: '1'.repeat(64) },
+  };
+  fs.writeFileSync(path.join(dir, 'fake-passphrase'), 'fixture');
+  fs.writeFileSync(path.join(dir, 'bk-test.manifest.json'), JSON.stringify(manifest));
+  fs.writeFileSync(path.join(dir, 'bk-test.manifest.json.sha256'), '0'.repeat(64) + '  bk-test.manifest.json\n');
+  fs.writeFileSync(path.join(dir, 'bk-test.dump.enc'), encrypted);
+
+  const script = path.join(root, 'scripts/backup/pg-restore.sh').split(path.sep).join('/');
+  const guardedRestore = [
+    'export PATH=/usr/bin:/bin',
+    'unexpected() { printf "UNEXPECTED_TOOL %s\\n" "$1" >&2; exit 99; }',
+    'for tool in psql createdb dropdb pg_restore openssl aws node; do',
+    '  eval "$tool() { unexpected $tool; }"',
+    'done',
+    'source "$1" bk-test "$2"',
+  ].join('\n');
+  const env = {
+    SystemRoot: process.env.SystemRoot,
+    TEMP: process.env.TEMP,
+    TMP: process.env.TMP,
+    BACKUP_SOURCE: 'file://.',
+    BACKUP_PASSPHRASE_FILE: './fake-passphrase',
+  };
+  for (const [db, exit, diagnostic] of [
+    ['production', 2, /BASE_DESTINO.*restore/],
+    ['test_restore', 3, /MANIFIESTO CORRUPTO/],
+  ]) {
+    const result = spawnSync('bash', ['--noprofile', '--norc', '-c', guardedRestore, 'restore-test', script, db], {
+      cwd: dir, env, encoding: 'utf8', timeout: 30_000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, exit, result.stderr);
+    assert.match(result.stderr, diagnostic);
+    assert.doesNotMatch(result.stderr, /UNEXPECTED_TOOL/);
+  }
 });
