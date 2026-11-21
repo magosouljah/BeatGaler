@@ -1,6 +1,6 @@
 # Despliegue AWS reproducible (V1)
 
-**Regla:** Web y Cloud salen del **mismo commit de git**. Nunca se edita código en el host. Todo cambio pasa por git → `scripts/aws/deploy.sh`.
+**Regla:** Web y Cloud salen del **mismo commit de `main`** (el script se niega desde otra rama). Nunca se edita código en el host. Todo cambio pasa por git → `scripts/aws/deploy.sh`.
 
 ## Topología de producción
 

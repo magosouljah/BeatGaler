@@ -10,6 +10,7 @@ SHA=$(git rev-parse HEAD); ID=${SHA:0:12}
 # Solo cuenta lo versionado: archivos sin seguimiento (notas, capturas) no entran en ningún artefacto.
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "STOP: tracked changes not committed" >&2; exit 2; fi
 BR=$(git rev-parse --abbrev-ref HEAD)
+[ "$BR" = main ] || { echo "STOP: production deploys only from main (current: $BR)" >&2; exit 3; }
 [ "$(git ls-remote origin "refs/heads/$BR" | cut -c1-40)" = "$SHA" ] || { echo "STOP: HEAD $ID is not pushed to origin/$BR" >&2; exit 3; }
 OUT="tmp/aws-deploy/$ID"; rm -rf "$OUT"; mkdir -p "$OUT"
 

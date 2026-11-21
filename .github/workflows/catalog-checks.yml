@@ -8,6 +8,7 @@ name: catalog-checks
 on:
   push:
     branches:
+      - main
       - local/landing-gallery-unificada
     paths:
       - .github/workflows/catalog-checks.yml
