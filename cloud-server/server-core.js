@@ -24,7 +24,6 @@ const https = require("https");
 const http = require("http");
 const net = require("net");
 const dns = require("dns").promises;
-const multer = require("multer");
 const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, verifyPrivateUserStorageGroup, masterStorageReady } = require("./master-storage");
 
 const directTransport = require("./direct-transport-control");
@@ -133,15 +132,6 @@ app.use(express.json({ limit: "256kb" }));
 // T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
 // T16: rondas, medios, purge y transferencias montados; sin gateway real responden 503 TRANSFER_UNAVAILABLE / jobs en reintento (fail-closed).
 app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), direct: currentCatalogDirect(), transportProvisioner: currentNativeTransportProvisioner(), prefixPacks: currentPrefixPacks(), playback: currentCatalogPlayback(), media: currentCatalogMedia(), purge: currentCatalogPurge(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
-const upload = multer({
-  dest: "uploads-tmp/",
-  limits: {
-    files: 1,
-    fields: 24,
-    fieldSize: 64 * 1024,
-    fileSize: TELEGRAM_MAX_UPLOAD_BYTES,
-  },
-});
 const { statePath } = require("./state-dir");
 const DATA_FILE = statePath("cloud-data.json");
 const AUTH_DATA_FILE = statePath("accounts-data.json");
