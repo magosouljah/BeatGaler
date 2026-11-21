@@ -1,0 +1,281 @@
+{
+  "headers": {
+    "health": {
+      "content-type": "application/json; charset=utf-8",
+      "set-cookie": false
+    },
+    "auth": {
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "permissions-policy": "camera=(), microphone=(), geolocation=()",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      "cache-control": "no-store",
+      "pragma": "no-cache",
+      "access-control-allow-origin": "http://127.0.0.1",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, Idempotency-Key, If-Match, X-Catalog-Era, X-Catalog-Epoch, X-BeatGaler-Installation-Id, X-BeatGaler-CSRF, X-BeatGaler-Project-Operation, X-BeatGaler-Project-Session, X-BeatGaler-Project-Generation, X-BeatGaler-Project-Beat, X-BeatGaler-Project-Kind, X-BeatGaler-Project-Thread, X-BeatGaler-Client",
+      "access-control-allow-methods": "GET, POST, PATCH, PUT, OPTIONS",
+      "vary": "Origin",
+      "set-cookie": false
+    },
+    "authWithCookie": {
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "permissions-policy": "camera=(), microphone=(), geolocation=()",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      "cache-control": "no-store",
+      "pragma": "no-cache",
+      "access-control-allow-origin": "http://127.0.0.1",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, Idempotency-Key, If-Match, X-Catalog-Era, X-Catalog-Epoch, X-BeatGaler-Installation-Id, X-BeatGaler-CSRF, X-BeatGaler-Project-Operation, X-BeatGaler-Project-Session, X-BeatGaler-Project-Generation, X-BeatGaler-Project-Beat, X-BeatGaler-Project-Kind, X-BeatGaler-Project-Thread, X-BeatGaler-Client",
+      "access-control-allow-methods": "GET, POST, PATCH, PUT, OPTIONS",
+      "vary": "Origin",
+      "set-cookie": true
+    },
+    "webJson": {
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "permissions-policy": "camera=(), microphone=(), geolocation=()",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      "access-control-allow-origin": "http://127.0.0.1",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, Idempotency-Key, If-Match, X-Catalog-Era, X-Catalog-Epoch, X-BeatGaler-Installation-Id, X-BeatGaler-CSRF, X-BeatGaler-Project-Operation, X-BeatGaler-Project-Session, X-BeatGaler-Project-Generation, X-BeatGaler-Project-Beat, X-BeatGaler-Project-Kind, X-BeatGaler-Project-Thread, X-BeatGaler-Client",
+      "access-control-allow-methods": "GET, POST, PATCH, PUT, OPTIONS",
+      "vary": "Origin",
+      "set-cookie": false
+    },
+    "webNoStore": {
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "permissions-policy": "camera=(), microphone=(), geolocation=()",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "http://127.0.0.1",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, Idempotency-Key, If-Match, X-Catalog-Era, X-Catalog-Epoch, X-BeatGaler-Installation-Id, X-BeatGaler-CSRF, X-BeatGaler-Project-Operation, X-BeatGaler-Project-Session, X-BeatGaler-Project-Generation, X-BeatGaler-Project-Beat, X-BeatGaler-Project-Kind, X-BeatGaler-Project-Thread, X-BeatGaler-Client",
+      "access-control-allow-methods": "GET, POST, PATCH, PUT, OPTIONS",
+      "vary": "Origin",
+      "set-cookie": false
+    },
+    "authHtml": {
+      "content-type": "text/html; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "permissions-policy": "camera=(), microphone=(), geolocation=()",
+      "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+      "cache-control": "no-store",
+      "pragma": "no-cache",
+      "access-control-allow-origin": "http://127.0.0.1",
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, Idempotency-Key, If-Match, X-Catalog-Era, X-Catalog-Epoch, X-BeatGaler-Installation-Id, X-BeatGaler-CSRF, X-BeatGaler-Project-Operation, X-BeatGaler-Project-Session, X-BeatGaler-Project-Generation, X-BeatGaler-Project-Beat, X-BeatGaler-Project-Kind, X-BeatGaler-Project-Thread, X-BeatGaler-Client",
+      "access-control-allow-methods": "GET, POST, PATCH, PUT, OPTIONS",
+      "vary": "Origin",
+      "set-cookie": false
+    }
+  },
+  "routes": {
+    "GET /healthz": [
+      [200,"health",{"environment":"string","ok":"boolean","sourceSha":"null","status":"string"}],
+      [200,"health",{"environment":"string","ok":"boolean","sourceSha":"null","status":"string"}]
+    ],
+    "GET /readyz": [
+      [200,"health",{"dependencies":{"postgres":"string"},"environment":"string","ok":"boolean","sourceSha":"null","status":"string"}],
+      [200,"health",{"dependencies":{"postgres":"string"},"environment":"string","ok":"boolean","sourceSha":"null","status":"string"}]
+    ],
+    "POST /auth/signup/verify": [
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}]
+    ],
+    "POST /auth/signup/resend": [
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}]
+    ],
+    "POST /auth/signup/status": [
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}]
+    ],
+    "POST /auth/email/verification/request": [
+      [202,"auth",{"delivery_configured":"boolean","message":"string","ok":"boolean"}],
+      [202,"auth",{"delivery_configured":"boolean","message":"string","ok":"boolean"}]
+    ],
+    "POST /auth/email/verification/confirm": [
+      [400,"auth",{"code":"string","error":"string"}],
+      [400,"auth",{"code":"string","error":"string"}]
+    ],
+    "POST /auth/password/reset/request": [
+      [202,"auth",{"delivery_configured":"boolean","message":"string","ok":"boolean"}],
+      [202,"auth",{"delivery_configured":"boolean","message":"string","ok":"boolean"}]
+    ],
+    "POST /auth/password/reset/complete": [
+      [400,"auth",{"code":"string","error":"string"}],
+      [400,"auth",{"code":"string","error":"string"}]
+    ],
+    "POST /auth/reauth": [
+      [401,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [401,"auth",{"code":"string","error":"string"}]
+    ],
+    "POST /auth/mfa/recovery/regenerate": [
+      [401,"auth",{"code":"string","error":"string"}],
+      [401,"auth",{"code":"string","error":"string"}]
+    ],
+    "POST /auth/security/notifications": [
+      [401,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [200,"auth",{"notifications":[{"created_at":"string","details":{"delivery_configured":"boolean"},"id":"string","type":"string"}],"ok":"boolean"}]
+    ],
+    "POST /auth/lifecycle/status": [
+      [401,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [500,"auth",{"code":"string","error":"string","request_id":"string"}]
+    ],
+    "POST /auth/account/export": [
+      [401,"auth",{"code":"string","error":"string"}],
+      [401,"auth",{"code":"string","error":"string"}]
+    ],
+    "POST /auth/account/delete": [
+      [401,"authWithCookie",{"code":"string","error":"string"}],
+      [401,"authWithCookie",{"code":"string","error":"string"}]
+    ],
+    "POST /auth/sessions": [
+      [401,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [200,"auth",{"ok":"boolean","sessions":[{"client_kind":"string","created_at":"string","current":"boolean","expires_at":"string","id":"string","installation_id":"string","last_seen_at":"string"}]}]
+    ],
+    "POST /auth/sessions/revoke": [
+      [401,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [404,"auth",{"code":"string","error":"string","request_id":"string"}]
+    ],
+    "POST /auth/sessions/revoke-all": [
+      [401,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [200,"authWithCookie",{"current_revoked":"boolean","ok":"boolean","revoked_count":"number"}]
+    ],
+    "POST /webhooks/polar": [
+      [503,"webJson",{"code":"string","error":"string"}],
+      [503,"webJson",{"code":"string","error":"string"}]
+    ],
+    "POST /events/ticket": [
+      [401,"webJson",{"error":"string"}],
+      [200,"webJson",{"expires_in_ms":"number","ok":"boolean","ticket":"string"}]
+    ],
+    "GET /events": [
+      [401,"webJson",{"error":"string"}],
+      [401,"webJson",{"error":"string"}]
+    ],
+    "GET /auth/health": [
+      [200,"auth",{"account_auth":"boolean","master_group_limit":"number","master_storage_ready":"boolean","ok":"boolean","storage_mode":"string"}],
+      [200,"auth",{"account_auth":"boolean","master_group_limit":"number","master_storage_ready":"boolean","ok":"boolean","storage_mode":"string"}]
+    ],
+    "GET /plans/catalog": [
+      [200,"webJson",{"code_policy":{"code_types":["string"],"existing_user_default_days":"number"},"ok":"boolean","plans":[{"entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"id":"string","label":"string","quotas":{"max_active_devices":"null","max_beats":"null","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"null","youtube_uploads_per_month":"null"}},{"entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"id":"string","label":"string","quotas":{"max_active_devices":"number","max_beats":"number","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"number","youtube_uploads_per_month":"number"}}]}],
+      [200,"webJson",{"code_policy":{"code_types":["string"],"existing_user_default_days":"number"},"ok":"boolean","plans":[{"entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"id":"string","label":"string","quotas":{"max_active_devices":"null","max_beats":"null","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"null","youtube_uploads_per_month":"null"}},{"entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"id":"string","label":"string","quotas":{"max_active_devices":"number","max_beats":"number","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"number","youtube_uploads_per_month":"number"}}]}]
+    ],
+    "GET /plans/me": [
+      [401,"webJson",{"error":"string"}],
+      [200,"webJson",{"ok":"boolean","plan":{"access_source":"string","base_plan_id":"string","effective_plan_id":"string","effective_until":"null","entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"label":"string","quotas":{"max_active_devices":"number","max_beats":"number","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"number","youtube_uploads_per_month":"number"},"referral":{"reward_days":"number","reward_plan_id":"string","rewarded_referrals_per_month":"number"}}}]
+    ],
+    "POST /billing/checkout": [
+      [401,"webJson",{"error":"string"}],
+      [400,"webJson",{"code":"string","error":"string"}]
+    ],
+    "GET /billing/checkout/:requestId": [
+      [401,"webJson",{"error":"string"}],
+      [503,"webJson",{"code":"string","error":"string"}]
+    ],
+    "GET /billing/portal/availability": [
+      [401,"webJson",{"error":"string"}],
+      [503,"webNoStore",{"code":"string","error":"string"}]
+    ],
+    "POST /billing/portal": [
+      [401,"webJson",{"error":"string"}],
+      [503,"webNoStore",{"code":"string","error":"string"}]
+    ],
+    "POST /image/fetch": [
+      [401,"webJson",{"error":"string"}],
+      [400,"webJson",{"error":"string"}]
+    ],
+    "POST /auth/register": [
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}],
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}]
+    ],
+    "POST /auth/login": [
+      [200,"authWithCookie",{"csrf_token":"string","ok":"boolean","session_transport":"string","user":{"email":"string","email_delivery_configured":"boolean","email_verified":"boolean","email_verified_at":"null","has_password":"boolean","id":"string","mfa_enabled":"boolean","mfa_recovery_remaining":"number","official_username":"boolean","plan":{"access_source":"string","base_plan_id":"string","effective_plan_id":"string","effective_until":"null","entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"label":"string","quotas":{"max_active_devices":"number","max_beats":"number","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"number","youtube_uploads_per_month":"number"},"referral":{"reward_days":"number","reward_plan_id":"string","rewarded_referrals_per_month":"number"}},"providers":{"google":{"connected":"boolean"},"x":{"connected":"boolean"}},"retention_policy_configured":"boolean","storage_ready":"boolean","username":"string","username_source":"string"}}],
+      [200,"authWithCookie",{"csrf_token":"string","ok":"boolean","session_transport":"string","user":{"email":"string","email_delivery_configured":"boolean","email_verified":"boolean","email_verified_at":"null","has_password":"boolean","id":"string","mfa_enabled":"boolean","mfa_recovery_remaining":"number","official_username":"boolean","plan":{"access_source":"string","base_plan_id":"string","effective_plan_id":"string","effective_until":"null","entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"label":"string","quotas":{"max_active_devices":"number","max_beats":"number","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"number","youtube_uploads_per_month":"number"},"referral":{"reward_days":"number","reward_plan_id":"string","rewarded_referrals_per_month":"number"}},"providers":{"google":{"connected":"boolean"},"x":{"connected":"boolean"}},"retention_policy_configured":"boolean","storage_ready":"boolean","username":"string","username_source":"string"}}]
+    ],
+    "POST /auth/session": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [200,"authWithCookie",{"csrf_token":"string","ok":"boolean","session_transport":"string","user":{"email":"string","email_delivery_configured":"boolean","email_verified":"boolean","email_verified_at":"null","has_password":"boolean","id":"string","mfa_enabled":"boolean","mfa_recovery_remaining":"number","official_username":"boolean","plan":{"access_source":"string","base_plan_id":"string","effective_plan_id":"string","effective_until":"null","entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"label":"string","quotas":{"max_active_devices":"number","max_beats":"number","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"number","youtube_uploads_per_month":"number"},"referral":{"reward_days":"number","reward_plan_id":"string","rewarded_referrals_per_month":"number"}},"providers":{"google":{"connected":"boolean"},"x":{"connected":"boolean"}},"retention_policy_configured":"boolean","storage_ready":"boolean","username":"string","username_source":"string"}}]
+    ],
+    "POST /auth/account": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [200,"authWithCookie",{"csrf_token":"string","ok":"boolean","session_transport":"string","user":{"email":"string","email_delivery_configured":"boolean","email_verified":"boolean","email_verified_at":"null","has_password":"boolean","id":"string","mfa_enabled":"boolean","mfa_recovery_remaining":"number","official_username":"boolean","plan":{"access_source":"string","base_plan_id":"string","effective_plan_id":"string","effective_until":"null","entitlements":{"bulk_youtube_upload":"string","early_access":"boolean","upload_project":"boolean"},"label":"string","quotas":{"max_active_devices":"number","max_beats":"number","max_project_zip_bytes":"number","max_simultaneous_sessions":"number","youtube_uploads_per_day":"number","youtube_uploads_per_month":"number"},"referral":{"reward_days":"number","reward_plan_id":"string","rewarded_referrals_per_month":"number"}},"providers":{"google":{"connected":"boolean"},"x":{"connected":"boolean"}},"retention_policy_configured":"boolean","storage_ready":"boolean","username":"string","username_source":"string"}}]
+    ],
+    "POST /auth/email/change": [
+      [409,"auth",{"code":"string","error":"string"}],
+      [409,"auth",{"code":"string","error":"string"}]
+    ],
+    "POST /auth/password/change": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [503,"auth",{"code":"string","error":"string","request_id":"string"}]
+    ],
+    "POST /auth/mfa/setup": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [200,"auth",{"ok":"boolean","otpauth_url":"string","secret":"string"}]
+    ],
+    "POST /auth/mfa/enable": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [400,"auth",{"error":"string"}]
+    ],
+    "POST /auth/mfa/disable": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [200,"auth",{"ok":"boolean"}]
+    ],
+    "POST /auth/oauth/start": [
+      [400,"auth",{"error":"string"}],
+      [400,"auth",{"error":"string"}]
+    ],
+    "GET /auth/oauth/:provider/callback": [
+      [400,"authHtml","html"],
+      [400,"authHtml","html"]
+    ],
+    "POST /auth/oauth/poll": [
+      [400,"auth",{"error":"string"}],
+      [400,"auth",{"error":"string"}]
+    ],
+    "POST /auth/oauth/disconnect": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [200,"auth",{"ok":"boolean"}]
+    ],
+    "POST /auth/logout": [
+      [401,"authWithCookie",{"code":"string","error":"string","request_id":"string"}],
+      [200,"authWithCookie",{"ok":"boolean"}]
+    ],
+    "POST /telegram/connect/start": [
+      [401,"webJson",{"error":"string"}],
+      [200,"webJson",{"connected":"boolean","manager_only":"boolean","storage_ready":"boolean"}]
+    ],
+    "GET /telegram/connect/status": [
+      [401,"webJson",{"error":"string"}],
+      [200,"webJson",{"beatgaler_account_id":"string","beatgaler_username":"string","connected":"boolean","connected_at":"number","reachable":"boolean","storage_chat_id":"string","storage_chat_title":"string","storage_ready":"boolean","telegram_user_id":"string","telegram_username":"string"}]
+    ],
+    "POST /telegram/disconnect": [
+      [401,"webJson",{"error":"string"}],
+      [200,"webJson",{"ok":"boolean"}]
+    ],
+    "GET /transport/status": [
+      [200,"auth",{"bots":[],"direct":"boolean","ok":"boolean","operations":"number","sessions":"number"}],
+      [200,"auth",{"bots":[],"direct":"boolean","ok":"boolean","operations":"number","sessions":"number"}]
+    ]
+  },
+  "fallback": {
+    "GET /catalog/v1/context": [
+      [503,"webNoStore",{"code":"string","detail":{"reason":"string"},"error":"string"}],
+      [503,"webNoStore",{"code":"string","detail":{"reason":"string"},"error":"string"}]
+    ]
+  }
+}
