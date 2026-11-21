@@ -1,4 +1,5 @@
 import { traceClock } from "./traceClock";
+import { diagEnabled } from "./diagSwitch";
 import { playTrace } from "../playback/playTrace";
 
 export type StartupSurface =
@@ -162,6 +163,7 @@ function runtimeKind(): string {
 
 export function installStartupTrace(): void {
   if (installed || typeof window === "undefined" || typeof document === "undefined") return;
+  if (!diagEnabled()) return;
   installed = true;
   window.__BEATGALER_STARTUP_TRACE__ = [];
   window.beatgalerStartupTrace = () => (window.__BEATGALER_STARTUP_TRACE__ ?? []).map(entry => ({ ...entry }));
@@ -207,6 +209,12 @@ export function installStartupTrace(): void {
     attributes: true,
     attributeFilter: ["class", "aria-label", "data-beat-card-id", "data-library-scroll"],
   });
+
+  // El observador solo sirve durante el arranque: se desconecta tras la carga (o a los 30 s como tope).
+  let observing = true;
+  const stopObserving = () => { if (observing) { observing = false; observer.disconnect(); } };
+  window.addEventListener("load", () => { setTimeout(stopObserving, 10_000); }, { once: true });
+  setTimeout(stopObserving, 30_000);
 
   scheduleSample("install");
 }

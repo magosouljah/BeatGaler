@@ -1,4 +1,5 @@
 import { traceClock } from "../perf/traceClock";
+import { diagEnabled } from "../perf/diagSwitch";
 
 export type PlayTraceDetail = Record<string, unknown>;
 
@@ -30,6 +31,7 @@ function stage1TraceContext(): PlayTraceDetail {
  * Epoch time lets main-thread and Worker events be correlated in one console log.
  */
 export function playTrace(stage: string, detail: PlayTraceDetail = {}): void {
+  if (!diagEnabled()) return;
   try {
     console.info(`[play-trace] ${JSON.stringify({ ...detail, ...stage1TraceContext(), ...traceClock(), stage })}`);
   } catch { /* Diagnostics must never break the operation being measured. */ }

@@ -1,5 +1,6 @@
 // Serialized by WebdriverIO and installed before any application script.
 export function authPreload(emit) {
+  try { localStorage.setItem("bg:diag", "1"); } catch { /* D11: enciende las trazas de la app */ }
   const original = window.fetch;
   const originalConsole = {
     info: console.info.bind(console),

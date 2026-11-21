@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { installTestC } from '../playback-c/instrument.mjs';
 import { installTestD } from '../playback-d/instrument.mjs';
 
+globalThis.__BG_DIAG__ = true; // D11: interruptor de diagnostico para que playTrace emita en este harness
 const now = () => performance.timeOrigin + performance.now();
 const emit = event => parentPort.postMessage({ harnessTrace: { ts_ms: now(), ...event } });
 const testC = workerData.testCMode ? installTestC(SessionConnection, emit,

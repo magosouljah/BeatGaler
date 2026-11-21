@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installPlaybackGetFileTrace } from "../../src/features/cloud/playbackGetFileTrace";
+globalThis.__BG_DIAG__ = true; // D11: estas pruebas leen las trazas, apagadas por defecto
 
 afterEach(() => vi.restoreAllMocks());
 

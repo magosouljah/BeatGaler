@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readDirectStartupDiagnostics, startupCacheContext } from "../../src/features/perf/directStartupDiagnostics";
 import { observePlayStep, playTrace } from "../../src/features/playback/playTrace";
+globalThis.__BG_DIAG__ = true; // D11: estas pruebas leen las trazas, apagadas por defecto
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
