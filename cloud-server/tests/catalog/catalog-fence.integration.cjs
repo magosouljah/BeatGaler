@@ -45,7 +45,9 @@ async function user(pool, { native = true } = {}) {
   const id = `u${++seq}`; const chat = `-100${seq}`;
   await pool.query('INSERT INTO users(id, email) VALUES ($1, $2)', [id, `${id}@fake.invalid`]);
   await pool.query("INSERT INTO vaults(id, user_id, telegram_chat_id, transport_bot_id) VALUES ($1, $2, $3, 'Bot20')", [`v-${id}`, id, chat]);
-  if (!native) return { userId: id, chatId: chat };
+  // Un vault legacy real existe desde ANTES de la activación nativa (el trigger de 0027 marca elegible todo INSERT posterior y el
+  // cercado ampliado lo protege antes de provisionar); se modela con la elegibilidad que tenía antes de activar.
+  if (!native) { await pool.query('UPDATE vaults SET catalog_native_eligible = false WHERE id = $1', [`v-${id}`]); return { userId: id, chatId: chat }; }
   await pool.query('UPDATE vaults SET index_bootstrap_pending = true WHERE id = $1', [`v-${id}`]);
   const ctx = (await authOn(pool).provisionLibrary({ userId: id })).context;
   return { userId: id, chatId: chat, era: ctx.authority_era, epoch: ctx.authority_epoch, generationId: ctx.generation_id };

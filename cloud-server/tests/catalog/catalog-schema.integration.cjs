@@ -51,7 +51,7 @@ async function seedUsers(pool) {
 const MIGRATIONS = mig.listMigrations().length;
 test('fresh: todas las migraciones (0001–0042), idempotente y catálogo vacío en LEGACY', (t) => withDb(async (pool) => {
   const first = await mig.applyMigrations(pool);
-  assert.equal(MIGRATIONS, 41);
+  assert.equal(MIGRATIONS, 42);
   assert.equal(first.applied.length, MIGRATIONS); assert.equal(first.applied.at(-1), '0042');
   const again = await mig.applyMigrations(pool);
   assert.equal(again.applied.length, 0); assert.equal(again.skipped.length, MIGRATIONS);
