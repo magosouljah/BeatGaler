@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+globalThis.__BG_DIAG__ = true; // D11: estas pruebas leen las trazas, apagadas por defecto
 
 const harness = vi.hoisted(() => {
   type Transfer = {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebTransportWorkerClient } from "../../src/features/cloud/webTransportWorkerClient";
+globalThis.__BG_DIAG__ = true; // D11: estas pruebas leen las trazas, apagadas por defecto
 
 class FakeWorker {
   static instances: FakeWorker[] = [];

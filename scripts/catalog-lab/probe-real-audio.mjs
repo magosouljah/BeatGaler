@@ -15,6 +15,7 @@ const VARIANTS = { A: mp3, B: mp3.subarray(0, 420000), C: mp3.subarray(0, 262144
 
 // Instrumento: Worker mtcute (Telegram directo) — operaciones, bytes y duración por operación; HTTP al Cloud por Resource Timing.
 await browser.scriptAddPreloadScript({ functionDeclaration: `() => {
+  try { localStorage.setItem('bg:diag', '1'); } catch (e) {}
   window.__fx = []; const of = window.fetch.bind(window); window.fetch = async (...a) => { const u = String((a[0] && a[0].url) || a[0]); if (!u.includes('catalog/v1/')) return of(...a); const e = { u: u.split('catalog/v1/')[1].split('?')[0].replace(/[A-Za-z0-9_-]{16,}/g, '#').slice(0, 48), m: (a[1] && a[1].method) || 'GET', range: (a[1] && a[1].headers && (a[1].headers.Range || a[1].headers.range)) || null, t: Math.round(performance.now()) }; window.__fx.push(e); try { const r = await of(...a); e.status = r.status; e.ttfbMs = Math.round(performance.now()) - e.t; e.len = Number(r.headers.get('content-length') || 0); return r; } catch (err) { e.err = String(err && err.name); throw err; } };
   window.__pt = []; const ci = console.info.bind(console); console.info = (...a) => { try { const m = typeof a[0] === 'string' && a[0].startsWith('[play-trace] ') ? JSON.parse(a[0].slice(13)) : null; if (m) window.__pt.push({ stage: m.stage, t: m.t_ms, elapsed: m.elapsed_ms, total: m.total_ms }); } catch (e) {} return ci(...a); };
   const W = window.Worker; window.__wk = { out: [], inn: [] };
