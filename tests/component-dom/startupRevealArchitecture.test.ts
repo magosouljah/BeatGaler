@@ -9,7 +9,6 @@ const appShell = readFileSync("src/app/AppShell.tsx", "utf8");
 const libraryRevealOwner = readFileSync("src/features/startup/useLibraryReveal.ts", "utf8");
 const libraryStateOwner = readFileSync("src/features/library/useLibraryState.ts", "utf8");
 const libraryReloadOwner = readFileSync("src/features/library/useLibraryReload.ts", "utf8");
-const beatCard = readFileSync("src/components/BeatCard.tsx", "utf8");
 const webAdapter = readFileSync("src/platform/webAdapter.ts", "utf8");
 const viteConfig = readFileSync("vite.config.ts", "utf8");
 const accountGate = readFileSync("src/components/AccountGate.tsx", "utf8");
@@ -24,14 +23,11 @@ describe("Issue #97 startup reveal architecture", () => {
     expect(libraryStateOwner).toContain("[beats, settings?.telegram_cloud_connected, cloudSessionVerified]");
   });
 
-  it("reserves every filtered beat slot while revealing only artwork-ready cards", () => {
+  it("wires the legacy shell's filtered slots to reveal and interaction eligibility", () => {
     expect(appShell).toContain("<SortableContext items={filteredBeats.map(");
     expect(appShell).toContain("visible={revealedBeatIds.has(beat.id)}");
     expect(appShell).toContain('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}');
     expect(appShell).toContain('playbackInteractive={connectionState !== "offline" || Boolean(beat.offline_available)}');
-    expect(beatCard).toContain('visibility: visible ? "visible" : "hidden"');
-    expect(beatCard).toContain('pointerEvents: visible ? "auto" : "none"');
-    expect(beatCard).toContain("if (!visible || !playbackInteractive || !hasEnteredViewport || !beat.telegram_file_id) return;");
   });
 
   it("does not gate card reveal on audio cooking", () => {

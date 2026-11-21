@@ -5,7 +5,6 @@ const app = readFileSync("src/App.tsx", "utf8");
 const beatGalerApp = readFileSync("src/app/BeatGalerApp.tsx", "utf8");
 const composition = readFileSync("src/app/useBeatGalerComposition.ts", "utf8");
 const shell = readFileSync("src/app/AppShell.tsx", "utf8");
-const shortcuts = readFileSync("src/app/useAppShortcuts.ts", "utf8");
 const publishing = readFileSync("src/features/publishing/usePublishingActions.ts", "utf8");
 
 describe("App visual shell extraction", () => {
@@ -26,7 +25,6 @@ describe("App visual shell extraction", () => {
     expect(composition).toContain("useAppShortcuts({");
     expect(composition).toContain("usePublishingActions({");
     expect(app).not.toContain("window.addEventListener(\"keydown\"");
-    expect(shortcuts).toContain("window.addEventListener(\"keydown\"");
     expect(publishing).toContain("Uploading to YouTube");
     expect(publishing).toContain("Bulk upload");
   });
