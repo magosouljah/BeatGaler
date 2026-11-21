@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("R-002 · orden y filtros diferidos de Gallery", () => {
-  it.each<[Action, Action]>([["search", "sort"], ["sort", "tags"], ["sort", "search"]])(
+  it.each<[Action, Action]>([["search", "sort"], ["sort", "tags"], ["sort", "search"], ["tags", "sort"]])(
     "%s → %s conserva el orden y la pista en curso al aplicar el filtro",
     async (first, second) => {
       vi.useFakeTimers();
@@ -67,10 +67,14 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
       });
       const root = createRoot(document.createElement("div"));
       let scope!: Scope;
+      const excludedTag = first === "tags" ? "t3" : null;
       const actions = {
         search: () => scope.setSearch("Beat 2"),
         sort: () => scope.setSortBy("bpm"),
-        tags: () => scope.handleTagClick("odd", {}),
+        tags: () => {
+          scope.handleTagClick("odd", {});
+          if (excludedTag) scope.handleTagClick(excludedTag, { altKey: true });
+        },
       };
       const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 
@@ -102,10 +106,10 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
         await act(async () => { actions[first](); });
         await advance(100);
         await act(async () => { actions[second](); });
-        await advance(first === "search" ? 149 : 249);
+        await advance(first === "sort" ? 249 : 149);
 
         expect(listBeats).toHaveBeenCalledTimes(1);
-        expect(listBeats.mock.lastCall?.[0]).toMatchObject({ sort: "bpm", q: "", includeTags: [] });
+        expect(listBeats.mock.lastCall?.[0]).toMatchObject({ sort: "bpm", q: "", includeTags: [], excludeTags: [] });
         expect(scope.interaction.selection).toMatchObject({ selectionId, count: 1, status: "active", anchor: null });
         expect(scope.isSelected(beat.id)).toBe(true);
 
@@ -127,15 +131,17 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
         expect(load).toHaveBeenCalledTimes(loadCount);
         expect(pause).toHaveBeenCalledTimes(pauseCount);
 
-        const tags = second === "tags";
-        const filters = { q: tags ? "" : "Beat 2", includeTags: tags ? ["odd"] : [], excludeTags: [] };
+        const tags = first === "tags" || second === "tags";
+        const filters = { q: tags ? "" : "Beat 2", includeTags: tags ? ["odd"] : [], excludeTags: excludedTag ? [excludedTag] : [] };
         expect(listBeats).toHaveBeenCalledTimes(2);
         expect.soft(listBeats.mock.lastCall?.[0]).toMatchObject({ ...filters, sort: "bpm" });
         expect.soft(scope.playback.query).toMatchObject({ filters, sort: "bpm" });
         expect(window.location.pathname).toBe("/gallery");
-        expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual(
-          tags ? { bgSort: "bpm", bgInclude: "odd" } : { bgSort: "bpm", bgQ: "Beat 2" },
-        );
+        expect.soft(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({
+          bgSort: "bpm",
+          ...(tags ? { bgInclude: "odd" } : { bgQ: "Beat 2" }),
+          ...(excludedTag ? { bgExclude: excludedTag } : {}),
+        });
       } finally {
         act(() => root.unmount());
         await services.teardown();
