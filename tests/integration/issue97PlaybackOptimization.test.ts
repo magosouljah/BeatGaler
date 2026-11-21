@@ -57,31 +57,6 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(reconcileHook).toBeGreaterThan(updateLatest);
   });
 
-  it("feeds authoritative Telegram manifest routes into the playback routing cache before materialization", () => {
-    const library = source("src/features/library/webLibrary.ts");
-
-    const normalize = library.indexOf("normalizeWebLibraryManifest(index.manifest)");
-    const updateRouting = library.indexOf("updatePlaybackRoutingCacheFromManifest(manifest)", normalize);
-    const materialize = library.indexOf("const page = boundedPageFromNormalizedManifest(", updateRouting);
-    expect(normalize).toBeGreaterThanOrEqual(0);
-    expect(updateRouting).toBeGreaterThan(normalize);
-    expect(materialize).toBeGreaterThan(updateRouting);
-  });
-
-  it("uses one idempotent startup coordinator and a real INDEX barrier", () => {
-    const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
-
-    expect(coordinator).toContain("export class WebStartupPlaybackCoordinator");
-    expect(coordinator).toContain("private startPromise: Promise<void> | null = null");
-    expect(coordinator).toContain("waitUntilIndexAllowed");
-    expect(coordinator).toContain("beginPlayback");
-    expect(coordinator).toContain("markPlaybackStable");
-    expect(coordinator).toContain("endPlayback");
-    expect(coordinator).toContain("getWebStartupPlaybackCoordinator");
-    expect(coordinator).toContain('playTrace("STARTUP_LOCAL_ROUTING_READY"');
-    expect(coordinator).toContain('playTrace("INDEX_WAIT_DIRECT_READY"');
-  });
-
   it("keeps login prewarm off public startup and Gallery mount", () => {
     const main = source("src/main.tsx");
     const experience = source("src/app/WebExperience.tsx");
@@ -89,7 +64,6 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     const workspace = source("src/app/WebGalleryWorkspace.tsx");
     const authGate = source("src/features/auth/AuthExperienceGate.tsx");
     const accountGate = source("src/components/AccountGate.tsx");
-    const coordinator = source("src/features/playback/webStartupPlaybackCoordinator.ts");
 
     expect(main).not.toContain("preconnectRememberedWebDirect();");
     expect(main).not.toContain("prewarmDirectRuntime");
@@ -102,21 +76,16 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(accountGate).not.toContain("webRememberedDirectPreconnect");
     expect(accountGate).not.toContain("webStartupPlaybackCoordinator");
-    expect(coordinator).toContain("await this.transport.connectPlaybackDataPlane()");
   });
 
   it("keeps startup routing local-only and makes late candidate configuration impossible", () => {
     const session = source("src/features/cloud/webTransportSession.ts");
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
     const controller = source("src/features/cloud/webTransportController.ts");
     const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
 
     expect(session).toContain("export async function reserveWebTransportSession(): Promise<WebTransportSessionPublic>");
     expect(session).not.toContain("startupBeatIds");
     expect(session).not.toContain("startup_beat_ids");
-    expect(transport).toContain("constructor(startupCandidates");
-    expect(transport).toContain("startupMessageIds: candidates.map(candidate => candidate.messageId)");
-    expect(transport).not.toContain("startup_routes");
     expect(controller).not.toContain("startupBeatIds");
     expect(controller).toContain("startupMessageIds: readonly number[]");
     expect(controller).not.toContain("configureStartupBeatIds(");
@@ -137,31 +106,6 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).not.toContain("startupRouteMessageIds(startup_routes)");
   });
 
-  it("removes per-operation Cloud authorization from warm and foreground playback", () => {
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
-    const prefetchStart = transport.indexOf("async prefetchFiles(");
-    const streamStart = transport.indexOf("async streamFile(");
-    const nextMethod = transport.indexOf("async commitImportedBeat(", streamStart);
-    const prefetchBody = transport.slice(prefetchStart, streamStart);
-    const streamBody = transport.slice(streamStart, nextMethod);
-
-    expect(prefetchStart).toBeGreaterThanOrEqual(0);
-    expect(streamStart).toBeGreaterThan(prefetchStart);
-    expect(prefetchBody).toContain("this.worker.prefetchBatch");
-    expect(prefetchBody).not.toContain("beginOperation");
-    expect(prefetchBody).not.toContain("withOperation");
-    expect(streamBody).toContain("this.worker.stream");
-    const exportGuardStart = streamBody.indexOf('if (purpose === "export") {');
-    const exportGuardEnd = streamBody.indexOf("if (background)", exportGuardStart);
-    const exportGuardBody = streamBody.slice(exportGuardStart, exportGuardEnd);
-    const playbackBody = streamBody.slice(0, exportGuardStart) + streamBody.slice(exportGuardEnd);
-    expect(exportGuardStart).toBeGreaterThanOrEqual(0);
-    expect(exportGuardEnd).toBeGreaterThan(exportGuardStart);
-    expect(exportGuardBody).toContain("this.controller.beginOperation(");
-    expect(playbackBody).not.toContain("this.controller.beginOperation(");
-    expect(streamBody).not.toContain("withOperation");
-  });
-
   it("supports real warm preemption, requeue and same-beat promotion", () => {
     const protocol = source("src/features/cloud/webTransportWorkerProtocol.ts");
     const client = source("src/features/cloud/webTransportWorkerClient.ts");
@@ -180,46 +124,17 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain('playTrace("PLAY_WARM_PREEMPT_ALL"');
   });
 
-  it("adopts an active/queued warm instead of redownloading offset zero", () => {
-    const playback = source("src/features/playback/webPlaybackSource.ts");
-
-    expect(playback).toContain("promotePrefetchForPlayback");
-    expect(playback).toContain("const existingWarm = this.prefetchPending.get(key)");
-    expect(playback).toContain("await existingWarm");
-    expect(playback).toContain('playTrace(active ? "PLAY_WARM_ADOPTED" : "PLAY_WARM_PROMOTED"');
-    expect(playback).toContain("promoteMessage?.(messageId)");
-    expect(playback).not.toContain("cancelPrefetchForPlayback");
-  });
-
-  it("reuses a ready prefix and continues from its exact byte length", () => {
-    const playback = source("src/features/playback/webPlaybackSource.ts");
-
-    expect(playback).toContain("prefetched.totalBytes <= prefetched.prefix.byteLength || prefetched.prefix.byteLength % 4096 === 0");
-    expect(playback).toContain("const offsetBytes = usablePrefix?.prefix.byteLength || 0;");
-    expect(playback).toContain('this.transport.streamFile({ messageId, mimeType, offsetBytes, purpose: "playback", traceIntentId: intentId }, chunk => {');
-  });
-
   it("uses PLAY_CRITICAL zero-warm and PLAY_STABLE six-warm scheduling", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
-    const playback = source("src/features/playback/webPlaybackSource.ts");
 
     expect(worker).toContain('type PlaybackSchedulerState = "IDLE" | "PLAY_CRITICAL" | "PLAY_STABLE"');
     expect(worker).toContain('playbackSchedulerState === "PLAY_CRITICAL" ? 0');
     expect(worker).toContain('playbackSchedulerState === "PLAY_STABLE" ? 6 : dataLaneLimit');
-    expect(playback).toContain("PLAYBACK_CRITICAL_BUFFER_AHEAD_SECONDS = 2");
-    expect(playback).toContain("bufferedAheadSeconds(entry.sourceBuffer, entry.playbackCurrentTime)");
-    expect(playback).toContain("this.transport.markPlaybackStable(entry.messageId, entry.traceIntentId)");
-    expect(playback).toContain("entry.playbackWaiting = Boolean(state.waiting)");
-    expect(playback).toContain("const isActive = entry.playbackPlaying || entry.playbackWaiting");
-    expect(playback).toContain('reason: entry.playbackWaiting ? "waiting" : "resume"');
-    expect(playback).toContain("this.transport.focusPlayback(entry.messageId, entry.traceIntentId)");
   });
 
   it("keeps INDEX above WARM but below Play and makes the INDEX byte download abortable", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
-    expect(transport).toContain("await this.indexBarrier()");
     expect(worker).toContain("activeIndexAbortController");
     expect(worker).toContain("waitUntilIndexPriorityAllowed");
     expect(worker).toContain("abortSignal: controller.signal");
@@ -245,28 +160,12 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain('playTrace("DIRECT_BACKGROUND_GET_CHAT_OK"');
   });
 
-  it("retains capabilities for sensitive writes and credential refresh remains fail-closed", () => {
+  it("keeps controller authorization and credential refresh fail-closed", () => {
     const controller = source("src/features/cloud/webTransportController.ts");
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
 
     expect(controller).toContain("async beginOperation(");
     expect(controller).toContain("await this.waitUntilVerified()");
     expect(controller).toContain("await this.api.authorize(");
     expect(controller).toContain("private async applyCredentialRefresh");
-    expect(transport).toContain('"commit_import"');
-    expect(transport).toContain('"commit_edit"');
-    expect(transport).toContain('"trash_move"');
-  });
-
-  it("keeps playback bytes in the bounded session-only RAM cache", () => {
-    const playback = source("src/features/playback/webPlaybackSource.ts");
-    const adapter = source("src/platform/webAdapter.ts");
-
-    expect(playback).toContain("const DEFAULT_SESSION_CACHE_LIMIT_MB = 100;");
-    expect(playback).toContain("cachedChunks: ArrayBuffer[];");
-    expect(playback).toContain("entry.cachedChunks.push(chunk);");
-    expect(playback).toContain('playTrace("SOURCE_SESSION_CACHE_HIT"');
-    expect(playback).toContain("private enforceCacheBudget");
-    expect(adapter).toContain("webPlaybackSources?.releaseAll();");
   });
 });

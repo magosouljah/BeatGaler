@@ -22,24 +22,6 @@ vi.mock("../../src/components/AccountGate", () => ({
   oauthBeatGalerAccount: vi.fn(),
 }));
 
-vi.mock("../../src/features/cloud/webGalerCloudTransport", () => ({
-  WebGalerCloudTransport: class {
-    setIndexBarrier = vi.fn();
-    connectPlaybackDataPlane = vi.fn(async () => undefined);
-    getLibraryIndex = vi.fn(async () => ({
-      messageId: null,
-      manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [] },
-    }));
-    downloadFiles = vi.fn(async () => []);
-    listTrashItems = vi.fn(async () => []);
-    moveBeatsToTrash = vi.fn(async () => []);
-    restoreBeatFromTrash = vi.fn();
-    purgeTrash = vi.fn(async () => 0);
-    upload = vi.fn();
-    disconnect = vi.fn(async () => undefined);
-  },
-}));
-
 import SettingsPanel from "../../src/components/SettingsPanel";
 import { webAdapter } from "../../src/platform/webAdapter";
 
@@ -47,17 +29,6 @@ import { webAdapter } from "../../src/platform/webAdapter";
 
 describe("BeatGaler Web platform shell", () => {
   beforeEach(() => localStorage.clear());
-
-  it("loads an authenticated browser shell without Desktop bootstrap", async () => {
-    const snapshot = await webAdapter.startup.loadAuthenticatedShell();
-
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.connectionState).toBe("online");
-    expect(snapshot?.libraryVerified).toBe(true);
-    expect(snapshot?.settings.telegram_cloud_connected).toBe(true);
-    expect(snapshot?.settings.beatgaler_user_id).toMatch(/^beatgaler-web-/);
-    expect(snapshot?.beats).toEqual([]);
-  });
 
   it("persists shared browser preferences", async () => {
     await webAdapter.preferences.setIncompleteWarnings(false);
@@ -75,6 +46,7 @@ describe("BeatGaler Web platform shell", () => {
 
     await act(async () => {
       root.render(<SettingsPanel
+        trashSource={{ listBeats: async () => [], restoreBeat: vi.fn(), purgeBeats: async () => 0 }}
         currentFolder={null}
         showIncompleteWarnings
         onIncompleteWarningsChanged={() => undefined}

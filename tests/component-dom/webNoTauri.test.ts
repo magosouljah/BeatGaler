@@ -40,25 +40,13 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   writeFile: tauriSentinels.fsWriteFile,
 }));
 
-vi.mock("../../src/features/cloud/webGalerCloudTransport", () => ({
-  WebGalerCloudTransport: class {
-    setIndexBarrier = vi.fn();
-    connectPlaybackDataPlane = vi.fn(async () => undefined);
-    getLibraryIndex = vi.fn(async () => ({
-      messageId: null,
-      manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [] },
-    }));
-    downloadFiles = vi.fn(async () => []);
-    listTrashItems = vi.fn(async () => []);
-    moveBeatsToTrash = vi.fn(async () => []);
-    restoreBeatFromTrash = vi.fn();
-    purgeTrash = vi.fn(async () => 0);
-    upload = vi.fn();
-    disconnect = vi.fn(async () => undefined);
-  },
-}));
-
 import { webAdapter } from "../../src/platform/webAdapter";
+import {
+  beginWebPlaybackIntent,
+  isCurrentWebPlaybackIntent,
+  rememberPreparedWebPlaybackUrl,
+  shouldAcceptWebPlaybackRequest,
+} from "../../src/features/playback/webPlaybackIntent";
 
 describe("BeatGaler Web no-Tauri contract", () => {
   beforeEach(() => {
@@ -68,10 +56,6 @@ describe("BeatGaler Web no-Tauri contract", () => {
   });
 
   it("runs Web platform flows without invoking any Tauri surface", async () => {
-    const snapshot = await webAdapter.startup.loadAuthenticatedShell();
-    expect(snapshot?.libraryVerified).toBe(true);
-    expect(snapshot?.beats).toEqual([]);
-
     await webAdapter.preferences.setIncompleteWarnings(false);
     expect((await webAdapter.preferences.load()).incomplete_warnings_enabled).toBe(false);
 
@@ -93,5 +77,18 @@ describe("BeatGaler Web no-Tauri contract", () => {
     for (const sentinel of Object.values(tauriSentinels)) {
       expect(sentinel).not.toHaveBeenCalled();
     }
+  });
+
+  it("rejects a previously prepared browser playback URL after cloud data disconnects", async () => {
+    const intent = beginWebPlaybackIntent("browser-beat");
+    const url = "blob:https://beatgaler.test/track";
+    rememberPreparedWebPlaybackUrl(url, intent);
+    expect(isCurrentWebPlaybackIntent(intent)).toBe(true);
+    expect(shouldAcceptWebPlaybackRequest(intent.beatId, [url])).toBe(true);
+
+    await webAdapter.cloudData.disconnect();
+
+    expect(isCurrentWebPlaybackIntent(intent)).toBe(false);
+    expect(shouldAcceptWebPlaybackRequest(intent.beatId, [url])).toBe(false);
   });
 });

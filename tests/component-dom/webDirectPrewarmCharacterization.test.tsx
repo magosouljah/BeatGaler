@@ -16,7 +16,7 @@ import AuthExperienceGate from "../../src/features/auth/AuthExperienceGate";
 import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import { loginBeatGalerAccount, logoutBeatGalerAccount, restoreBeatGalerSession } from "../../src/components/AccountGate";
 import { createWebDirectPort, discardPrewarmedDirectRuntime, prewarmDirectRuntime } from "../../src/features/library/catalog/catalogDirectPort";
-import { disconnectWebStartupPlaybackCoordinator } from "../../src/features/playback/webStartupPlaybackCoordinator";
+import { webAdapter } from "../../src/platform/webAdapter";
 
 const { prepareTempAuth } = vi.hoisted(() => ({ prepareTempAuth: vi.fn(async () => { throw new Error("unexpected MTProto handshake"); }) }));
 vi.mock("../../src/features/cloud/webTempAuth", () => ({ prepareWebTempAuth: prepareTempAuth }));
@@ -176,7 +176,7 @@ afterEach(async () => {
   host?.remove();
   host = null; root = null;
   await discardPrewarmedDirectRuntime();
-  await disconnectWebStartupPlaybackCoordinator();
+  await webAdapter.cloudData.disconnect();
   setActiveWebAccountId(null);
   delete (window as any).__TAURI_INTERNALS__;
   delete (document as any).cookie;

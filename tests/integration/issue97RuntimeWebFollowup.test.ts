@@ -1,76 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Beat } from "../../src/types";
-import { commitWebBeatEdit } from "../../src/features/edit/webBeatEdit";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
 describe("Issue #97 production runtime follow-up", () => {
-  it("replaces a stale installation topic id with the vault-resolved topic after artwork upload", async () => {
-    const original = {
-      id: "beat-1",
-      name: "Same Beat",
-      bpm: "120",
-      key: "Cm",
-      tags: [],
-      rating: 0,
-      color: "#111111",
-      color2: "#222222",
-      telegram_file_id: "direct:101",
-      telegram_message_id: 101,
-      image_base64: null,
-    } as unknown as Beat;
-    const updated = { ...original, image_base64: "data:image/png;base64,YQ==" };
-    const uploadedInputs: Array<Record<string, unknown>> = [];
-    let publishedManifest: any = null;
-    const runtime = {
-      getLibraryIndex: vi.fn(async () => ({
-        messageId: 500,
-        manifest: {
-          schema: "beatgaler.telegram.library",
-          version: 2,
-          beats: [{
-            id: "beat-1",
-            name: "Same Beat",
-            bpm: "120",
-            key: "Cm",
-            tags: [],
-            rating: 0,
-            color: "#111111",
-            color2: "#222222",
-            telegram_topic_id: 4242,
-            master: { telegram_message_id: 101, filename: "old.mp3", mime: "audio/mpeg", size: 10 },
-          }],
-          trash: [],
-        },
-      })),
-      upload: vi.fn(async (input: Record<string, unknown>) => {
-        uploadedInputs.push(input);
-        return {
-          telegram_file_id: "file-new",
-          telegram_message_id: 202,
-          filename: "cover.png",
-          original_size: 1,
-          parts: [],
-          transport: "direct-web" as const,
-          thread_id: 3131,
-        };
-      }),
-      replaceLibraryIndex: vi.fn(async (input: { manifest: unknown }) => {
-        publishedManifest = input.manifest;
-        return { messageId: 501, beatCount: 1, updated: true };
-      }),
-    };
-
-    await commitWebBeatEdit(original, updated, {}, runtime);
-    expect(uploadedInputs).toHaveLength(1);
-    expect(uploadedInputs[0]).not.toHaveProperty("threadId");
-    expect(publishedManifest.beats[0].telegram_topic_id).toBe(3131);
-  });
-
   it("keeps visible cloud cards playable while authority is still checking", () => {
     const appShell = source("src/app/AppShell.tsx");
     const card = source("src/components/BeatCard.tsx");
@@ -99,25 +35,18 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(accountGate).not.toContain("optimisticRememberedSession");
   });
 
-  it("returns the first MSE URL before stream admission and keeps Gallery behind authentication", () => {
-    const playback = source("src/features/playback/webPlaybackSource.ts");
+  it("keeps Gallery behind authentication and preserves Direct startup ordering", () => {
     const main = source("src/main.tsx");
     const experience = source("src/app/WebExperience.tsx");
     const galleryEntry = source("src/app/WebGalleryEntry.tsx");
     const galleryWorkspace = source("src/app/WebGalleryWorkspace.tsx");
     const experienceGate = source("src/features/auth/AuthExperienceGate.tsx");
-    const adapter = source("src/platform/webAdapter.ts");
     const accountGate = source("src/components/AccountGate.tsx");
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
     const workerClient = source("src/features/cloud/webTransportWorkerClient.ts");
     const controller = source("src/features/cloud/webTransportController.ts");
     const sessionControl = source("src/features/cloud/webTransportSession.ts");
     const sessionBootstrap = source("src/features/auth/webSessionBootstrap.ts");
 
-    expect(playback).toContain('playTrace("SOURCE_URL_READY", { beat_id: beatId, mode: "mse" });');
-    expect(playback).toContain("void (async () => {");
-    expect(playback).toContain("return Promise.resolve({ url, completed });");
-    expect(playback).not.toContain("private async prepareMediaSource");
 
     expect(main).toContain('import WebExperience from "./app/WebExperience";');
     expect(main).not.toContain("preconnectRememberedWebDirect();");
@@ -139,11 +68,6 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");
     expect(sessionBootstrap).toContain("readWebCookieValue(document.cookie, WEB_CSRF_COOKIE_NAME)");
 
-    expect(adapter).toContain("function prewarmAuthenticatedWebTransport(): void");
-    expect(adapter).toContain("async syncSession() {");
-    expect(adapter).toContain("prewarmAuthenticatedWebTransport();");
-    expect(adapter).toContain("resolveWebCoordinator().then(coordinator => coordinator.start())");
-    expect(adapter).not.toContain("scheduleWebTransportPrewarm");
     expect(accountGate).toContain("await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());");
 
     expect(workerClient).toContain("prewarm(): void {");
@@ -151,9 +75,6 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(workerClient).toContain("this.ensureWorker();");
     expect(workerClient).toContain("this.desiredPlaybackMessageId = id;");
     expect(workerClient).toContain('op: "playback_focus", messageId: desiredPlaybackMessageId');
-    expect(transport).toContain('playTrace("TRANSPORT_CODE_PREWARM_ENTER", { startup_beat_count: candidates.length });');
-    expect(transport).toContain("this.worker.prewarm();");
-    expect(transport).toContain("async connectPlaybackDataPlane(): Promise<void>");
 
     expect(sessionControl).toContain("const csrf = readWebCsrfToken();");
     expect(sessionControl).toContain('if (csrf) headers["X-BeatGaler-CSRF"] = csrf;');
@@ -189,15 +110,10 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(controller).toContain("if (bootstrap) await this.api.stop(bootstrap).catch(() => {});");
   });
 
-  // T25 (b52649f): los topics por beat y su resolución en server-core se retiraron con INDEX (los topics están cancelados); la retirada de
-  // rutas la prueba cloud-server/tests/catalog/catalog-contract.test.cjs. Queda el contrato del transporte legacy del navegador.
-  it("keeps the retired beat-topic resolution out of the Cloud and the legacy browser transport hint-free", () => {
+  it("keeps the retired beat-topic resolution out of the Cloud", () => {
     const server = source("cloud-server/server-core.js");
-    const transport = source("src/features/cloud/webGalerCloudTransport.ts");
     expect(server).not.toContain("function storedBeatTopicCandidates(");
     expect(server).not.toContain("adoptCanonicalBeatTopic(");
-    expect(transport).not.toContain("hintedThreadId");
-    expect(transport).toContain("return { ...uploaded, thread_id: threadId };");
   });
 
   it("routes browser drops through browser File owners, not Desktop path staging", () => {
