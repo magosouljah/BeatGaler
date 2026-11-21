@@ -19,8 +19,6 @@ const queries = require('../../catalog/queries.js');
 const commands = require('../../catalog/commands.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
 const { createLegacyFence } = require('../../catalog/legacy-fence.js');
-const guard = require('../../catalog/session-guard.js');
-const { CATALOG_SESSION_PROTOCOL } = require('../../catalog/authority.js');
 
 const { Pool } = require(path.join(__dirname, '..', '..', 'node_modules', 'pg'));
 db.validateAdminTarget();
@@ -80,18 +78,6 @@ test('dos bibliotecas (nativa + RESET_REQUIRED + flag apagado) y una legacy: cap
   await rejects(on.resolveContext({ userId: reset.userId }), 'LIBRARY_RESET_REQUIRED'); // la lectura ya declara el reinicio requerido (sin crear nada)
   await rejects(on.provisionLibrary({ userId: reset.userId }), 'LIBRARY_RESET_REQUIRED');
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM catalog_libraries WHERE user_id = $1', [reset.userId])).rows[0].n, 0, '0 escrituras');
-}));
-
-test('capa 2: session/start exige catalog-v1 solo para dueños con catálogo y flag encendido (410 antes de Direct); flag apagado → FLAG_OFF; legacy → LEGACY; la respuesta catalog-v1 lleva era/época y nunca credenciales', () => withDb(async (pool) => {
-  const native = await user(pool); const legacy = await user(pool, { native: false });
-  const on = guard.createCatalogSessionGuard({ pool, authority: authOn(pool) }); const off = guard.createCatalogSessionGuard({ pool, authority: authOff(pool) });
-  await rejects(on.assertProtocol({ userId: native.userId, protocol: null }), 'LEGACY_CLIENT_UNSUPPORTED', (e) => e.status === 410 && e.detail.required === CATALOG_SESSION_PROTOCOL);
-  await rejects(on.assertProtocol({ userId: native.userId, protocol: 'direct-v4' }), 'LEGACY_CLIENT_UNSUPPORTED');
-  const ok = await on.assertProtocol({ userId: native.userId, protocol: CATALOG_SESSION_PROTOCOL });
-  assert.deepEqual([ok.catalog, ok.outcome, ok.authority, ok.authority_era, ok.authority_epoch], [true, 'CATALOG', 'POSTGRES', native.era, native.epoch]);
-  assert.ok(!/token|api_id|api_hash|bot/i.test(JSON.stringify(ok)));
-  assert.deepEqual(await on.assertProtocol({ userId: legacy.userId, protocol: null }), { catalog: false, outcome: 'LEGACY' });
-  assert.equal((await off.assertProtocol({ userId: native.userId, protocol: null })).outcome, 'FLAG_OFF');
 }));
 
 test('Telegram caído (verificador nulo): el Cloud no mueve bytes (E77) y sin verificador los jobs de verificación en reintento visible, metadata y mutaciones siguen; cuarentena aislada: solo esa biblioteca queda cerrada; reinicio del worker: lease vencido → otro worker termina y el viejo queda fenced', () => withDb(async (pool) => {

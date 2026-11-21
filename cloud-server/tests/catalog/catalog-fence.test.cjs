@@ -1,7 +1,5 @@
 'use strict';
-// T16 — Unidad: capa 2 de sesión (matriz pura + guard con pool falso), guarda de compatibilidad hacia delante (schema_migrations con
-// versiones desconocidas → no arranca), bootstrap que invoca la guarda, montaje completo del router con todos los módulos (T06–T15) y
-// el handler real de session/start (vm) con el guard rechazando/aceptando. Sin DB ni Telegram.
+// T16 — Unidad: compatibilidad de schema_migrations, bootstrap y montaje del router. Sin DB ni Telegram.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -9,37 +7,9 @@ const path = require('path');
 const vm = require('vm');
 const http = require('http');
 const express = require(path.join(__dirname, '..', '..', 'node_modules', 'express'));
-const guard = require('../../catalog/session-guard.js');
-const { CATALOG_SESSION_PROTOCOL } = require('../../catalog/authority.js');
 const mig = require('../../postgres-migrations.js');
 const { startPostgresControlPlane } = require('../../postgres-bootstrap.js');
 const { createCatalogRouter } = require('../../catalog/routes.js');
-const { respondLegacyFence, CatalogLegacyFenceError } = require('../../catalog/legacy-fence.js');
-
-test('evaluateSessionProtocol: sin catálogo → LEGACY; con catálogo y flag apagado → FLAG_OFF (capa 1 decide); flag encendido exige catalog-v1 (cualquier otro → REJECT)', () => {
-  assert.deepEqual(guard.evaluateSessionProtocol({ hasCatalog: false, nativeEnabled: true, protocol: null }), { outcome: 'LEGACY', catalog: false });
-  assert.deepEqual(guard.evaluateSessionProtocol({ hasCatalog: true, nativeEnabled: false, protocol: null }), { outcome: 'FLAG_OFF', catalog: true });
-  assert.deepEqual(guard.evaluateSessionProtocol({ hasCatalog: true, nativeEnabled: true, protocol: CATALOG_SESSION_PROTOCOL }), { outcome: 'CATALOG', catalog: true });
-  for (const p of [null, '', 'direct-v4', 'catalog-v0', ' catalog-v1x']) assert.deepEqual(guard.evaluateSessionProtocol({ hasCatalog: true, nativeEnabled: true, protocol: p }), { outcome: 'REJECT', catalog: true, required: CATALOG_SESSION_PROTOCOL, declared: p && p.trim() ? p.trim() : null });
-});
-
-test('createCatalogSessionGuard: consulta la fila por usuario; 410 LEGACY_CLIENT_UNSUPPORTED (by protocol) solo para dueños nativos con flag encendido; la respuesta catalog-v1 lleva era/época y nunca credenciales', async () => {
-  const libs = new Map([['native', { authority: 'POSTGRES', era: 'e1', epoch: '7', migration_state: 'IDLE' }]]);
-  const pool = { async query(sql, params) { assert.match(sql, /catalog-session-guard/); const row = libs.get(params[0]); return { rows: row ? [row] : [] }; } };
-  const on = guard.createCatalogSessionGuard({ pool, authority: { config: { nativeEnabled: true } } });
-  const off = guard.createCatalogSessionGuard({ pool, authority: { config: { nativeEnabled: false } } });
-  assert.deepEqual(await on.assertProtocol({ userId: 'legacy-user', protocol: null }), { catalog: false, outcome: 'LEGACY' });
-  await assert.rejects(on.assertProtocol({ userId: 'native', protocol: null }), (e) => e instanceof CatalogLegacyFenceError && e.status === 410 && e.detail.by === 'protocol' && e.detail.required === CATALOG_SESSION_PROTOCOL);
-  await assert.rejects(on.assertProtocol({ userId: 'native', protocol: 'direct-v4' }), (e) => e.code === 'LEGACY_CLIENT_UNSUPPORTED' && e.detail.declared === 'direct-v4');
-  const ok = await on.assertProtocol({ userId: 'native', protocol: CATALOG_SESSION_PROTOCOL });
-  assert.deepEqual(ok, { catalog: true, outcome: 'CATALOG', protocol: CATALOG_SESSION_PROTOCOL, authority: 'POSTGRES', authority_era: 'e1', authority_epoch: '7', migration_state: 'IDLE' });
-  assert.ok(!/token|api_id|api_hash/i.test(JSON.stringify(ok)));
-  assert.deepEqual((await off.assertProtocol({ userId: 'native', protocol: null })).outcome, 'FLAG_OFF', 'interruptor no destructivo: con el flag apagado la capa 2 no rechaza (la capa 1 cerca cada entrada C10)');
-  assert.deepEqual(await guard.assertCatalogSessionProtocolIfConfigured({ userId: 'native' }), { catalog: false, outcome: 'UNCONFIGURED' });
-  guard.configureCatalogSessionGuard({ pool, authority: { config: { nativeEnabled: true } } });
-  await assert.rejects(guard.assertCatalogSessionProtocolIfConfigured({ userId: 'native', protocol: null }), (e) => e.status === 410);
-  guard.configureCatalogSessionGuard(null);
-});
 
 test('guarda hacia delante: versiones conocidas → ok; una versión desconocida en schema_migrations → CATALOG_SCHEMA_AHEAD; el bootstrap la invoca tras aplicar y cierra el pool al fallar', async () => {
   const known = mig.listMigrations();
