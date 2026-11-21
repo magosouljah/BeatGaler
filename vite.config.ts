@@ -78,10 +78,25 @@ export default defineConfig(async ({ command, mode }) => ({
   base: mode === "web" || command === "serve" ? "/" : "./",
   clearScreen: false,
   resolve: {
-    alias: {
-      __beatgaler_mtcute_authorization__: requiredCoreFile("network", "authorization.js"),
-      __beatgaler_mtcute_utils__: requiredCoreFile("utils.js"),
-    },
+    alias: [
+      { find: "__beatgaler_mtcute_authorization__", replacement: requiredCoreFile("network", "authorization.js") },
+      { find: "__beatgaler_mtcute_utils__", replacement: requiredCoreFile("utils.js") },
+      ...(mode === "web" ? [{
+        find: /^(?:\.\.?\/)+(?:platform(?:\/index(?:\.ts)?)?|index(?:\.ts)?)$/,
+        replacement: "$&",
+        customResolver(source, importer, options) {
+          // The provider imports ./index; other callers import the directory.
+          const target = importer && path.resolve(path.dirname(importer), source);
+          const platformDir = path.join(root, "src", "platform");
+          const webEntry = target === platformDir || target === path.join(platformDir, "index")
+            || target === path.join(platformDir, "index.ts");
+          return this.resolve(webEntry ? path.join(platformDir, "index.web.ts") : source, importer, {
+            ...options,
+            skipSelf: true,
+          });
+        },
+      }] : []),
+    ],
   },
   optimizeDeps: {
     exclude: ["@mtcute/wasm"],
