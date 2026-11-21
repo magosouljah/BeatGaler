@@ -3,7 +3,7 @@
 // tocan el audio actual; currentBeat fuera del query → primero/último; query vacío no interrumpe), Shuffle sin RNG en cliente con ronda del
 // servidor (sin repetición, retry del mismo comando tras fallo de transporte, play directo consume, ronda completa/repeat, filtros → ronda
 // nueva, revisión → reconstrucción preservando consumidos), fuente arrendada con refcount `player` (la evicción del grid no la libera),
-// evento autoritativo, teardown por cuenta.
+// teardown por cuenta.
 import { describe, expect, it } from "vitest";
 import { createCatalogApi, type CatalogQueryFilters } from "../../src/features/library/catalog/catalogApi";
 import { createCatalogMediaClient } from "../../src/features/library/catalog/catalogMediaClient";
@@ -88,7 +88,7 @@ describe("catalogPlaybackSession (V06)", () => {
     expect(h.session.getSnapshot().status).toBe("playing");
   });
 
-  it("revisión nueva → ronda stale → reconstruida preservando consumidos (ningún repetido entre ambas); play directo consume el miembro; evento autoritativo saca de la cola; teardown libera fuente y ronda", async () => {
+  it("revisión nueva → ronda stale → reconstruida preservando consumidos (ningún repetido entre ambas); play directo consume el miembro; teardown libera fuente y ronda", async () => {
     const h = harness();
     await h.session.setQuery(h.query({ includeTags: ["odd"] })); // 6
     await h.session.setShuffle(true);
@@ -106,9 +106,6 @@ describe("catalogPlaybackSession (V06)", () => {
     await h2.session.play({ beatId: "g4", version: "1", fileId: null });
     const drawn: string[] = []; for (let i = 0; i < 5; i++) drawn.push((await h2.session.next())!.beatId);
     expect(drawn).not.toContain("g4"); expect(new Set(drawn).size).toBe(5);
-    h2.session.enqueue({ beatId: "g6", version: "1", fileId: null });
-    h2.session.onAuthoritativeEvent({ kind: "TRASHED", beatId: "g6" });
-    expect(h2.session.getSnapshot().queue).toEqual([]);
     const roundId = h2.session.getSnapshot().round!.roundId;
     h2.setAccount("acc-2"); await h2.session.teardown();
     expect(h2.session.getSnapshot()).toMatchObject({ current: null, round: null, queue: [], accountId: "acc-2" });

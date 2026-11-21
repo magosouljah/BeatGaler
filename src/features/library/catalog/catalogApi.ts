@@ -69,8 +69,6 @@ export interface CatalogLegacyPage extends CatalogPage {
 }
 export interface CatalogFacet { key: string; label: string; count: number; representativeBeatId: string }
 export interface CatalogFacetsPage { items: CatalogFacet[]; startOrdinal: number; totalFacets: number; nextCursor: string | null; revision: string }
-export interface CatalogChangeEvent { seq: string; revision: string; kind: string; beatId: string | null; version: string | null; operationId: string | null; payload: Record<string, unknown>; at: string }
-export interface CatalogChanges { events: CatalogChangeEvent[]; next: string; hasMore: boolean; latest: string; revision: string; epoch: string; authorityEra: string; generationId: string }
 
 export interface CatalogQueryFilters {
   state: CatalogState;
@@ -159,7 +157,6 @@ export function createCatalogApi(options: CatalogApiOptions = {}) {
       const s = p.toString();
       return request<CatalogFacetsPage>("GET", `/catalog/v1/facets${s ? `?${s}` : ""}`, undefined, signal);
     },
-    changes: (after: string, signal?: AbortSignal) => request<CatalogChanges>("GET", `/catalog/v1/changes?after=${encodeURIComponent(after)}`, undefined, signal),
     // NATIVO r2.1 §3.3: el cliente aprovisiona solo tras un 404, una vez. Ningún otro estado se aprovisiona ni cae a LEGACY.
     async resolveContext(signal?: AbortSignal): Promise<CatalogContextResolution> {
       const classify = (error: unknown): CatalogContextResolution => {

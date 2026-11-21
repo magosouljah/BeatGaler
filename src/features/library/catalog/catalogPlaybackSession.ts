@@ -31,7 +31,6 @@ export interface PlaybackSnapshot {
   status: "idle" | "loading" | "playing" | "paused" | "ended" | "error";
   lastCommand: { kind: string; key: string; retryable: boolean } | null;
   error: string | null;
-  startupRefs: number;
 }
 export interface PlaybackApi {
   startRound(input: { setId: string; currentBeatId: string | null; consumerId: string; fromRoundId?: string | null }): Promise<{ roundId: string; status: string; remaining: number; sequence: string; setId: string }>;
@@ -53,18 +52,15 @@ export interface PlaybackSessionOptions {
   accountId: () => string;
   consumerId?: string;
   idempotencyKey?: () => string;
-  startupRefLimit?: number;
 }
 export const PREVIOUS_SEEK_THRESHOLD = 0.05;
-export const STARTUP_REF_LIMIT = 14;
 const defaultKey = (): string => (globalThis.crypto && "randomUUID" in globalThis.crypto ? globalThis.crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
   const { api } = options;
   const newKey = options.idempotencyKey ?? defaultKey;
   const consumerId = options.consumerId ?? `player-${Math.random().toString(36).slice(2, 10)}`;
-  const startupLimit = options.startupRefLimit ?? STARTUP_REF_LIMIT;
-  let snapshot: PlaybackSnapshot = { accountId: options.accountId(), current: null, source: null, queue: [], repeat: "off", shuffle: false, round: null, query: null, progress: 0, status: "idle", lastCommand: null, error: null, startupRefs: 0 };
+  let snapshot: PlaybackSnapshot = { accountId: options.accountId(), current: null, source: null, queue: [], repeat: "off", shuffle: false, round: null, query: null, progress: 0, status: "idle", lastCommand: null, error: null };
   const listeners = new Set<() => void>();
   const emit = () => { for (const l of listeners) l(); };
   const set = (patch: Partial<PlaybackSnapshot>) => { snapshot = { ...snapshot, ...patch }; emit(); };
@@ -207,16 +203,10 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
     if (filtersChanged && snapshot.round) { const r = snapshot.round; set({ round: null }); pendingNext = null; await api.releaseRound(r.roundId).catch(() => {}); }
     else if (revisionChanged && snapshot.round) set({ round: { ...snapshot.round, stale: true } });
   }
-  function onAuthoritativeEvent(e: { kind: "REPLACED" | "TRASHED" | "DENIED" | "PURGED"; beatId: string }): void {
-    // nunca por evicción: solo eventos del servidor. La cola pierde el beat; el actual se marca para reintento (no se corta el audio en curso).
-    set({ queue: snapshot.queue.filter((t) => t.beatId !== e.beatId) });
-    if (snapshot.current?.beatId === e.beatId && e.kind !== "REPLACED") set({ error: e.kind === "TRASHED" ? "Este beat se movió a la papelera." : "El acceso a este beat fue denegado." });
-  }
-  function noteStartupRef(): boolean { if (snapshot.startupRefs >= startupLimit) return false; set({ startupRefs: snapshot.startupRefs + 1 }); return true; }
   async function teardown(): Promise<void> {
     generation++;
     const r = snapshot.round; const l = lease; lease = null; pendingNext = null;
-    snapshot = { accountId: options.accountId(), current: null, source: null, queue: [], repeat: "off", shuffle: false, round: null, query: null, progress: 0, status: "idle", lastCommand: null, error: null, startupRefs: 0 };
+    snapshot = { accountId: options.accountId(), current: null, source: null, queue: [], repeat: "off", shuffle: false, round: null, query: null, progress: 0, status: "idle", lastCommand: null, error: null };
     emit(); l?.release();
     if (r) await api.releaseRound(r.roundId).catch(() => {});
   }
@@ -225,7 +215,7 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getSnapshot: () => snapshot,
     onEvent(fn: (e: { kind: string; beatId: string | null }) => void) { events.push(fn); return () => { const i = events.indexOf(fn); if (i >= 0) events.splice(i, 1); }; },
-    play, enqueue, dequeue, next, previous, ended, setProgress, setRepeat, setShuffle, setQuery, onAuthoritativeEvent, noteStartupRef, teardown, consumerId,
+    play, enqueue, dequeue, next, previous, ended, setProgress, setRepeat, setShuffle, setQuery, teardown, consumerId,
   });
 }
 export type CatalogPlaybackSession = ReturnType<typeof createCatalogPlaybackSession>;

@@ -1,6 +1,6 @@
 // T13 — Cliente tipado de los comandos /catalog/v1 (CONTRATO C5/C6; T07 `delivered`; r4 §4/§6; api-manifest v5).
 // Solo metadata y estado por HTTP: PATCH, trash/restore por lote ≤50, conjuntos de consulta, selección server-side (token/count/
-// flags, CAS por selectionVersion), operaciones bulk/rename (crear, consultar, cancelar, reanudar) y detalle SQL de un beat.
+// flags, CAS por selectionVersion), operaciones bulk/rename (crear, consultar) y detalle SQL de un beat.
 // Nunca carga INDEX ni toca Telegram; las credenciales son la sesión Cloud existente. Errores estables como CatalogApiError.
 import { CatalogApiError, type CatalogBeatDto, type CatalogSort, type CatalogState } from "./catalogApi";
 import { validateBeatName } from "../../../lib/metadataValidation";
@@ -97,8 +97,6 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
     },
     createQuerySet: async (query: CatalogQuerySetQuery, consumer: Record<string, unknown> = {}, signal?: AbortSignal) => (await request<CatalogQuerySet>("POST", "/catalog/v1/query-sets", { body: { query, consumer }, signal })).body,
     getQuerySet: async (setId: string, signal?: AbortSignal) => (await request<CatalogQuerySet>("GET", `/catalog/v1/query-sets/${enc(setId)}`, { signal })).body,
-    cancelQuerySet: async (setId: string, signal?: AbortSignal) => (await request<CatalogQuerySet>("POST", `/catalog/v1/query-sets/${enc(setId)}/cancel`, { body: {}, signal })).body,
-    releaseQuerySet: async (setId: string, signal?: AbortSignal) => (await request<CatalogQuerySet>("POST", `/catalog/v1/query-sets/${enc(setId)}/release`, { body: {}, signal })).body,
     createSelection: async ({ setId, sort, defaultSelected, consumerId }: { setId: string; sort: CatalogSort; defaultSelected: boolean; consumerId: string }, signal?: AbortSignal) =>
       (await request<CatalogSelection>("POST", "/catalog/v1/selections", { body: { setId, sort, defaultSelected, consumerId }, signal })).body,
     getSelection: async (selectionId: string, beatIds: string[] = [], signal?: AbortSignal) => {
@@ -115,8 +113,6 @@ export function createCatalogCommandsApi(options: CatalogCommandsOptions) {
     },
     getOperation: async (operationId: string, detailsAfter: string | null = null, signal?: AbortSignal) =>
       (await request<CatalogBulkOperation>("GET", `/catalog/v1/operations/${enc(operationId)}${detailsAfter ? `?detailsAfter=${enc(detailsAfter)}` : ""}`, { signal })).body,
-    cancelOperation: async (operationId: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", `/catalog/v1/operations/${enc(operationId)}/cancel`, { body: {}, signal })).body,
-    resumeOperation: async (operationId: string, revision: string, signal?: AbortSignal) => (await request<CatalogBulkOperation>("POST", `/catalog/v1/operations/${enc(operationId)}/resume`, { body: { revision }, signal })).body,
     /** T15: purge durable (C9). 202 = intención aceptada; el estado se observa en GET /operations/:id; nunca es un éxito inmediato. */
     requestPurge: async ({ beatIds = null, idempotencyKey }: { beatIds?: string[] | null; idempotencyKey: string }, signal?: AbortSignal) =>
       (await request<CatalogPurgeOperation>("POST", "/catalog/v1/operations", { body: beatIds ? { kind: "PURGE", beatIds } : { kind: "PURGE", scope: "ALL_TRASH" }, idempotencyKey, signal })).body,
