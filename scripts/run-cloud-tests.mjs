@@ -2,14 +2,17 @@
 // Runner de pruebas del Cloud (cloud-server/tests, nivel superior; el catálogo tiene su arnés scripts/catalog-check.cjs).
 //
 //   node scripts/run-cloud-tests.mjs                 unitarias: *.test.cjs|*.test.mjs|*.runner.cjs, sin DB ni red externa
-//   node scripts/run-cloud-tests.mjs --integration   *.integration.cjs contra un PostgreSQL EFÍMERO explícito
-//                                                    (BEATGALER_CLOUD_TEST_ADMIN_URL, solo loopback; cada archivo en su base nueva)
+//   node scripts/run-cloud-tests.mjs --integration   *.integration.cjs contra un PostgreSQL EFÍMERO verificado:
+//       BEATGALER_CLOUD_TEST_ADMIN_URL        postgres:// en loopback (superusuario de la instancia desechable)
+//       BEATGALER_CLOUD_TEST_INSTANCE_ID      id aleatorio ^bgct-[a-z0-9-]{16,}$ que quien levantó la instancia escribió en
+//                                             bg_test_lab.lab_identity(instance_id) de la base de administración.
+//     Sin ese centinela no se crea ni se toca nada (también con CI=true): una base real nunca lo tiene.
 //   node scripts/run-cloud-tests.mjs --list [--integration]   muestra la selección sin ejecutar
 //
-// Seguridad: cada archivo corre en su propio proceso con un entorno construido por allowlist (nunca hereda credenciales),
-// cwd en la raíz del repo, `dotenv` inerte (helpers/no-dotenv.cjs: hay módulos que cargan cloud-server/.env por ruta explícita),
-// el guard de red del repo precargado (solo loopback), AWS sin configuración y diagnósticos Direct fuera del árbol versionado.
-// `postgres-live.integration.cjs` nunca se ejecuta aquí (usa la DATABASE_URL heredada).
+// Seguridad: un proceso por archivo con entorno por allowlist (nunca hereda credenciales), cwd en la raíz del repo, precargas
+// catalog-net-guard (solo loopback), no-dotenv (dotenv inerte) y pg-port-guard (ningún puerto PostgreSQL salvo la instancia
+// verificada en --integration), AWS sin configuración, diagnósticos Direct fuera del árbol versionado. Se niega si cloud-server/
+// contiene credenciales/estado locales (helpers/local-secret-files.cjs). `postgres-live.integration.cjs` nunca se ejecuta.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -19,8 +22,10 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const testsDir = path.join(root, "cloud-server", "tests");
-const guard = path.join(testsDir, "helpers", "catalog-net-guard.cjs");
-const noDotenv = path.join(testsDir, "helpers", "no-dotenv.cjs");
+const helpers = path.join(testsDir, "helpers");
+const PRELOADS = ["catalog-net-guard.cjs", "no-dotenv.cjs", "pg-port-guard.cjs"].map((f) => path.join(helpers, f));
+const requireHere = createRequire(import.meta.url);
+const { findLocalSecretFiles, REFUSAL_HELP } = requireHere(path.join(helpers, "local-secret-files.cjs"));
 const args = new Set(process.argv.slice(2));
 const integration = args.has("--integration");
 const listOnly = args.has("--list");
@@ -34,6 +39,7 @@ const ADMIN_URL_VARS = ["BEATGALER_STEP1_TEST_ADMIN_URL", "BEATGALER_STEP2_TEST_
 const ENV_ALLOW = ["PATH", "Path", "SystemRoot", "SYSTEMROOT", "windir", "WINDIR", "ComSpec", "COMSPEC", "PATHEXT", "TEMP", "TMP",
   "TMPDIR", "USERPROFILE", "HOME", "LOCALAPPDATA", "APPDATA", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "LANG", "TZ",
   "CI", "GITHUB_ACTIONS"];
+const INSTANCE_ID_RE = /^bgct-[a-z0-9-]{16,}$/;
 
 function select() {
   const files = readdirSync(testsDir).filter((f) => !NEVER.has(f)).sort();
@@ -61,7 +67,7 @@ function baseEnv(extra = {}) {
     ...env,
     NODE_ENV: "test",
     // NODE_OPTIONS trata «\» como escape dentro de comillas: rutas con «/» (válidas también en Windows).
-    NODE_OPTIONS: [guard, noDotenv].map((p) => `--require "${p.split(path.sep).join("/")}"`).join(" "),
+    NODE_OPTIONS: PRELOADS.map((p) => `--require "${p.split(path.sep).join("/")}"`).join(" "),
     CATALOG_NET_POLICY: "loopback",
     DIRECT_DIAGNOSTICS_DIR: path.join(scratch, "diag"),
     AWS_CONFIG_FILE: path.join(scratch, "no-aws-config"),
@@ -84,9 +90,12 @@ function adminTarget() {
   if (!/^postgres(ql)?:$/.test(u.protocol)) fail("BEATGALER_CLOUD_TEST_ADMIN_URL debe ser postgres://.");
   if (!["127.0.0.1", "localhost", "[::1]"].includes(u.hostname)) fail("solo se admite un PostgreSQL efímero en loopback.");
   const port = Number(u.port || 5432);
-  // En una máquina de desarrollo el 5432 es el clúster de trabajo: nunca se usa. En CI el 5432 es el service container desechable.
+  // En una máquina de desarrollo el 5432 es el clúster de trabajo: nunca se usa. En CI el 5432 es el service container desechable
+  // (y aun así el centinela es obligatorio).
   if (port === 5432 && process.env.CI !== "true") fail("el puerto 5432 local es el clúster de desarrollo; usa un clúster efímero propio en otro puerto.");
-  return u;
+  const instanceId = String(process.env.BEATGALER_CLOUD_TEST_INSTANCE_ID || "");
+  if (!INSTANCE_ID_RE.test(instanceId)) fail("--integration requiere BEATGALER_CLOUD_TEST_INSTANCE_ID (^bgct-[a-z0-9-]{16,}$) escrito en el centinela de la instancia efímera.");
+  return { url: u, port, instanceId };
 }
 
 async function withAdmin(adminUrl, fn) {
@@ -95,6 +104,17 @@ async function withAdmin(adminUrl, fn) {
   const client = new Client({ connectionString: adminUrl.toString() });
   await client.connect();
   try { return await fn(client); } finally { await client.end(); }
+}
+
+// Antes de crear nada: la base de administración debe contener EXACTAMENTE el centinela de esta instancia efímera.
+async function verifySentinel(target) {
+  const rows = await withAdmin(target.url, async (c) => {
+    const exists = await c.query("SELECT to_regclass('bg_test_lab.lab_identity') AS t");
+    if (!exists.rows[0].t) return null;
+    return (await c.query("SELECT instance_id FROM bg_test_lab.lab_identity")).rows.map((r) => r.instance_id);
+  });
+  if (!rows) fail("la base de administración no tiene el centinela bg_test_lab.lab_identity: no es una instancia efímera de pruebas.");
+  if (rows.length !== 1 || rows[0] !== target.instanceId) fail("el centinela de la instancia no coincide con BEATGALER_CLOUD_TEST_INSTANCE_ID.");
 }
 
 function runFile(file, env, timeoutMs) {
@@ -108,30 +128,10 @@ function runFile(file, env, timeoutMs) {
   return ok;
 }
 
-// Archivos locales ignorados por git que contienen credenciales o estado real. Varios módulos los leen o escriben por RUTA FIJA
-// junto al código (p. ej. direct-transport-control.js y master-storage.js con master-session.txt; vault-registry.json), así que
-// ninguna variable de entorno los aísla: si existen, los tests no se ejecutan en este checkout.
-const LOCAL_SECRET_FILES = ["master-session.txt", "transport-bots.local.json", "masters.local.json", "vault-registry.json",
-  "accounts-data.json", "cloud-data.json"];
-
-function localSecretFiles() {
-  const dir = path.join(root, "cloud-server");
-  const found = LOCAL_SECRET_FILES.filter((f) => existsSync(path.join(dir, f)));
-  for (const f of readdirSync(dir)) if (/^\.env(\..+)?$/.test(f) && f !== ".env.example") found.push(f);
-  return found;
-}
-
 async function main() {
-  if (existsSync(path.join(root, ".env"))) fail("existe ./.env en la raíz: dotenv lo cargaría en los tests. Muévelo antes de ejecutar.");
-  const secrets = localSecretFiles();
-  if (secrets.length && !listOnly) {
-    fail(`cloud-server/ contiene archivos locales con credenciales o estado real (${secrets.length}; no se leen ni se muestran).\n` +
-      "  Ejecuta las pruebas de Cloud desde un worktree limpio, donde no existen:\n" +
-      "    git worktree add --detach ../BeatGaler-test HEAD\n" +
-      "    (enlazar node_modules y cloud-server/node_modules con junctions; quitarlas con `rmdir` antes de borrar el worktree)\n" +
-      "    cd ../BeatGaler-test && npm run test:cloud");
-  }
-  for (const preload of [guard, noDotenv]) if (!existsSync(preload)) fail(`falta la precarga ${path.relative(root, preload)}`);
+  const secrets = findLocalSecretFiles(root);
+  if (secrets.length && !listOnly) fail(`este checkout contiene archivos locales con credenciales o estado real (${secrets.length}; no se leen ni se muestran).\n${REFUSAL_HELP}`);
+  for (const preload of PRELOADS) if (!existsSync(preload)) fail(`falta la precarga ${path.relative(root, preload)}`);
   const files = select();
   if (listOnly) { console.log(files.join("\n")); return; }
   console.log(`run-cloud-tests: ${files.length} archivos (${integration ? "integración PostgreSQL efímero" : "unitarios"})`);
@@ -139,28 +139,29 @@ async function main() {
   if (!integration) {
     for (const f of files) if (!runFile(f, baseEnv(), 300_000)) failed.push(f);
   } else {
-    const admin = adminTarget();
+    const target = adminTarget();
+    await verifySentinel(target);
     const runId = `${process.pid}_${Date.now().toString(36)}`;
     const created = [];
     const dbFor = {};
+    const pgAllow = `${target.url.hostname}:${target.port}`;
     try {
       for (const [i, f] of files.entries()) {
         let db = SHARES_DB_WITH[f] ? dbFor[SHARES_DB_WITH[f]] : null;
         if (!db) {
           db = `bgct_${runId}_${i}`.toLowerCase();
-          await withAdmin(admin, (c) => c.query(`CREATE DATABASE "${db}"`));
+          await withAdmin(target.url, (c) => c.query(`CREATE DATABASE "${db}"`));
           created.push(db);
         }
         dbFor[f] = db;
-        const adminForTests = new URL(admin); adminForTests.pathname = "/postgres";
-        const dbUrl = new URL(admin); dbUrl.pathname = `/${db}`;
-        const extra = { DATABASE_URL: dbUrl.toString(), BEATGALER_ALLOW_DESTRUCTIVE_PG_TEST: "true" };
-        for (const k of ADMIN_URL_VARS) extra[k] = adminForTests.toString();
+        const dbUrl = new URL(target.url); dbUrl.pathname = `/${db}`;
+        const extra = { DATABASE_URL: dbUrl.toString(), BEATGALER_ALLOW_DESTRUCTIVE_PG_TEST: "true", BEATGALER_TEST_PG_ALLOW: pgAllow };
+        for (const k of ADMIN_URL_VARS) extra[k] = target.url.toString();
         if (!runFile(f, baseEnv(extra), 600_000)) failed.push(f);
       }
     } finally {
       // Solo se borran las bases creadas por esta ejecución.
-      await withAdmin(admin, async (c) => { for (const db of created) await c.query(`DROP DATABASE IF EXISTS "${db}" WITH (FORCE)`).catch(() => {}); }).catch(() => {});
+      await withAdmin(target.url, async (c) => { for (const db of created) await c.query(`DROP DATABASE IF EXISTS "${db}" WITH (FORCE)`).catch(() => {}); }).catch(() => {});
     }
   }
   console.log(`run-cloud-tests: ${files.length - failed.length}/${files.length} PASS${failed.length ? ` · FAIL: ${failed.join(", ")}` : ""}`);

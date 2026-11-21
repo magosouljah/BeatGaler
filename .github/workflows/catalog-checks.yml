@@ -1,4 +1,4 @@
-# T02 — Arnés del catálogo PostgreSQL. Se dispara en push a main (y a la rama LOCAL histórica) cuando cambia el catálogo,
+# T02 — Arnés del catálogo PostgreSQL. Se dispara en push a main o a una rama de revisión `local/**` cuando cambia el catálogo,
 # su arnés o CUALQUIER migración SQL (las suites aplican la cadena completa de migraciones); también por workflow_dispatch.
 # Web y Cloud generales se comprueban en ci.yml.
 # Instancia dedicada: service container desechable, sin puertos publicados al host,
@@ -9,12 +9,12 @@ on:
   push:
     branches:
       - main
-      - local/landing-gallery-unificada
+      - 'local/**'
     paths:
       - .github/workflows/catalog-checks.yml
       - scripts/catalog-check.cjs
       - scripts/catalog-suites.json
-      - cloud-server/tests/helpers/catalog-*
+      - cloud-server/tests/helpers/**
       - cloud-server/tests/catalog-harness/**
       - cloud-server/tests/catalog/**
       - cloud-server/catalog/**
@@ -28,9 +28,6 @@ on:
       - tests/catalog-harness/run-typecheck.mjs
       - cloud-server/server-core.js
       - cloud-server/server.js
-      - cloud-server/library-index-publication.js
-      - cloud-server/vault-index-pointer-store.js
-      - cloud-server/direct-index-pin-authority.js
       - cloud-server/direct-capability-boundary.js
       - cloud-server/postgres-auth-multiprocess-compat.js
       - cloud-server/tests/postgres-schema.test.cjs
@@ -53,7 +50,7 @@ concurrency:
 
 jobs:
   catalog-checks:
-    if: github.repository == 'magosouljah/BeatGaler' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/local/landing-gallery-unificada')
+    if: github.repository == 'magosouljah/BeatGaler' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/local/'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     container:

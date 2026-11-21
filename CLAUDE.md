@@ -38,11 +38,11 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 - Flujos con sesión en producción: **NOT_PROVEN** (no hay cuenta de prueba controlada en producción).
 - Eliminación física en Telegram **deshabilitada a propósito** (`BEATGALER_CATALOG_JOURNAL_DIR` sin configurar).
 - Borrado de cuentas: proceso autorizado, durable y auditable; **no habilitar** sin decisión.
-- **Limpieza de código:** plan propuesto en `BeatGaler-arq`; **ninguna refactorización autorizada** todavía (piloto F1 pendiente de aprobación).
+- **Limpieza de código:** plan en `BeatGaler-arq`. Piloto F1 (transporte HTTP único del catálogo Web) ejecutado y verificado con fakes en la rama de revisión `local/limpieza-preparacion-20261121`; **no fusionado a `main`** ni probado con proveedor real. Siguientes módulos solo con autorización.
 
 ## 5. Git y ramas
 
-- GitHub tiene **solo `main`** (protegida; ramas antiguas archivadas como tags `archive/*`). Producción se despliega **solo desde `main`** con `bash scripts/aws/deploy.sh`.
+- GitHub: `main` (protegida) más ramas de revisión `local/**` publicadas con permiso; ramas antiguas archivadas como tags `archive/*`. Producción se despliega **solo desde `main`** con `bash scripts/aws/deploy.sh`.
 - Trabajar en ramas locales `local/<tema>-<fecha>`. Commits solo cuando se pidan o estén autorizados; **push solo con permiso explícito**.
 - **Prohibido sin autorización expresa:** push/merge a `main`, force-push, rebase, reset, clean, stash, borrar ramas/tags, despliegues.
 - Preflight antes de editar: rama, HEAD, `git status`, diff de alcance. No incluir nunca `Claude outputs/`, imágenes del usuario ni secretos. No tocar `stash@{0}`, `backup/*` ni `archive/*`.
@@ -71,7 +71,9 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 
 - Línea base y comandos aislados: `E:\777\app\BeatGaler-arq\linea-base-20261121\LINEA-BASE.md`. Reutilizarla; repetir solo las suites afectadas por un cambio.
 - `npm test` = `test:web` (typecheck, unit TS, component-dom, integration, `test:node`, `test:regressions:v1`) + `test:cloud` (`scripts/run-cloud-tests.mjs` + catálogo `unit`/`faults`). Sin Rust/Desktop ni guardas de release (`npm run test:regressions` completo las incluye).
-- `scripts/run-cloud-tests.mjs` **se niega** a ejecutarse si `cloud-server/` tiene credenciales/estado locales (hay módulos que los leen por ruta fija): usar un worktree limpio. Integración: `--integration` con `BEATGALER_CLOUD_TEST_ADMIN_URL` de un PG efímero en loopback (nunca el 5432 local). CI: `.github/workflows/ci.yml` (push a `main`) + `catalog-checks.yml`.
+- `scripts/run-cloud-tests.mjs` y `scripts/catalog-check.cjs` **se niegan** a ejecutarse si el checkout tiene credenciales/estado locales (hay módulos que los leen por ruta fija): usar un worktree limpio. Ambos dejan `dotenv` inerte y precargan el guard de red; el runner de Cloud bloquea además todo puerto PostgreSQL salvo la instancia verificada.
+- Integración Cloud: `--integration` exige `BEATGALER_CLOUD_TEST_ADMIN_URL` (PG efímero en loopback, nunca el 5432 local) **y** `BEATGALER_CLOUD_TEST_INSTANCE_ID` igual al centinela `bg_test_lab.lab_identity` de esa instancia; sin centinela no toca nada, también con `CI=true`.
+- CI: `.github/workflows/ci.yml` (Web + Cloud) y `catalog-checks.yml` (catálogo con PG efímero) en push a `main` y a ramas `local/**`.
 - Catálogo: `node scripts/catalog-check.cjs unit|faults|T08|T11|T13` (local, sin DB). Las suites con `catalog-test-db` solo corren en CI (`catalog-checks`, descriptor fail-closed); no parchear el descriptor.
 - Distinguir pruebas de comportamiento de las que solo inspeccionan texto fuente; las segundas no protegen una refactorización.
 - Lo verificado en código ≠ verificado en funcionamiento; un PASS con fakes ≠ evidencia de proveedor real.

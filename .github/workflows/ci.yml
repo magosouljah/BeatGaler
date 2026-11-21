@@ -1,13 +1,14 @@
-# CI de V1 en `main`: Web y Cloud se comprueban en cada push que cambie código, pruebas, scripts o migraciones SQL.
-# El catálogo PostgreSQL (suites con su descriptor y PG efímero) sigue en catalog-checks.yml; aquí no se repite.
+# CI de V1: Web y Cloud se comprueban en cada push a `main` o a una rama de revisión `local/**` que cambie código, pruebas,
+# scripts o migraciones SQL. El catálogo PostgreSQL (suites con su descriptor y PG efímero) sigue en catalog-checks.yml.
 # Los workflows de pull_request existentes no se tocan (pueden ser checks requeridos de la protección de main).
-# Sin secretos, AWS, Telegram ni producción: PostgreSQL es un service container desechable sin datos.
+# Sin secretos, AWS, Telegram ni producción: PostgreSQL es un service container desechable sin datos, con centinela.
 name: CI V1 - Web y Cloud
 
 on:
   push:
     branches:
       - main
+      - 'local/**'
     paths:
       - 'src/**'
       - 'tests/**'
@@ -84,6 +85,20 @@ jobs:
         run: npm ci --prefix cloud-server --ignore-scripts --no-audit --no-fund
       - name: Cloud unitarias (scripts/run-cloud-tests.mjs)
         run: node scripts/run-cloud-tests.mjs
+      - name: Centinela de la instancia PostgreSQL efímera
+        env:
+          BEATGALER_CLOUD_TEST_ADMIN_URL: postgres://bg_ci_admin:bg-ci-ephemeral@127.0.0.1:5432/postgres
+        run: |
+          id="bgct-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(node -e "process.stdout.write(require('crypto').randomBytes(16).toString('hex'))")"
+          echo "BEATGALER_CLOUD_TEST_INSTANCE_ID=$id" >> "$GITHUB_ENV"
+          BEATGALER_CLOUD_TEST_INSTANCE_ID="$id" node -e "
+            const { Client } = require('./cloud-server/node_modules/pg');
+            const c = new Client({ connectionString: process.env.BEATGALER_CLOUD_TEST_ADMIN_URL });
+            (async () => { await c.connect();
+              await c.query('CREATE SCHEMA bg_test_lab');
+              await c.query('CREATE TABLE bg_test_lab.lab_identity(instance_id text PRIMARY KEY)');
+              await c.query('INSERT INTO bg_test_lab.lab_identity VALUES (\$1)', [process.env.BEATGALER_CLOUD_TEST_INSTANCE_ID]);
+              await c.end(); console.log('sentinel ok'); })().catch((e) => { console.error(e.message); process.exit(1); });"
       - name: Cloud integración PostgreSQL efímero
         env:
           BEATGALER_CLOUD_TEST_ADMIN_URL: postgres://bg_ci_admin:bg-ci-ephemeral@127.0.0.1:5432/postgres

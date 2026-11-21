@@ -14,6 +14,9 @@ const { spawn, execFileSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..');
 const GUARD = path.join(REPO, 'cloud-server', 'tests', 'helpers', 'catalog-net-guard.cjs');
+// dotenv inerte en cada hijo: hay módulos que cargan cloud-server/.env por ruta explícita al importarse.
+const NO_DOTENV = path.join(REPO, 'cloud-server', 'tests', 'helpers', 'no-dotenv.cjs');
+const { findLocalSecretFiles, REFUSAL_HELP } = require(path.join(REPO, 'cloud-server', 'tests', 'helpers', 'local-secret-files.cjs'));
 const EXIT = { PASS: 0, FAIL: 1, USAGE: 2, PREREQ: 3, PENDING: 4, MANIFEST: 5 };
 
 // Variables de sistema que necesita un proceso Node/Chrome; ninguna es credencial.
@@ -145,7 +148,7 @@ function runCase(c, suite, ctx) {
     const policy = c.network || (suite.network === 'descriptor' ? ctx.prereq.netPolicy : suite.network) || 'deny';
     const env = buildChildEnv(process.env, suite, {
       CATALOG_NET_POLICY: policy, CATALOG_NET_REPORT: netFile, CATALOG_CHECK_RUN_ID: ctx.runId, CATALOG_CHECK_CASE_DIR: caseDir,
-      NODE_OPTIONS: `--require=${GUARD}`,
+      NODE_OPTIONS: `--require=${GUARD} --require=${NO_DOTENV}`,
     });
     const args = c.cmd.slice(1);
     const started = Date.now();
@@ -206,6 +209,12 @@ async function main(argv) {
   const outDir = path.resolve(args.outDir || path.join(REPO, 'tmp', 'catalog-check', `${args.suite}-${runId}`));
   fs.mkdirSync(path.join(outDir, 'logs'), { recursive: true });
   const ctx = { runId, outDir, prereq: {} };
+  // Credenciales/estado locales junto al código (leídos por ruta fija por módulos del Cloud): no se ejecuta nada en este checkout.
+  const localSecrets = findLocalSecretFiles(REPO);
+  if (localSecrets.length) {
+    process.stderr.write(`catalog-check: este checkout contiene archivos locales con credenciales o estado real (${localSecrets.length}; no se leen ni se muestran).\n${REFUSAL_HELP}\n`);
+    return EXIT.PREREQ;
+  }
   const childProbe = buildChildEnv(process.env, { requires: [] }, {});
   const d = droppedNames(process.env, childProbe);
   const summary = { schema: 'beatgaler.catalog-check-summary', version: 1, run_id: runId, suite: args.suite, started_at: new Date().toISOString(), head: gitHead(), node: process.version, platform: process.platform, manifest: path.relative(REPO, args.manifest), env: { dropped_count: d.count, sensitive_dropped: d.sensitive }, cases: [], totals: { executed: 0, failed: 0, skipped: 0 } };
