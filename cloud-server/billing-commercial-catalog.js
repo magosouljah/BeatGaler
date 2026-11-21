@@ -4,7 +4,7 @@
 // Pure configuration/domain module only: it does not call a billing provider,
 // mutate subscriptions, grant access, or touch transport/runtime wiring.
 
-const { BILLING_V1_ACCESS_CATALOG } = require('./billing-access-resolver');
+const { BILLING_V1_ACCESS_CATALOG } = require('./plan-definitions');
 
 const BILLING_CURRENCY = 'usd';
 const BILLING_PROVIDER = 'polar';
