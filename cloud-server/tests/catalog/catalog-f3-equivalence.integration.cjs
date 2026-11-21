@@ -220,3 +220,102 @@ test('F3-EQ-06 · PATCH idéntico es no-op y REPLACE con MASTER nuevo suma versi
   assert.deepEqual(currentMaster, [{ file_id: replaced.installed[0].fileId, size: '2000' }]);
   assert.notEqual(currentMaster[0].file_id, imported.installed[0].fileId);
 }));
+
+test('F3-EQ-08 · REPLACE con metadata omitida o nula solo cambia medios e historial', () => withDb(async (pool) => {
+  const lib = await nativeLibrary(pool);
+  const ops = mkOperations(pool);
+  const metadata = { name: 'Árbol', bpm: '95', key: 'F', tags: ['trap', 'dark'], rating: 3 };
+  const { beatId } = await commitTransfer(ops, lib, { kind: 'IMPORT', parts: [master()], metadata }, 5000);
+  const projection = await beatProjection(pool, lib, beatId);
+  const tags = await tagProjections(pool, lib, beatId);
+  assert.equal(projection.search_text, ['árbol', 'f', '95', 'trap', 'dark'].join('\u001f'));
+  assert.deepEqual(tags.tags.map((row) => row.label), metadata.tags);
+  assert.equal(tags.groups.length, 2);
+  assert.equal(tags.facets.length, 2);
+
+  for (const [i, fields] of [{}, { metadata: null }].entries()) {
+    const label = i === 0 ? 'metadata omitida' : 'metadata nula';
+    const before = await beatHistory(pool, lib, beatId);
+    const replaced = await commitTransfer(ops, lib, {
+      kind: 'REPLACE', beatId, expectedVersion: before.version, parts: [master(2000 + i)], ...fields,
+    }, 6000 + i);
+
+    assert.deepEqual(await beatProjection(pool, lib, beatId), projection, label);
+    assert.deepEqual(await tagProjections(pool, lib, beatId), tags, label);
+    const version = String(BigInt(before.version) + 1n);
+    const revision = String(BigInt(before.revision) + 1n);
+    const eventSeq = String(BigInt(before.events.at(-1).seq) + 1n);
+    assert.deepEqual([replaced.version, replaced.revision, replaced.eventSeq], [version, revision, eventSeq], label);
+    assert.deepEqual(await beatHistory(pool, lib, beatId), {
+      version, revision, events: [...before.events, { seq: eventSeq, kind: 'BEAT_PATCHED', beat_id: beatId, version, revision }],
+    }, label);
+  }
+}));
+
+test('F3-EQ-09 · REPLACE rechaza metadata vacía con 400 y admite null y omisión', () => withDb(async (pool) => {
+  const lib = await nativeLibrary(pool);
+  const ops = mkOperations(pool);
+  const hdr = { userId: lib.userId, era: lib.era, epoch: lib.epoch };
+  const { beatId, version } = await commitTransfer(ops, lib,
+    { kind: 'IMPORT', parts: [master()], metadata: { name: 'Base' } }, 5000);
+  const intent = { kind: 'REPLACE', beatId, expectedVersion: version, parts: [master(2000)] };
+
+  await assert.rejects(ops.createOperation({ ...hdr, idempotencyKey: key(), intent: { ...intent, metadata: {} } }), {
+    code: 'INPUT_INVALID', status: 400, detail: { reason: 'METADATA', errors: [{ field: '$', reason: 'patch has no fields' }] },
+  });
+  for (const fields of [{ metadata: null }, {}]) {
+    const op = await ops.createOperation({ ...hdr, idempotencyKey: key(), intent: { ...intent, ...fields } });
+    assert.equal(op.status, 'PREPARED');
+    assert.equal(op.intent.metadata, null);
+  }
+}));
+
+test('F3-EQ-12 · PATCH obsoleto se rechaza y REPLACE obsoleto persiste el conflicto', () => withDb(async (pool) => {
+  const lib = await nativeLibrary(pool);
+  const ops = mkOperations(pool);
+  const cmd = mkCommands(pool);
+  const hdr = { userId: lib.userId, era: lib.era, epoch: lib.epoch };
+  const imported = await commitTransfer(ops, lib,
+    { kind: 'IMPORT', parts: [master()], metadata: { name: 'Base', tags: ['trap'] } }, 5000);
+  const { beatId, version: expectedVersion } = imported;
+  const op = await ops.createOperation({ ...hdr, idempotencyKey: key(), intent: {
+    kind: 'REPLACE', beatId, expectedVersion, parts: [master(2000)], metadata: { tags: ['dark'] },
+  } });
+  await transfer(ops, hdr, op, { messageBase: 6000 });
+
+  const winningPatch = await cmd.patchBeat({ ...hdr, beatId, idempotencyKey: key(), expectedVersion, patch: { rating: 3 } });
+  const currentVersion = winningPatch.beat.version;
+  assert.equal(currentVersion, String(BigInt(expectedVersion) + 1n));
+
+  const beatKey = [lib.userId, lib.generationId, beatId];
+  const snapshot = async () => ({
+    beat: (await pool.query(`SELECT to_jsonb(b) AS beat FROM catalog_beats b
+      WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3`, beatKey)).rows[0].beat,
+    links: (await pool.query(`SELECT slot_key, file_id FROM catalog_current_files
+      WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 ORDER BY slot_key`, beatKey)).rows,
+    tags: await tagProjections(pool, lib, beatId),
+    history: await beatHistory(pool, lib, beatId),
+  });
+  const before = await snapshot();
+  assert.deepEqual(before.links, [{ slot_key: 'MASTER', file_id: imported.installed[0].fileId }]);
+
+  const versionConflict = { code: 'VERSION_CONFLICT', status: 409,
+    detail: { current_version: currentVersion, expected_version: expectedVersion } };
+  await assert.rejects(cmd.patchBeat({ ...hdr, beatId, idempotencyKey: key(), expectedVersion, patch: { rating: 1 } }), versionConflict);
+  assert.deepEqual(await snapshot(), before, 'PATCH obsoleto');
+
+  const transferArgs = { ...hdr, operationId: op.operationId };
+  assert.equal((await ops.getOperation(transferArgs)).status, 'READY');
+  await assert.rejects(ops.commitOperation(transferArgs), { ...versionConflict, commit: true });
+  const conflict = await ops.getOperation(transferArgs);
+  assert.equal(conflict.status, 'CONFLICT');
+  assert.equal(conflict.lastError, 'VERSION_CONFLICT');
+  assert.equal(conflict.result, null);
+  assert.deepEqual(await snapshot(), before, 'REPLACE en conflicto');
+
+  await assert.rejects(ops.commitOperation(transferArgs), {
+    code: 'OPERATION_TRANSITION_INVALID', status: 409, detail: { status: 'CONFLICT' },
+  });
+  assert.deepEqual(await ops.getOperation(transferArgs), conflict);
+  assert.deepEqual(await snapshot(), before, 'reintento del mismo REPLACE');
+}));
