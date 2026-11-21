@@ -1,4 +1,4 @@
-import GalleryChrome from "../features/design/GALLERY/GalleryChrome";
+import GalleryChrome, { type GalleryChromeScope } from "../features/design/GALLERY/GalleryChrome";
 import { BeatTagPeekLayer, useBeatTagPeek } from "../features/design/shared/BeatTagPeek";
 import AddBeatModal from "../components/AddBeatModal";
 import { PlusIcon, Artwork } from "../components/ui";
@@ -135,7 +135,7 @@ export default function AppShell({ scope }: { scope: Record<string, any> }) {
           ))}
         </div>
       )}
-      {web ? <GalleryChrome scope={scope} /> : <>
+      {web ? <GalleryChrome scope={scope as GalleryChromeScope} /> : <>
       {/* Top bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 24px", height: 50, flexShrink: 0, borderBottom: "1px solid #111" }}>
         <span style={{ fontWeight: 400, fontSize: 14, color: "#aaa", letterSpacing: 0.3 }}>beat galer</span>
