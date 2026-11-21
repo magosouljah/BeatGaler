@@ -151,6 +151,16 @@
           "kind": "node-test"
         },
         {
+          "id": "c04-tag-normalization",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-tag-normalization.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
           "id": "t07-catalog-commands",
           "cmd": [
             "node",
