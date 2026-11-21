@@ -88,3 +88,8 @@ cloud-server/transport-pool-state*.tmp*
 # Automated test build output
 .unit-build/
 .billing-e2e/
+
+# Artefactos de ejecuciones locales (no versionar)
+/*.log
+cloud-server/restart-*.json
+PHASE-*.txt
