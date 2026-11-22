@@ -334,3 +334,130 @@ export function createBeatEditor(deps: DrawerSaveDeps & { mutations: Pick<Catalo
     },
   };
 }
+
+type EditEffects = { refresh?: boolean; finishBusy?: boolean; complete?: boolean; forgetArtwork?: boolean; throw?: boolean };
+const editEffects = {
+  audio: {
+    success: { finishBusy: true, complete: true, refresh: true },
+    pending: { finishBusy: true },
+    rejected: { finishBusy: true },
+    "not-started": {},
+  },
+  artwork: {
+    success: { finishBusy: true, complete: true, refresh: true },
+    pending: { finishBusy: true },
+    rejected: { finishBusy: true },
+    "not-started": { finishBusy: true },
+  },
+  drawer: {
+    success: { refresh: true, forgetArtwork: true },
+    pending: { refresh: true, throw: true },
+    rejected: { throw: true },
+    "not-started": { throw: true },
+  },
+  manual: {
+    success: { refresh: true },
+    pending: { throw: true },
+    rejected: { throw: true },
+    "not-started": { throw: true },
+  },
+  trash: {
+    success: { refresh: true },
+    pending: {},
+    rejected: {},
+    "not-started": {},
+  },
+} satisfies Record<string, Record<EditResult["reading"], EditEffects>>;
+
+function effectsFor(intent: keyof typeof editEffects, result: EditResult): EditEffects {
+  const effects: EditEffects = editEffects[intent][result.reading];
+  if (intent === "drawer" && (result.reading === "rejected" || result.reading === "pending") && result.partial) {
+    return { ...effects, refresh: true, forgetArtwork: true };
+  }
+  if (intent === "trash" && result.reading === "rejected" && (result.why === "conflict" || result.partial)) {
+    return { ...effects, refresh: true };
+  }
+  return effects;
+}
+interface GalleryBeatEditorPorts {
+  mutations: DrawerPort & Pick<CatalogMutations, "trashBeats" | "listBeatFiles">;
+  media: { downloadFile(fileId: string): Promise<{ blob: Blob }> };
+  knownDto: DrawerSaveDeps["knownDto"];
+  errorMessage: DrawerSaveDeps["errorMessage"];
+  refreshAfterMutation(): void;
+  setNotice(value: string | null): void;
+  confirm: AudioEditOptions["confirm"];
+  setBusy(beatId: string, busy: boolean, complete?: boolean): void;
+  playingId: string | null;
+  releaseFile(): void;
+  forgetArtworkOf(beatId: string): void;
+}
+
+export function createGalleryBeatEditor({
+  mutations, media, knownDto, errorMessage, refreshAfterMutation, setNotice, confirm, setBusy,
+  playingId, releaseFile, forgetArtworkOf,
+}: GalleryBeatEditorPorts) {
+  const editor = createBeatEditor({
+    mutations, knownDto, errorMessage,
+    async loadProject(beatId) {
+      const files = await mutations.listBeatFiles(beatId);
+      const project = files.find((file) => file.role === "PROJECT" && file.current);
+      if (!project) return null;
+      const { blob } = await media.downloadFile(project.fileId);
+      return new File([blob], project.filename || "project.zip", { type: "application/zip" });
+    },
+  });
+
+  async function commitDrawerCloudMutation(updated: Beat) {
+    const result = await editor.saveDrawer({ mode: "manual", updated });
+    const effects = effectsFor("manual", result);
+    if (effects.throw && result.reading !== "success") throw drawerEditError(result, true);
+    if (effects.refresh) refreshAfterMutation();
+  }
+
+  function deleteBeat(beat: Beat) {
+    const dto = knownDto(beat.id);
+    if (!dto) return;
+    if (playingId === beat.id) releaseFile();
+    void editor.trash([{ beatId: dto.id, expectedVersion: dto.version }]).then((result) => {
+      if (result.reading === "rejected" && !result.partial) setNotice(result.message);
+      if (effectsFor("trash", result).refresh) refreshAfterMutation();
+    }).catch((error) => setNotice(errorText(error)));
+  }
+
+  async function saveDrawerToCatalog(input: DrawerSaveInput) {
+    const result = await editor.saveDrawer(input);
+    const effects = effectsFor("drawer", result);
+    if (effects.forgetArtwork && (result.reading !== "success" || result.artworkRemoved)) forgetArtworkOf(input.updated.id);
+    if (effects.refresh) refreshAfterMutation();
+    if (effects.throw && result.reading !== "success") throw drawerEditError(result);
+  }
+
+  async function replaceAudioByDrop(beatId: string, file: File) {
+    const result = await editor.replaceAudio(beatId, file, {
+      confirm, onStart: () => setBusy(beatId, true),
+      onProgress: (t) => setNotice(`Reemplazando audio: ${t}`),
+    });
+    const effects = effectsFor("audio", result);
+    if (effects.finishBusy) setBusy(beatId, false, effects.complete);
+    if (result.reading === "success") setNotice(result.message ?? null);
+    else if (result.reading === "not-started") setNotice(result.why === "unsupported" ? "Solo se pueden soltar archivos MP3 o WAV." : null);
+    else setNotice(`No se pudo reemplazar el audio: ${result.message}`);
+    if (effects.refresh) refreshAfterMutation();
+  }
+
+  async function replaceArtworkByDrop(beatId: string, sources: ArtworkDropSource[] | Promise<ArtworkDropSource[]>) {
+    setBusy(beatId, true);
+    let effects: EditEffects = editEffects.artwork.rejected;
+    try {
+      const result = await editor.replaceArtwork(beatId, sources);
+      effects = effectsFor("artwork", result);
+      if (result.reading === "success") setNotice(result.message ?? null);
+      else if (result.reading !== "not-started") setNotice(`No se pudo cambiar la portada: ${result.message}`);
+      if (effects.refresh) refreshAfterMutation();
+    } catch (e) { setNotice(`No se pudo cambiar la portada: ${String((e as { message?: unknown })?.message ?? e)}`); }
+    finally { if (effects.finishBusy) setBusy(beatId, false, effects.complete === true); }
+  }
+
+  return { commitDrawerCloudMutation, deleteBeat, saveDrawerToCatalog, replaceAudioByDrop, replaceArtworkByDrop };
+}

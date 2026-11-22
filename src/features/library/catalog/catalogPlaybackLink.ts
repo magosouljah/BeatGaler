@@ -1,3 +1,5 @@
+import type { Beat } from "../../../types";
+import type { CatalogBeatDto } from "./catalogApi";
 import type { AudioState } from "../../../hooks/useAudio";
 import type { CatalogPlaybackSession } from "./catalogPlaybackSession";
 
@@ -54,6 +56,48 @@ export function linkPlayback(
     },
     dispose() {
       unsubscribe();
+    },
+  };
+}
+
+
+export function reportPlaybackFailure(setNotice: (text: string) => void, action: string, error: unknown): void {
+  const { code, message } = (error as { code?: unknown; message?: unknown }) ?? {};
+  setNotice(`${action}: ${code ? `${String(code)} — ` : ""}${String(message ?? error)}`);
+}
+
+export function createGalleryPlaybackCommands({ session, knownDto, playingId, togglePause, setNotice }: {
+  session: CatalogPlaybackSession;
+  knownDto(id: string): CatalogBeatDto | undefined;
+  playingId: string | null;
+  togglePause(): void;
+  setNotice(text: string): void;
+}) {
+  function targetOf({ id }: Beat) {
+    const dto = knownDto(id);
+    return { beatId: id, version: dto?.version ?? null, fileId: dto?.playback?.fileId ?? null };
+  }
+  const onFailure = (action: string) => (error: unknown) => reportPlaybackFailure(setNotice, action, error);
+  const onPlayFailure = onFailure("No se pudo reproducir el beat");
+
+  return {
+    handlePlay(beat: Beat) {
+      if (playingId === beat.id) { togglePause(); return; }
+      void session.play(targetOf(beat)).catch(onPlayFailure);
+    },
+    addToQueue(beat: Beat) { session.enqueue(targetOf(beat)); },
+    handleNext() { void session.next().catch(onFailure("No se pudo pasar al siguiente beat")); },
+    handlePrev() { void session.previous().catch(onFailure("No se pudo volver al beat anterior")); },
+    toggleShuffle() { void session.setShuffle(!session.getSnapshot().shuffle); },
+    cycleRepeat() {
+      const { repeat } = session.getSnapshot();
+      session.setRepeat(repeat === "off" ? "all" : repeat === "all" ? "one" : "off");
+    },
+    playQueueIndex(index: number) {
+      const target = session.getSnapshot().queue[index];
+      if (!target) return;
+      session.dequeue(target.beatId);
+      void session.play(target).catch(onPlayFailure);
     },
   };
 }

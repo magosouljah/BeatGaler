@@ -1,3 +1,4 @@
+import type { Beat } from "../../../types";
 // T13 / V07-A — InteractionStore por cuenta (plan B §3; r4 §4 y §6; MATRIZ-V V07 §11–§12; RV4).
 // Selección GLOBAL server-side: el navegador guarda solo token (selectionId), selectionVersion (CAS), count y flags de los DTO residentes;
 // nunca un Set creciente de IDs. Select All = conjunto READY del query/revisión + defaultSelected=true; individual = default=false +
@@ -264,3 +265,64 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
 }
 export type CatalogInteractionStore = ReturnType<typeof createCatalogInteractionStore>;
 export function useCatalogInteraction(store: CatalogInteractionStore): InteractionSnapshot { return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot); }
+
+export const BULK_TAGS_MODE_NOTICE = "En el catálogo, «añadir» o «quitar» tags en lote aún no está disponible: usa «reemplazar».";
+
+export function createGallerySelection({ store: interactionStore, query, ordinalOf, setSelectMode, setNotice, refreshAfterMutation }: {
+  store: Pick<CatalogInteractionStore, "toggle" | "getSnapshot" | "clearSelection" | "selectAll" | "startBulk" | "confirmRename" | "closeRename">;
+  query: InteractionQuery;
+  ordinalOf(beatId: string): number | undefined;
+  setSelectMode(value: boolean): void;
+  setNotice(value: string | null): void;
+  refreshAfterMutation(): void;
+}) {
+  function toggleSelection(beat: Beat | null, shiftKey: boolean) {
+    if (!beat) { setSelectMode(true); return; }
+    void interactionStore.toggle(beat.id, { shiftKey, ordinal: ordinalOf(beat.id) ?? null, query }).catch(() => {});
+  }
+  function toggleSelectAll() {
+    const { status, defaultSelected } = interactionStore.getSnapshot().selection;
+    if (status === "active" && defaultSelected) void interactionStore.clearSelection();
+    else void interactionStore.selectAll(query).catch(() => {});
+  }
+  function clearSelection() { void interactionStore.clearSelection(); }
+  function finishSelection() { setSelectMode(false); void interactionStore.clearSelection(); }
+  function applyBulkUpdate(updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) {
+    // r4 T16/V09: "añadir"/"quitar" tags en lote es BULK_PATCH con tagsOp (add/remove), nunca un reemplazo del set; "reemplazar"
+    // sigue siendo un patch.tags normal (ya validado por el servidor, un solo lote con reporte).
+    const tagsMode = updates.tags && options?.tagsMode ? options.tagsMode : null;
+    if (tagsMode && tagsMode !== "add" && tagsMode !== "remove" && tagsMode !== "replace") { setNotice(BULK_TAGS_MODE_NOTICE); return; }
+    const patch: CatalogMetadataPatch = {};
+    if (updates.bpm !== undefined) patch.bpm = updates.bpm;
+    if (updates.key !== undefined) patch.key = updates.key;
+    if (updates.rating !== undefined) patch.rating = updates.rating;
+    if (updates.color !== undefined) patch.color = updates.color;
+    if (updates.color2 !== undefined) patch.color2 = updates.color2;
+    if (updates.tags && tagsMode === "replace") patch.tags = [...updates.tags];
+    const tagsOp = updates.tags && (tagsMode === "add" || tagsMode === "remove") ? { op: tagsMode, tags: [...updates.tags] } : undefined;
+    void interactionStore.startBulk("BULK_PATCH", patch, tagsOp).then((r) => {
+      setNotice(`Edición en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`);
+      setSelectMode(false);
+      refreshAfterMutation();
+    }).catch((e) => setNotice(String(e?.message ?? e)));
+  }
+  function handleRemoveBulk() {
+    void interactionStore.startBulk("BULK_TRASH").then((r) => {
+      setNotice(`Papelera en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`);
+      setSelectMode(false);
+      refreshAfterMutation();
+    }).catch((e) => setNotice(String(e?.message ?? e)));
+  }
+
+  function confirmTagRename() {
+    void interactionStore.confirmRename().then((final) => {
+      if (final) {
+        setNotice(final.report.completed ? `Tag renombrado: ${final.report.confirmed} beats.` : interactionStore.getSnapshot().rename?.error ?? null);
+        if (final.report.completed) interactionStore.closeRename();
+      }
+      refreshAfterMutation();
+    });
+  }
+
+  return { toggleSelection, toggleSelectAll, clearSelection, finishSelection, applyBulkUpdate, handleRemoveBulk, confirmTagRename };
+}

@@ -42,10 +42,19 @@ Dependencias: `routes` → módulos de dominio → `authority`/`contract`. Ning�
 | --- | --- |
 | Composición | `catalogComposition` (flag `VITE_CATALOG_API_ENABLED`), `LibraryCompositionGate`, `catalogLibraryProvider` (crea `CatalogServices`). |
 | Datos | `catalogApi`/`catalogCommandsApi` (HTTP), `catalogQueryStore` (bloques residentes, sin cargar la biblioteca entera), `catalogFirstBlockCache`, `catalogInteractionStore` (selección, edición, bulk). |
-| Gallery | `CatalogAppShell` (pantalla), `useCatalogGalleryScope` (estado de la pantalla: búsqueda, revisión/subidas, descargas, avisos), `CatalogVirtualGallery` + `useCatalogVirtualRows` + `catalogRowGeometry` (rejilla virtual; `leadCards` = tarjetas de subida en curso). |
-| Mutaciones y archivos | `catalogMutations` (PATCH/import/replace/purga), `catalogTransfer` (C7 por partes), `catalogFilePrep`, `catalogImportPlan`, `catalogDrawerSave`, `catalogAudioReplace`, `catalogArtworkReplace`, `catalogProjectMerge`, `catalogDropKinds`/`catalogDropRouting`/`useCatalogFileDrop`, `catalogUploadProgress`, `catalogDownloads` (ID3 al descargar). |
+| Sesiones de Gallery | `catalogQuerySession` (navegación, búsqueda diferida, facetas e invalidación tras mutaciones), `catalogImportSession` (revisión, progreso, provisionales y operaciones pendientes), `catalogPlaybackLink` (enlace entre la sesión de reproducción y `useAudio`, comandos de Playbar y cola). |
+| Gallery | `CatalogAppShell` (pantalla), `useCatalogGalleryScope` (composición, suscripciones y estado de vista), `catalogGalleryCards` (DTO conocidos acotados, ordinales y portadas perezosas), `CatalogVirtualGallery` + `useCatalogVirtualRows` + `catalogRowGeometry` (rejilla virtual; `leadCards` = tarjetas de subida en curso). |
+| Mutaciones y archivos | `catalogMutations` (PATCH/import/replace/purga), `catalogTransfer` (C7 por partes), `catalogFilePrep`, `catalogImportPlan`, `catalogBeatEditor` (guardado, reemplazo y papelera), `catalogProjectMerge`, `catalogDropKinds`/`catalogDropRouting`/`useCatalogFileDrop`, `catalogUploadProgress`, `catalogDownloads` (ID3 al descargar). |
 | Direct B y medios | `catalogDirectCore`/`catalogDirectPort`/`catalogDirectTypes` (Worker MTProto; reanudable), `catalogLabDirectPort` (doble del LAB), `catalogMediaClient`, `catalogPrefixCache`, `catalogArtworkCache`, `catalogMainPack`, `catalogStreamSource` (MSE), `catalogLocalCaches` (Settings). |
 | Reproducción y papelera | `catalogPlaybackSession`, `catalogPlaybackSets`, `catalogTrashSource`. |
+
+### Editar un beat
+
+`Drawer` → `CatalogAppShell` → `useCatalogGalleryScope` → `catalogBeatEditor`. El editor decide entre PATCH de metadatos y REPLACE de archivos según la intención. Al quitar la portada, confirma primero el PATCH y usa la versión confirmada para guardar los archivos pendientes. Para fusionar un archivo DAW, lee el PROJECT vigente por el cliente de medios. `catalogMutations` ejecuta el comando versionado. `catalogQuerySession` refresca Gallery y facetas según el resultado de la edición.
+
+### Subir un beat
+
+`AddBeatModal` → `CatalogAppShell` → `catalogImportSession`. La sesión administra revisión, resolución de archivos, progreso y tarjetas provisionales. Tras confirmar la revisión llama a `catalogMutations.importBeat` → `catalogTransfer`. Direct B envía los archivos del navegador a Telegram. Cloud recibe los recibos y registra la operación. El worker verifica y confirma el catálogo en PostgreSQL. La sesión refresca Gallery y retira la provisional cuando el beat real está en el bloque residente.
 
 ## Legacy que permanece (temporal)
 
