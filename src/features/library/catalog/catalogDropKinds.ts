@@ -4,6 +4,13 @@
 import { looksLikeArtworkDrop } from "../../dragdrop/browserArtwork";
 import { isProjectDawFileName } from "../../projects/projectFileTypes";
 
+// El reemplazo y el enrutamiento conservan sus reglas MIME propias (B9).
+export type DroppedAudioKind = "MP3" | "WAV" | "PROJECT";
+export const classifyDroppedAudio = (file: Pick<File, "name" | "type">): DroppedAudioKind | null =>
+  /\.wav$/i.test(file.name) || file.type === "audio/wav" || file.type === "audio/x-wav" ? "WAV"
+    : /\.mp3$/i.test(file.name) || file.type === "audio/mpeg" ? "MP3"
+      : /\.zip$/i.test(file.name) || isProjectDawFileName(file.name.toLowerCase()) ? "PROJECT" : null;
+
 export type DragPayloadKind = "image" | "audio" | "file" | "none";
 export type DroppedFileKind = "image" | "mp3" | "wav" | "project" | "unsupported";
 

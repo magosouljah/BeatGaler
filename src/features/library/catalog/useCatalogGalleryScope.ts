@@ -14,16 +14,15 @@ import type { CatalogMetadataPatch } from "./catalogCommandsApi";
 import type { CatalogServices } from "./catalogLibraryProvider";
 import { useCatalogInteraction, type InteractionQuery } from "./catalogInteractionStore";
 import { useCatalogPlayback } from "./catalogPlaybackSession";
-import { beatFromCatalogDetail, metadataPatch } from "./catalogMutations";
-import { replaceBeatAudio } from "./catalogAudioReplace";
-import { enqueueReview, nextReview, pendingTransferNotice, saveDrawerChanges, summarizePendingTransfers, type DrawerSaveInput, type ReviewEntry } from "./catalogDrawerSave";
+import { beatFromCatalogDetail } from "./catalogMutations";
+import { createBeatEditor, drawerEditError, type DrawerSaveInput, type EditResult } from "./catalogBeatEditor";
+import { enqueueReview, nextReview, pendingTransferNotice, summarizePendingTransfers, type ReviewEntry } from "./catalogDrawerSave";
 import { resolveImportPlan } from "./catalogImportPlan";
 import { appAlert } from "../../../lib/dialog";
 import { cleanTags } from "../../../lib/metadataValidation";
 import { readBlobAsArrayBuffer } from "../../audio/mp3Metadata";
 import { downloadBeatFiles, saveBlobWithBrowser, type DownloadKind } from "./catalogDownloads";
 import type { CatalogBeatFile } from "./catalogCommandsApi";
-import { normalizeArtworkFile, replaceBeatArtwork, resolveArtworkFile } from "./catalogArtworkReplace";
 import type { ArtworkDropSource } from "../../dragdrop/browserArtwork";
 import { setBeatCloudUpdateBusy } from "../../cloud/beatCloudUpdateBusy";
 import { appConfirm } from "../../../lib/dialog";
@@ -55,14 +54,49 @@ export interface CatalogGalleryScopeOptions {
 }
 export interface CatalogTagRename { oldTag: string; newTag: string; stage: "name" | "confirm" }
 
-function dataUrlToFile(dataUrl: string, name: string): File | null {
-  const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl);
-  if (!m) return null;
-  const mime = m[1] || "image/png"; const ext = mime.includes("jpeg") ? "jpg" : mime.includes("webp") ? "webp" : "png";
-  try {
-    const bytes = m[2] ? Uint8Array.from(atob(m[3]), (c) => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
-    return new File([bytes], `${name.replace(/[\\/:*?"<>|]+/g, "_") || "artwork"}.${ext}`, { type: mime });
-  } catch { return null; }
+type EditEffects = { refresh?: boolean; finishBusy?: boolean; complete?: boolean; forgetArtwork?: boolean; throw?: boolean };
+const editEffects = {
+  audio: {
+    success: { finishBusy: true, complete: true, refresh: true },
+    pending: { finishBusy: true },
+    rejected: { finishBusy: true },
+    "not-started": {},
+  },
+  artwork: {
+    success: { finishBusy: true, complete: true, refresh: true },
+    pending: { finishBusy: true },
+    rejected: { finishBusy: true },
+    "not-started": { finishBusy: true },
+  },
+  drawer: {
+    success: { refresh: true, forgetArtwork: true },
+    pending: { refresh: true, throw: true },
+    rejected: { throw: true },
+    "not-started": { throw: true },
+  },
+  manual: {
+    success: { refresh: true },
+    pending: { throw: true },
+    rejected: { throw: true },
+    "not-started": { throw: true },
+  },
+  trash: {
+    success: { refresh: true },
+    pending: {},
+    rejected: {},
+    "not-started": {},
+  },
+} satisfies Record<string, Record<EditResult["reading"], EditEffects>>;
+
+function effectsFor(intent: keyof typeof editEffects, result: EditResult): EditEffects {
+  const effects: EditEffects = editEffects[intent][result.reading];
+  if (intent === "drawer" && (result.reading === "rejected" || result.reading === "pending") && result.partial) {
+    return { ...effects, refresh: true, forgetArtwork: true };
+  }
+  if (intent === "trash" && result.reading === "rejected" && (result.why === "conflict" || result.partial)) {
+    return { ...effects, refresh: true };
+  }
+  return effects;
 }
 const placeholderBeat = (id: string): Beat => beatFromCatalogDetail({ id, version: "", state: "ACTIVE", name: "…", bpm: "", key: "", tags: [], rating: 0, color: null, color2: null, artwork: null, playback: null, hasArtwork: false, hasWav: false, hasStems: false, hasProject: false, fileCount: 0 } as CatalogBeatDto);
 
@@ -247,26 +281,32 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   // ---- Drawer, edición, papelera, lote ----
   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);
   const refreshAfterMutation = useCallback(() => { store.notifyLibraryChanged(); interactionStore.invalidateFacets(); }, [store, interactionStore]);
+  // PROJECT vigente del beat (para fusionar un archivo de DAW con su ZIP, como el flujo anterior).
+  const loadProject = useCallback(async (beatId: string): Promise<File | null> => {
+    const files = await mutations.listBeatFiles(beatId);
+    const p = files.find((f) => f.role === "PROJECT" && f.current); if (!p) return null;
+    const { blob } = await media.downloadFile(p.fileId);
+    return new File([blob], p.filename || "project.zip", { type: "application/zip" });
+  }, [mutations, media]);
+  const editor = useMemo(() => createBeatEditor({
+    mutations, knownDto: (id) => dtoById.current.get(id), loadProject, errorMessage: importFailureMessage,
+  }), [mutations, loadProject]);
+
   const commitDrawerCloudMutation = useCallback(async (updated: Beat) => {
-    const dto = dtoById.current.get(updated.id);
-    if (!dto) throw new Error("Este beat ya no está disponible en la ventana actual; vuelve a abrirlo.");
-    const original = beatFromCatalogDetail(dto, null);
-    const artworkChanged = Boolean(updated.image_base64) && updated.image_base64 !== original.image_base64 && String(updated.image_base64).startsWith("data:");
-    const outcome = artworkChanged
-      ? await mutations.replaceBeat({ beatId: dto.id, expectedVersion: dto.version, original, updated, files: { artwork: dataUrlToFile(String(updated.image_base64), updated.name) } })
-      : await mutations.patchBeat({ beatId: dto.id, expectedVersion: dto.version, patch: metadataPatch(original, updated) });
-    if (outcome.status === "conflict") throw new Error("Este beat cambió en otro dispositivo. Tus cambios siguen aquí: revisa y vuelve a guardar.");
-    if (outcome.status === "error") throw new Error(importFailureMessage(outcome.error));
-    if ((outcome as { error?: { code?: string } | null }).error?.code === "NAME_TAKEN") throw new Error(importFailureMessage((outcome as { error?: unknown }).error));
-    if (outcome.status === "blocked" || outcome.status === "failed" || outcome.status === "canceled" || outcome.status === "timeout" || outcome.status === "uncertain") throw new Error(`La operación quedó en estado ${outcome.status}; el servidor conserva el resultado.`);
-    refreshAfterMutation();
-  }, [mutations, refreshAfterMutation]);
+    const result = await editor.saveDrawer({ mode: "manual", updated });
+    const effects = effectsFor("manual", result);
+    if (effects.throw && result.reading !== "success") throw drawerEditError(result, true);
+    if (effects.refresh) refreshAfterMutation();
+  }, [editor, refreshAfterMutation]);
   const updateBeat = useCallback(async () => { /* el commit ya ocurrió en commitDrawerCloudMutation; el store se recarga desde el servidor */ }, []);
   const deleteBeat = useCallback((beat: Beat) => {
     const dto = dtoById.current.get(beat.id); if (!dto) return;
     if (audio.playingId === beat.id) releaseFile();
-    void mutations.trashBeats([{ beatId: dto.id, expectedVersion: dto.version }]).then((r) => { if (r.status === "CONFLICT") setNotice("La biblioteca cambió en otro dispositivo; revisa antes de borrar."); refreshAfterMutation(); }).catch((e) => setNotice(String(e?.message ?? e)));
-  }, [mutations, refreshAfterMutation, audio.playingId, releaseFile]);
+    void editor.trash([{ beatId: dto.id, expectedVersion: dto.version }]).then((result) => {
+      if (result.reading === "rejected" && !result.partial) setNotice(result.message);
+      if (effectsFor("trash", result).refresh) refreshAfterMutation();
+    }).catch((e) => setNotice(String(e?.message ?? e)));
+  }, [editor, refreshAfterMutation, audio.playingId, releaseFile]);
   const residentSelectedBeats = useCallback((): Beat[] => { const out: Beat[] = []; for (const b of snapshot.blocks) for (const it of b.items) if (interactionStore.isSelected(it.id)) out.push(toBeat(it)); return out; }, [snapshot.blocks, interactionStore, toBeat]);
   const selectedBeats = useMemo(() => (interaction.selection.count > 0 ? residentSelectedBeats() : []), [interaction.selection, residentSelectedBeats]);
   const handleEditBulk = useCallback(() => {
@@ -304,13 +344,6 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     });
   }, [interactionStore, refreshAfterMutation]);
 
-  // PROJECT vigente del beat (para fusionar un archivo de DAW con su ZIP, como el flujo anterior).
-  const loadProject = useCallback(async (beatId: string): Promise<File | null> => {
-    const files = await mutations.listBeatFiles(beatId);
-    const p = files.find((f) => f.role === "PROJECT" && f.current); if (!p) return null;
-    const { blob } = await media.downloadFile(p.fileId);
-    return new File([blob], p.filename || "project.zip", { type: "application/zip" });
-  }, [mutations, media]);
   // §6.1-1/2/3: guardado del Drawer en el catálogo: metadatos + portada nueva + archivos elegidos (MASTER/WAV/PROJECT) en UNA mutación (REPLACE o,
   // sin archivos, PATCH). Cualquier resultado que no sea un commit lanza un error: el Drawer conserva los cambios y archivos pendientes.
   // Portada quitada y confirmada: se olvidan la concesión/blob del beat (media), su URL en la Gallery y las copias locales de arranque
@@ -322,39 +355,38 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     void services.firstBlockCache?.dropBeat(accountId, beatId);
   }, [media, services.firstBlockCache, accountId]);
   const saveDrawerToCatalog = useCallback(async (input: DrawerSaveInput) => {
-    try {
-      const r = await saveDrawerChanges({ mutations, knownDto: (id) => dtoById.current.get(id), loadProject, dataUrlToFile, errorMessage: importFailureMessage }, input);
-      if (r.artworkRemoved) forgetArtworkOf(input.updated.id);
-    } catch (e) {
-      if ((e as { partial?: boolean }).partial) forgetArtworkOf(input.updated.id);
-      if ((e as { pending?: boolean; partial?: boolean }).pending || (e as { partial?: boolean }).partial) refreshAfterMutation();
-      throw e;
-    }
-    refreshAfterMutation();
-  }, [mutations, refreshAfterMutation, loadProject, forgetArtworkOf]);
+    const result = await editor.saveDrawer(input);
+    const effects = effectsFor("drawer", result);
+    if (effects.forgetArtwork && (result.reading !== "success" || result.artworkRemoved)) forgetArtworkOf(input.updated.id);
+    if (effects.refresh) refreshAfterMutation();
+    if (effects.throw && result.reading !== "success") throw drawerEditError(result);
+  }, [editor, refreshAfterMutation, forgetArtworkOf]);
 
-  // ---- reemplazo de audio por arrastre sobre una BeatCard (MP3 → MASTER, WAV → añadir/reemplazar WAV HQ), con confirmación ----
   const replaceAudioByDrop = useCallback(async (beatId: string, file: File) => {
-    const r = await replaceBeatAudio({ mutations, confirm: appConfirm, beatId, file, onStart: () => setBeatCloudUpdateBusy(beatId, true), loadProject, onProgress: (t) => setNotice(`Reemplazando audio: ${t}`) });
-    if (r.status !== "cancelled" && r.status !== "unsupported") setBeatCloudUpdateBusy(beatId, false, r.status === "committed"); // estado de la tarjeta: ocupada → completada
-    if (r.status === "committed") { setNotice(r.kind === "MP3" ? "MP3 reemplazado." : r.kind === "PROJECT" ? (r.replacedExisting ? "Proyecto reemplazado." : "Proyecto añadido.") : r.replacedExisting ? "WAV reemplazado." : "WAV añadido."); refreshAfterMutation(); }
-    else if (r.status === "failed") setNotice(`No se pudo reemplazar el audio: ${r.message}`);
-    else if (r.status === "unsupported") setNotice("Solo se pueden soltar archivos MP3 o WAV.");
-    else setNotice(null);
-  }, [mutations, refreshAfterMutation, loadProject]);
+    const result = await editor.replaceAudio(beatId, file, {
+      confirm: appConfirm, onStart: () => setBeatCloudUpdateBusy(beatId, true),
+      onProgress: (t) => setNotice(`Reemplazando audio: ${t}`),
+    });
+    const effects = effectsFor("audio", result);
+    if (effects.finishBusy) setBeatCloudUpdateBusy(beatId, false, effects.complete);
+    if (result.reading === "success") setNotice(result.message ?? null);
+    else if (result.reading === "not-started") setNotice(result.why === "unsupported" ? "Solo se pueden soltar archivos MP3 o WAV." : null);
+    else setNotice(`No se pudo reemplazar el audio: ${result.message}`);
+    if (effects.refresh) refreshAfterMutation();
+  }, [editor, refreshAfterMutation]);
 
-  // ---- portada por arrastre de una imagen sobre cualquier zona de una BeatCard (servicio del Drawer: replaceBeat solo con el archivo de portada) ----
   const replaceArtworkByDrop = useCallback(async (beatId: string, sources: ArtworkDropSource[] | Promise<ArtworkDropSource[]>) => {
     setBeatCloudUpdateBusy(beatId, true);
-    let ok = false;
+    let effects: EditEffects = editEffects.artwork.rejected;
     try {
-      const file = await resolveArtworkFile(await sources);
-      const r = await replaceBeatArtwork({ mutations, beatId, file });
-      ok = r.status === "committed";
-      if (r.status === "committed") { setNotice("Portada actualizada."); refreshAfterMutation(); } else setNotice(`No se pudo cambiar la portada: ${r.message}`);
+      const result = await editor.replaceArtwork(beatId, sources);
+      effects = effectsFor("artwork", result);
+      if (result.reading === "success") setNotice(result.message ?? null);
+      else if (result.reading !== "not-started") setNotice(`No se pudo cambiar la portada: ${result.message}`);
+      if (effects.refresh) refreshAfterMutation();
     } catch (e) { setNotice(`No se pudo cambiar la portada: ${String((e as { message?: unknown })?.message ?? e)}`); }
-    finally { setBeatCloudUpdateBusy(beatId, false, ok); }
-  }, [mutations, refreshAfterMutation]);
+    finally { if (effects.finishBusy) setBeatCloudUpdateBusy(beatId, false, effects.complete === true); }
+  }, [editor, refreshAfterMutation]);
 
   // ---- importación (T12) desde «Add beat» del navegador ----
   const [showAdd, setShowAdd] = useState(false);
