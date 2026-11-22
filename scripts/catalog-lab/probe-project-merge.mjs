@@ -3,14 +3,14 @@
 //  3) si el PROJECT actual no se puede cargar, se aborta y el PROJECT anterior queda intacto   4) MP3/WAV/metadatos intactos
 //   node scripts/catalog-lab/probe-project-merge.mjs [--out DIR]
 import JSZip from 'jszip';
-import { parseArgs, createRun } from './browser-common.mjs';
+import { buttonActions, parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
 const R = await createRun({ kind: 'project-merge', args });
 if (!R) process.exit(0);
 const { rec, ex, shot, waitFor, login, galleryState, browser, POSTGRES, cfg, sleep } = R;
+const { press } = buttonActions(ex);
 const notice = () => ex(() => document.querySelector('.bg-catalog-notice')?.textContent || '');
 const dismiss = () => ex(() => document.querySelector('.bg-catalog-notice button')?.click());
-const press = (label) => ex((l) => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === l); b?.click(); return Boolean(b); }, label);
 const apiBeat = (name) => ex(async (n) => { const r = await fetch(`/beatgaler-api/catalog/v1/beats?limit=200&q=${encodeURIComponent(n)}`, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); const it = ((await r.json()).items || []).find((x) => x.name === n); return it ? { id: it.id, version: it.version, tags: it.tags, bpm: it.bpm, key: it.key, hasWav: it.hasWav, hasProject: it.hasProject, master: it.playback?.fileId ?? null } : null; }, name);
 const projectFileId = (id) => ex(async (bid) => { const r = await fetch(`/beatgaler-api/catalog/v1/beats/${bid}/files`, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); const f = ((await r.json()).items || []).find((x) => x.role === 'PROJECT' && x.current); return f ? f.fileId : null; }, id);
 const dropFile = (sel, name, b64, type) => ex((s, n, d, t) => (async () => { const bytes = Uint8Array.from(atob(d), (c) => c.charCodeAt(0)); const dt = new DataTransfer(); dt.items.add(new File([bytes], n, { type: t })); const c = document.querySelector(s); const mk = (x) => new DragEvent(x, { bubbles: true, cancelable: true, dataTransfer: dt }); c.dispatchEvent(mk('dragenter')); c.dispatchEvent(mk('dragover')); await new Promise((r) => setTimeout(r, 200)); c.dispatchEvent(mk('drop')); })(), sel, name, b64, type);

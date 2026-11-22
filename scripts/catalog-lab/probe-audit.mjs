@@ -1,13 +1,13 @@
 // Sonda LAB de la auditoría funcional: Download (menú de la tarjeta), PROJECT por arrastre, papelera nativa (Settings → Trash) y WAV importado (Cloud real + gateway FAKE + PostgreSQL efímero).
 //   node scripts/catalog-lab/probe-audit.mjs [--out DIR]
-import { parseArgs, createRun } from './browser-common.mjs';
+import { buttonActions, parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
 const R = await createRun({ kind: 'audit', args });
 if (!R) process.exit(0);
 const { rec, ex, shot, waitFor, login, galleryState, typeSearch, browser, POSTGRES, cfg, sleep } = R;
+const { press } = buttonActions(ex);
 const notice = () => ex(() => document.querySelector('.bg-catalog-notice')?.textContent || '');
 const apiList = (q) => ex(async (n) => { const r = await fetch(`/beatgaler-api/catalog/v1/beats?limit=200&q=${encodeURIComponent(n)}`, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); return (await r.json()).items || []; }, q);
-const press = (label, prefix = false) => ex((l, p) => { const b = [...document.querySelectorAll('button')].find((x) => (p ? x.textContent.trim().startsWith(l) && !x.disabled : x.textContent.trim() === l)); b?.click(); return Boolean(b); }, label, prefix);
 const realClick = async (finder) => { const pt = await ex(finder); if (!pt) return false; await browser.performActions([{ type: 'pointer', id: 'm', parameters: { pointerType: 'mouse' }, actions: [{ type: 'pointerMove', duration: 0, x: pt.x, y: pt.y }, { type: 'pointerDown', button: 0 }, { type: 'pointerUp', button: 0 }] }]); await browser.releaseActions(); return true; };
 const center = (e) => { const r = e.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; };
 const ctxMenu = (sel, item) => ex((s, it) => { const c = document.querySelector(s); const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 20 })); return new Promise((res) => setTimeout(() => { const m = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent.trim() === it); m?.click(); res(Boolean(m)); }, 250)); }, sel, item);

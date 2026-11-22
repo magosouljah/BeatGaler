@@ -1,7 +1,7 @@
 // E2E real (2026-11-20): UI real en Chrome aislado contra LAB REAL (Bot20/MASTER 2/testborrar). Edicion, filtros, papelera, restauracion y seek.
 //   . tmp/e72tmp/labenv-e2e.sh; node scripts/catalog-lab/probe-e2e-ui.mjs --phase discover|edit|filter|trash|seek
 // Solo opera sobre beats propios de pruebas (nombre "E72 ..."/"E2E ..."). No borra nada en Telegram.
-import { parseArgs, createRun } from './browser-common.mjs';
+import { cardActions, parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
 const phase = args.rest[args.rest.indexOf('--phase') + 1] || 'discover';
 const R = await createRun({ kind: `e2e-ui-${phase}`, args });
@@ -15,8 +15,7 @@ const api = (p, init) => ex(async (p0, i0) => {
 }, p, init);
 const beats = async () => ((await api('/beats?limit=200')).body || {}).items || [];
 const openGallery = async () => { await login(POSTGRES, cfg.account); await waitFor(async () => { const g = await galleryState(); return g.mode === 'postgres' && g.storeStatus !== 'loading' ? g : null; }, { timeout: 90000, msg: 'gallery' }); await installAudioCapture(); await sleep(1200); };
-const cardOf = (name) => ex((n) => { const c = [...document.querySelectorAll('[data-beat-card-id]')].find((x) => x.textContent.includes(n)); return c ? c.getAttribute('data-beat-card-id') : null; }, name);
-const menu = (cardId, label) => ex((id, l) => { const c = document.querySelector(`[data-beat-card-id="${id}"]`); if (!c) return false; const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 20 })); return new Promise((res) => setTimeout(() => { const m = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent.trim() === l); if (m) m.click(); res(Boolean(m)); }, 300)); }, cardId, label);
+const { cardOf, menu } = cardActions(ex);
 const dump = () => ex(() => ({ inputs: [...document.querySelectorAll('input,textarea,select')].filter((e) => e.offsetParent !== null).map((e) => ({ t: e.tagName, type: e.type, ph: e.placeholder, v: String(e.value).slice(0, 40), aria: e.getAttribute('aria-label') })), buttons: [...document.querySelectorAll('button')].filter((e) => e.offsetParent !== null).map((e) => (e.getAttribute('aria-label') || e.textContent.trim()).slice(0, 30)).filter(Boolean).slice(0, 60) }));
 
 try {

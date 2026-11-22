@@ -9,31 +9,15 @@
 // FP_PLAY_TIMEOUT_MS (40000), SMOKE_CHROME / SMOKE_CHROMEDRIVER (como probe-smoke-v1).
 import fs from 'node:fs';
 import path from 'node:path';
-import net from 'node:net';
-import { parseArgs, createRun, loadLab, sleep } from './browser-common.mjs';
+import { parseArgs, createRun, requireFakeLab, localChromeOptions, sleep } from './browser-common.mjs';
 
 const args = parseArgs();
 const abort = (why) => { console.log('RUN 0-PREFLIGHT FAIL ' + why); console.log('FIRST-PLAY FAIL (LAB con dobles) fallos: 0-PREFLIGHT'); process.exit(1); };
-// 0) Aislamiento: solo contra el LAB con gateway Telegram FAKE (nunca proveedor real). Antes de abrir navegador.
 let lab;
-{
-  try { lab = loadLab(); } catch (e) { abort(String(e.message)); }
-  const logFile = lab.L.statePath('cloud.log');
-  const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
-  if (!log.includes('[lab] preload active: Telegram FAKE')) abort('cloud.log sin «[lab] preload active: Telegram FAKE» (lab-preload.cjs): no se mide contra un LAB sin doble confirmado');
-  const fakePort = lab.cfg.ports.cloud + 5;
-  const up = await new Promise((res) => { const sk = net.connect(fakePort, '127.0.0.1'); sk.once('connect', () => { sk.destroy(); res(true); }); sk.once('error', () => res(false)); });
-  if (!up) abort(`doble /lab-telegram no escucha en 127.0.0.1:${fakePort}`);
-  if (/real-preload|gateway=REAL/i.test(log) || log.includes('[real]')) abort('cloud.log indica gateway/proveedor real: abortado');
-}
-// 0b) Chrome y ChromeDriver locales ya instalados; nunca se descarga nada.
-const findFirst = (c) => c.filter(Boolean).find((p) => fs.existsSync(p)) || null;
-const tmpBase = process.env.TEMP || process.env.TMP || '';
-const cached = (() => { try { const d = path.join(tmpBase, 'chromedriver'); return fs.readdirSync(d).map((v) => path.join(d, v, 'chromedriver-win64', 'chromedriver.exe')); } catch { return []; } })();
-args.chromedriver = findFirst([process.env.SMOKE_CHROMEDRIVER, ...cached]);
-args.chromeBinary = findFirst([process.env.SMOKE_CHROME, ...[process.env['ProgramFiles'], process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean).map((b) => path.join(b, 'Google', 'Chrome', 'Application', 'chrome.exe'))]);
-if (!args.chromedriver) abort('ChromeDriver local no encontrado: fija SMOKE_CHROMEDRIVER=<ruta a chromedriver.exe> (no se descarga nada)');
-if (!args.chromeBinary) abort('Chrome local no encontrado: fija SMOKE_CHROME=<ruta a chrome.exe>');
+try {
+  lab = await requireFakeLab('cloud.log sin «[lab] preload active: Telegram FAKE» (lab-preload.cjs): no se mide contra un LAB sin doble confirmado');
+  Object.assign(args, localChromeOptions());
+} catch (error) { abort(String(error.message)); }
 
 const num = (v, d) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Number(v));
 const N_COLD = num(process.env.FP_COLD, 6);

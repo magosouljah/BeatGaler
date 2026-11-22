@@ -3,12 +3,13 @@
 //   LAB_STATE_DIR=... node scripts/catalog-lab/probe-real-audio.mjs --phase up|upload-one|cold|restart|switch|replace|cover|project|project-download|main|packs|e73 [--out DIR]
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseArgs, createRun } from './browser-common.mjs';
+import { buttonActions, reviewActions, parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
 const phase = args.rest[args.rest.indexOf('--phase') + 1] || 'up';
 const R = await createRun({ kind: `real-audio-${phase === 'packs' ? 'fresh' : 'main'}`, args });
 if (!R) process.exit(0);
 const { rec, ex, shot, waitFor, login, galleryState, typeSearch, installAudioCapture, browser, POSTGRES, cfg, sleep } = R;
+const { pressEnabled: press } = buttonActions(ex);
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const mp3 = fs.readFileSync(path.join(ROOT, 'tmp', 'gallery-test', 'Galer E2E Beat.mp3'));
 const VARIANTS = { A: mp3, B: mp3.subarray(0, 420000), C: mp3.subarray(0, 262144 + 1000) }; // B y C: truncados (MP3 tolera cortes) → hash distinto
@@ -46,9 +47,7 @@ const dropFile = async (name, buf, targetSel = null) => {
   await sleep(150);
   await ex(() => { const t = window.__tgt ? document.querySelector(window.__tgt) : window; t.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt })); });
 };
-const setName = (v) => ex((x) => { const i = [...document.querySelectorAll('input')].find((e) => e.offsetParent !== null && !/file|checkbox|search/.test(e.type) && !/Add tag/.test(e.placeholder)); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, x); i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('blur', { bubbles: true })); }, v);
-const press = (label) => ex((l) => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === l && !x.disabled); b?.click(); return Boolean(b); }, label);
-const saveReview = () => ex(() => { const b = [...document.querySelectorAll('button')].find((x) => /^Save/.test(x.textContent.trim()) && !x.disabled); b?.click(); return Boolean(b); });
+const { setName, saveReview } = reviewActions(ex);
 
 async function importBeat(name, buf) {
   const s0 = await snap(); const t0 = Date.now();

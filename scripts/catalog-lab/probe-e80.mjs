@@ -4,7 +4,7 @@
 //   B) Progreso del aviso flotante con la subida ACOTADA por CDP (uploadThroughput): un archivo grande muestra porcentajes intermedios crecientes
 //      (no 0 → 100); dos subidas simultáneas de tamaños distintos → total ponderado por bytes, sin retroceder.
 //   LAB_STATE_DIR=... node scripts/catalog-lab/probe-e80.mjs [--out DIR] [--mb 12] [--kbps 4096]
-import { parseArgs, createRun } from './browser-common.mjs';
+import { reviewActions, parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
 const opt = (k, d) => { const i = args.rest.indexOf(k); return i >= 0 ? args.rest[i + 1] : d; };
 const MB = Number(opt('--mb', '12')); const KBPS = Number(opt('--kbps', '4096'));
@@ -39,8 +39,7 @@ const dropMp3 = (name, bytes, salt) => ex((n, size, s) => {
   const mk = (k) => new DragEvent(k, { bubbles: true, cancelable: true, dataTransfer: dt }); window.dispatchEvent(mk('dragenter')); window.dispatchEvent(mk('dragover')); setTimeout(() => window.dispatchEvent(mk('drop')), 150);
 }, name, bytes, salt);
 const reviewOpen = () => ex(() => /Review beat 1 of 1/.test(document.body.innerText));
-const setName = (v) => ex((x) => { const i = [...document.querySelectorAll('input')].find((e) => e.offsetParent !== null && !/file|checkbox|search/.test(e.type) && !/Add tag/.test(e.placeholder)); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, x); i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('blur', { bubbles: true })); }, v);
-const saveReview = () => ex(() => { const b = [...document.querySelectorAll('button')].find((x) => /^Save/.test(x.textContent.trim()) && !x.disabled); if (b) b.click(); return Boolean(b); });
+const { setName, saveReview } = reviewActions(ex);
 const startImport = async (name, bytes, salt) => { await dropMp3(name + '.mp3', bytes, salt); await waitFor(async () => (await reviewOpen()) || null, { timeout: 60000, msg: 'review ' + name }); await sleep(400); await setName(name); await sleep(250); await saveReview(); await waitFor(async () => !(await reviewOpen()) || null, { timeout: 60000, msg: 'review closed ' + name }); };
 // Muestreo por fotograma del % del aviso flotante.
 const startSampling = () => ex(() => { window.__pct = []; window.__pctStop = false; const tick = () => { const t = (document.querySelector('.bg-catalog-notice') || {}).textContent || ''; const m = /Subiendo (.+?)… (\d+) %/.exec(t); if (m) { const last = window.__pct[window.__pct.length - 1]; const v = { who: m[1], p: Number(m[2]) }; if (!last || last.p !== v.p || last.who !== v.who) window.__pct.push(v); } if (!window.__pctStop) requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
