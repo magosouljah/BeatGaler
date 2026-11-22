@@ -1,19 +1,39 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { WebTransportWorkerClient } from "../../src/features/cloud/webTransportWorkerClient";
+import type { WebTransportSession } from "../../src/features/cloud/webTransportSession";
 
-const workerClient = readFileSync("src/features/cloud/webTransportWorkerClient.ts", "utf8");
-const audio = readFileSync("src/hooks/useAudio.ts", "utf8");
+class FakeWorker {
+  onmessage: ((event: MessageEvent) => void) | null = null;
 
-describe("Web transport invalidation lifecycle", () => {
-  it("publishes one browser invalidation surface whenever the data-plane Worker is shut down", () => {
-    expect(workerClient).toContain('WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated"');
-    expect(workerClient).toContain("publishTransportInvalidated();");
-  });
+  postMessage({ requestId }: { requestId: string }) {
+    queueMicrotask(() => this.onmessage?.(new MessageEvent("message", {
+      data: { requestId, ok: true },
+    })));
+  }
 
-  it("stops and detaches HTMLAudio when the same session is invalidated", () => {
-    expect(audio).toContain("window.addEventListener(WEB_TRANSPORT_INVALIDATED_EVENT, onTransportInvalidated)");
-    expect(audio).toContain("audio.pause()");
-    expect(audio).toContain('audio.removeAttribute("src")');
-    expect(audio).toContain("currentBeatIdRef.current = null");
-  });
+  terminate = vi.fn();
+}
+
+it("publishes one browser invalidation when an initialized Worker shuts down", async () => {
+  const session = {
+    chat_id: "-1001234567890",
+    transport_user_id: "4242",
+    temp_auth: { expected_bot_id: "4242", api_id: 1 },
+  } as WebTransportSession;
+  const invalidated = vi.fn();
+  const event = "beatgaler:web-session-invalidated";
+  vi.stubGlobal("Worker", FakeWorker);
+  window.addEventListener(event, invalidated);
+  try {
+    const client = new WebTransportWorkerClient();
+    await client.initialize(session, []);
+    expect(invalidated).not.toHaveBeenCalled();
+    await client.shutdown();
+    expect(invalidated).toHaveBeenCalledOnce();
+    await client.shutdown();
+    expect(invalidated).toHaveBeenCalledOnce();
+  } finally {
+    window.removeEventListener(event, invalidated);
+    vi.unstubAllGlobals();
+  }
 });

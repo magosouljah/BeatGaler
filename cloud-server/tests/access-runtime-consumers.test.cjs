@@ -3,10 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
-const fs = require('node:fs');
-const path = require('node:path');
 const { createAccessRuntime } = require('../access-runtime');
 const { createPlanMeHandler, createAccountHandler, accountPublicPayload } = require('../access-consumer-handlers');
+const { account, withCloud } = require('./helpers/composition-cloud.cjs');
 
 const NOW = Date.parse('2026-10-08T12:00:00Z');
 const DAY = 86400_000;
@@ -46,6 +45,9 @@ async function observe({ subscription = null, grants = [], now = NOW } = {}) {
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 }
+
+// The composition helper audits every network attempt in its process.
+test('the mounted Cloud serves the same paid access in /plans/me and /auth/account', observeMountedCloud);
 
 test('A/G: resolver, /plans/me and Account share one answer despite stale basePlanId', async () => {
   const plan = await observe();
@@ -131,22 +133,7 @@ test('a PostgreSQL read failure never falls back to stale Auth planState', async
   await assert.rejects(access.resolveUserPlan(user), /database unavailable/);
 });
 
-test('Account serializer and production routes consume the same Access entrypoint', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server-core.js'), 'utf8');
-  const entry = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  assert.match(source, /app\.get\("\/plans\/me",\s*createPlanMeHandler/);
-  assert.match(source, /app\.post\("\/auth\/account",\s*createAccountHandler/);
-  assert.match(source, /app\.get\("\/plans\/catalog",\s*createPlanCatalogHandler/);
-  assert.match(source, /webPlanCatalog:\s*\(\) => webBillingRuntime\.planCatalog\(\)\.map/);
-  assert.match(source, /legacyPlanCatalog:\s*accessRuntime\.planCatalog/);
-  assert.match(entry, /accessRuntime\.configure\(\{ pool: cutover\.authority === 'postgres' \? pool : null \}\)/);
-  const settings = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'components', 'SettingsPanel.tsx'), 'utf8');
-  assert.match(settings, /currentPlan\?\.effective_plan_id === plan\.id/);
-  const presentation = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'components', 'billingPresentation.ts'), 'utf8');
-  assert.match(presentation, /plan\.price\.amount_minor/);
-  assert.doesNotMatch(settings, /(?:6\.99|11\.99)/);
-  assert.match(presentation, /commercialAccessState === "grace"/);
-  assert.doesNotMatch(settings, /base_plan_id/);
+test('Account serializer and catalog use resolved Access', async () => {
   const access = createAccessRuntime({ pool: { query: async () => ({ rows: [] }) }, now: () => NOW });
   const payload = await accountPublicPayload(user, 'session', { resolveUserPlan: access.resolveUserPlan, userProvider: () => null });
   assert.equal(payload.user.plan.effective_plan_id, 'free');
@@ -155,3 +142,67 @@ test('Account serializer and production routes consume the same Access entrypoin
   assert.equal(catalog.find(plan => plan.id === 'paid_entry').quotas.max_project_zip_bytes, 1_000_000_000);
   assert.equal(Object.hasOwn(catalog[0].quotas, 'max_active_devices'), false);
 });
+
+async function observeMountedCloud(t) {
+  const access = require('../access-runtime');
+  const configureAccess = t.mock.method(access, 'configure');
+  await withCloud(async (_app, send) => {
+    const browser = { 'x-beatgaler-client': 'web', origin: 'http://127.0.0.1' };
+    async function json(method, url, options = {}) {
+      const response = await send(method, url, options);
+      assert.equal(response.status, 200, `${method} ${url}`);
+      return JSON.parse(response.data);
+    }
+
+    const login = await send('POST', '/auth/login', {
+      headers: browser,
+      body: { email: account.email, password: account.password, beatgalerUserId: account.beatgalerUserId },
+    });
+    assert.equal(login.status, 200);
+    const headers = {
+      ...browser,
+      cookie: login.headers['set-cookie'].map(cookie => cookie.split(';', 1)[0]).join('; '),
+      'x-beatgaler-csrf': JSON.parse(login.data).csrf_token,
+      'x-beatgaler-installation-id': account.beatgalerUserId,
+    };
+
+    const legacy = await json('GET', '/plans/catalog', { headers });
+    assert.ok(legacy.plans.some(plan => plan.id === 'free'));
+    assert.equal(Object.hasOwn(legacy.plans[0], 'price'), false);
+    const defaultAccess = await json('GET', '/plans/me', { headers });
+    assert.equal(defaultAccess.plan.effective_plan_id, 'free');
+    assert.deepEqual(configureAccess.mock.calls.map(call => call.arguments), [[{ pool: null }]]);
+
+    // The composition helper boots JSON mode. Feed the mounted consumers a
+    // projected subscription without opening PostgreSQL or configuring Polar.
+    const grants = require('../access-grant-runtime');
+    const paidThrough = Date.now() + DAY;
+    const pool = {
+      async query(sql, values) {
+        assert.deepEqual(values, [account.id]);
+        if (sql.includes('billing_subscription_state')) {
+          return { rows: [{ plan_id: 'paid_entry', status: 'active', paid_through: paidThrough }] };
+        }
+        assert.match(sql, /FROM entitlements/);
+        return { rows: [] };
+      },
+    };
+    access.configure({ pool });
+    grants.configure({ pool, authRuntime: {} });
+    try {
+      const { plan } = await json('GET', '/plans/me', { headers });
+      const { user: accountUser } = await json('POST', '/auth/account', { headers, body: {} });
+      assert.equal(plan.effective_plan_id, 'paid_entry');
+      assert.equal(plan.access_source, 'paid');
+      assert.deepEqual(accountUser.plan, plan);
+
+      const webCatalog = await json('GET', '/plans/catalog', { headers });
+      const entry = webCatalog.plans.find(plan => plan.id === 'paid_entry');
+      assert.equal(entry.price.amount_minor, 699);
+      assert.equal(entry.checkout_available, false);
+    } finally {
+      grants.configure();
+      access.configure();
+    }
+  });
+}

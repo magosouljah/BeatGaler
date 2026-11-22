@@ -76,6 +76,24 @@ describe("Settings commercial truth", () => {
     await view.close();
   });
 
+  it("uses the effective access and the prices returned by the catalog", async () => {
+    api.plan.mockResolvedValue({ ...plan("paid_entry"), base_plan_id: "free" });
+    api.catalog.mockResolvedValue(catalog.map(item => ({
+      ...item,
+      price: { ...item.price, amount_minor: item.id === "paid_entry" ? 835 : item.price.amount_minor },
+    })));
+    const view = await mount();
+    try {
+      await view.click("plan");
+      const current = Array.from(view.host.querySelectorAll("button")).find(button => button.textContent === "Current plan");
+      expect(current?.parentElement?.textContent).toContain("Paid Entry");
+      expect(current?.parentElement?.textContent).toContain("USD 8.35 / month");
+      expect(view.host.textContent).not.toContain("USD 6.99 / month");
+    } finally {
+      await view.close();
+    }
+  });
+
   it("does not grant Paid from a checkout redirect and keeps retry id stable", async () => {
     window.history.replaceState(null, "", "/?billing=success");
     const view = await mount(); await view.click("plan");
