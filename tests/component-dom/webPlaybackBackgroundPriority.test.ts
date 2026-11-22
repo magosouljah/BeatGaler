@@ -1,11 +1,10 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
-const audio = readFileSync("src/hooks/useAudio.ts", "utf8");
+vi.mock("../../src/features/cloud/webTransportWorkerClient", () => {
+  throw new Error("Loading useAudio must not load the transport Worker client");
+});
 
-describe("Audio transport events", () => {
-  it("keeps the main UI bundle pointed at the tiny event module rather than WorkerClient", () => {
-    expect(audio).toContain('from "../features/cloud/webTransportEvents"');
-    expect(audio).not.toContain('from "../features/cloud/webTransportWorkerClient"');
-  });
+it("loads useAudio without loading the transport Worker client", async () => {
+  const { useAudio } = await import("../../src/hooks/useAudio");
+  expect(useAudio).toBeTypeOf("function");
 });

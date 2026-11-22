@@ -6,6 +6,7 @@ const path = require('path');
 const Module = require('module');
 const test = require('node:test');
 const { createUserStorageLifecycle, isDefinitiveMissingStorageError } = require('../user-storage-lifecycle');
+const { account, withCloud } = require('./helpers/composition-cloud.cjs');
 
 let dialogs = [];
 let disconnectCount = 0;
@@ -62,20 +63,46 @@ test('MASTER recovery verifies dialogs and disconnects with a fake Telegram clie
   }
 });
 
-test('Storage wiring keeps MASTER recovery outside normal assignment', () => {
-  const coreSource = fs.readFileSync(path.join(__dirname, '..', 'server-core.js'), 'utf8');
-  const start = coreSource.indexOf('async function ensureUserStorage(user) {');
-  const end = coreSource.indexOf('\nfunction accountPublicPayload(user, token) {', start);
-  assert(start >= 0 && end > start, 'ensureUserStorage boundary must remain explicit');
-  const ensureBlock = coreSource.slice(start, end);
+test('login fails closed for an invalid vault binding without replacing it', async t => {
+  const invalidChatId = 'invalid-vault-binding';
+  const invalidUser = { id: 'usr_invalid_vault', username: 'invalid-vault', email: 'invalid-vault@example.test' };
+  const write = fs.writeFileSync;
+  let accountsFile;
+  const seed = t.mock.method(fs, 'writeFileSync', (file, contents, ...options) => {
+    const state = process.env.BEATGALER_STATE_DIR;
+    if (state && file === path.join(state, 'accounts-data.json') &&
+        path.basename(state).startsWith('beatgaler-composition-')) {
+      const fixture = JSON.parse(contents);
+      const fixtureUser = fixture.users.find(user => user.id === account.id);
+      assert.ok(fixtureUser);
+      fixture.users.push({ ...fixtureUser, ...invalidUser, storageChatId: invalidChatId });
+      accountsFile = file;
+      contents = JSON.stringify(fixture);
+      seed.mock.restore(); // Subsequent application writes must be left intact.
+    }
+    return write(file, contents, ...options);
+  });
 
-  assert(coreSource.includes('createUserStorageLifecycle'));
-  assert(ensureBlock.includes('return userStorageLifecycle.ensureAssigned(user);'));
-  assert(!ensureBlock.includes('verifyPrivateUserStorageGroup'));
-  assert(!ensureBlock.includes('ensurePrivateUserStorageBotAbsent'));
-  assert(!ensureBlock.includes('masterStorageReady'));
-  assert(!ensureBlock.includes('return ensureUserStorage(user)'));
-  assert(!coreSource.includes('provisioning a replacement vault'));
+  const storage = require('../master-storage');
+  const verify = t.mock.method(storage, 'verifyPrivateUserStorageGroup', async () => { throw new Error('CHANNEL_INVALID'); });
+  const create = t.mock.method(storage, 'createPrivateUserStorageGroup', async () => ({
+    botApiChatId: '-1009876543210', title: 'Unexpected replacement',
+  }));
+  const cleanup = t.mock.method(storage, 'ensurePrivateUserStorageBotAbsent', async () => {});
+  await withCloud(async (_app, send) => {
+    assert.ok(accountsFile, 'the isolated composition must seed the invalid vault');
+    const login = (email, beatgalerUserId) => send('POST', '/auth/login', {
+      headers: { 'x-beatgaler-client': 'web', origin: 'http://127.0.0.1' },
+      body: { email, password: account.password, beatgalerUserId },
+    });
+    assert.equal((await login(account.email, account.beatgalerUserId)).status, 200);
+    const rejected = await login(invalidUser.email, 'invalid-vault-installation');
+    assert.equal(rejected.status, 503, rejected.data);
+    assert.equal(rejected.headers['set-cookie'], undefined);
+    const persisted = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+    assert.equal(persisted.users.find(user => user.id === invalidUser.id).storageChatId, invalidChatId);
+    assert.deepEqual([verify, create, cleanup].map(mock => mock.mock.callCount()), [0, 0, 0]);
+  });
 });
 
 test('Storage assignment validates a stored vault locally and never replaces an invalid binding', async t => {

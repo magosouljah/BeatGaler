@@ -33,15 +33,23 @@ test("hashPassword waits for the asynchronous scrypt result", async t => {
   assert.equal(await pending, derivedKey.toString("hex"));
 });
 
-test("password KDF guards and legacy hash compatibility", async () => {
+test("hash and verify preserve legacy scrypt hashes without synchronous derivation", async t => {
   const password = "correct horse battery staple";
   const saltHex = "00112233445566778899aabbccddeeff";
   const expected = crypto.scryptSync(password, Buffer.from(saltHex, "hex"), SCRYPT_KEY_LENGTH).toString("hex");
 
-  const source = fs.readFileSync(require.resolve("../password-kdf"), "utf8");
-  assert.equal(source.includes("scryptSync"), false, "production password KDF must not call synchronous scrypt");
-  assert.match(source, /crypto\.scrypt\s*\(/, "production password KDF must use Node async scrypt");
+  const sync = t.mock.method(crypto, "scryptSync", () => {
+    throw new Error("Unexpected synchronous scrypt");
+  });
 
+  const actual = await hashPassword(password, saltHex);
+  assert.equal(actual, expected, "async KDF must preserve existing scrypt hash compatibility");
+  assert.equal(await verifyPassword(password, { passwordSalt: saltHex, passwordHash: expected }), true);
+  assert.equal(await verifyPassword("wrong password", { passwordSalt: saltHex, passwordHash: expected }), false);
+  assert.equal(sync.mock.callCount(), 0);
+});
+
+test("request handlers guard the asynchronous KDF wiring", () => {
   const serverSource = fs.readFileSync(path.join(__dirname, "..", "server-core.js"), "utf8");
   assert.equal(serverSource.includes("scryptSync"), false, "request paths must not contain synchronous scrypt");
   assert.match(serverSource, /const \{ hashPassword, verifyPassword \} = require\("\.\/password-kdf"\);/);
@@ -54,10 +62,4 @@ test("password KDF guards and legacy hash compatibility", async () => {
     "password change must await current-password verification");
   assert.match(serverSource, /user\.passwordHash = await hashPassword\(newPassword, salt\)/,
     "password change must await new password KDF");
-
-  const actual = await hashPassword(password, saltHex);
-  assert.equal(actual, expected, "async KDF must preserve existing scrypt hash compatibility");
-  assert.equal(await verifyPassword(password, { passwordSalt: saltHex, passwordHash: expected }), true);
-  assert.equal(await verifyPassword("wrong password", { passwordSalt: saltHex, passwordHash: expected }), false);
-
 });

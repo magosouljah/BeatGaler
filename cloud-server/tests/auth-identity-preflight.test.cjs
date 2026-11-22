@@ -82,14 +82,6 @@ const casefoldMigration = fs.readFileSync(path.join(__dirname, '..', 'migrations
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(username\)/s);
 assert.match(casefoldMigration, /UNIQUE INDEX[^;]+lower\(email\)/s);
 
-// Guarda de texto adicional sobre la misma consulta (la prueba de comportamiento está al final).
-const preflightCli = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'auth-identity-preflight.cjs'), 'utf8');
-const [, usersQuery] = preflightCli.match(/async function loadIdentityRows\(pool\)[\s\S]*?pool\.query\(`([^`]+)`\)/) ?? [];
-assert.ok(usersQuery, 'identity preflight must load users through the PostgreSQL query');
-assert.match(usersQuery, /LEFT JOIN user_email_verifications/);
-assert.match(usersQuery, /verified_email_hash/);
-assert.doesNotMatch(usersQuery, /account-lifecycle-state/);
-
 {
   const user = {
     id: 'changed', username: 'changed#4321', email: 'New@Example.com', password_hash: 'present',

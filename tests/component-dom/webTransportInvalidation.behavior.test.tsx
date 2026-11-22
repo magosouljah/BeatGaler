@@ -116,6 +116,7 @@ describe("Web transport invalidation behavior", () => {
     });
 
     expect(audio.pause).toHaveBeenCalled();
+    expect(audio.paused).toBe(true);
     expect(audio.removeAttribute).toHaveBeenCalledWith("src");
     expect(audio.load).toHaveBeenCalled();
     expect(audio.src).toBe("");
