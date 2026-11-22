@@ -8,6 +8,7 @@ const { CatalogQueryError } = require('../catalog/cursor');
 const { PurgeStepError } = require('../catalog/purge');
 const { createPrefixPacks } = require('../catalog/prefix-packs');
 const { createCatalogMedia } = require('../catalog/media');
+const { respondError } = require('../catalog/routes');
 const baseline = require('./catalog/library-tx-baseline.cjs');
 
 const headers = { era: '1', epoch: '2' };
@@ -46,6 +47,7 @@ function invoke(tx, intent, fn) {
 }
 
 const snapshot = 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY';
+const quarantineQuery = ['SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', ['u']];
 // §A.1–A.2: availability, pool check, BEGIN, statement/total budgets, quarantine, lock, frozen, context lookup, finish.
 const policies = [
   ['commands.mutate', true, true, 'BEGIN', 1000, null, true, true, true, false, 'commitFlag'],
@@ -59,10 +61,10 @@ const policies = [
   ['playback.mutate', true, false, 'BEGIN', 1000, null, true, true, false, false, 'commitFlag'],
   ['playback.read', true, false, snapshot, 1000, null, false, false, false, false, 'commitFinally'],
   ['prefixPacks.mutate', true, false, 'BEGIN', 5000, null, true, true, true, false, 'commitFlag'],
-  ['prefixPacks.read', false, false, 'BEGIN', 5000, null, false, false, false, false, 'commitFlag'],
+  ['prefixPacks.read', false, false, 'BEGIN', 5000, null, true, false, false, false, 'commitFlag'],
   ['media.read', true, false, snapshot, 1000, null, true, false, false, false, 'commitFinally'],
   ['queries.read', true, true, snapshot, 1000, 2000, true, false, false, true, 'commitFinally'],
-  ['queries.deriveWrite', true, false, 'BEGIN', 1000, null, false, false, false, true, 'rollback'],
+  ['queries.deriveWrite', true, false, 'BEGIN', 1000, null, true, false, false, true, 'rollback'],
 ];
 
 for (const [name, availability, checkPool, begin, timeoutMs, deadlineMs, quarantine, lock, rejectsFrozen, queryContext, onError] of policies) {
@@ -98,23 +100,29 @@ for (const [name, availability, checkPool, begin, timeoutMs, deadlineMs, quarant
       });
       assert.equal(typeof library.continuePurge, variant === 'purge' ? 'function' : 'undefined');
     }
-    assert.deepEqual(db.events, baseline[name]);
+    let expectedEvents = baseline[name];
+    if (name === 'prefixPacks.read') expectedEvents = expectedEvents.toSpliced(3, 0, quarantineQuery);
+    if (name === 'queries.deriveWrite') expectedEvents = expectedEvents.toSpliced(4, 0, quarantineQuery);
+    assert.deepEqual(db.events, expectedEvents);
     assert.deepEqual(result, baseline[`${name}.result`] ?? 'value');
   });
 }
 
-// §A.3: native rule coverage, native detail, unclassified detail and exact timeout text.
-for (const [variant, intent, nativeCodes, withDetail, unavailable, timeoutNoun] of [
-  ['commands', 'mutate', ['BGL01', 'BGN04', 'BGA05'], true, 'sqlMessage', 'statement'],
-  ['operations', 'mutate', ['BGL01', 'BGN04', 'BGA05', 'BGC02'], true, 'sqlMessage', 'statement'],
-  ['purge', 'mutate', ['BGL01', 'BGN04', 'BGA05', 'BGC02'], true, 'sqlMessage', 'statement'],
-  ['direct', 'mutate', ['BGL01', 'BGN04', 'BGA05', 'BGC02'], true, 'sqlstate', 'statement'],
-  ['playback', 'mutate', ['BGL01', 'BGN04', 'BGA05', 'BGC02'], false, 'sqlMessage', 'statement'],
-  ['prefixPacks', 'mutate', [], false, 'sqlstate', 'statement'],
-  ['media', 'read', [], false, 'sqlMessage', 'statement'],
-  ['queries', 'read', [], false, 'reason', 'query'],
-]) {
-  test(`errores SQL: ${variant}`, () => {
+// §A.3 con los cambios aprobados por D13.1/2 y D13.7.
+const nativeCodes = ['BGL01', 'BGN04', 'BGA05', 'BGC02'];
+const errorVariants = [
+  ['commands', 'mutate', 'reason', 'statement'],
+  ['operations', 'mutate', 'reason', 'statement'],
+  ['purge', 'mutate', 'reason', 'statement'],
+  ['direct', 'mutate', 'sqlstate', 'statement'],
+  ['playback', 'mutate', 'reason', 'statement'],
+  ['prefixPacks', 'mutate', 'sqlstate', 'statement'],
+  ['media', 'read', 'reason', 'statement'],
+  ['queries', 'read', 'reason', 'query'],
+];
+for (const [variant, intent, unavailable, timeoutNoun] of errorVariants) {
+  test(`errores SQL: ${variant}`, (t) => {
+    t.mock.method(console, 'error', () => {});
     const { errorMap } = decide(variant, { intent });
     for (const error of [new CatalogAuthorityError('AUTHORITY', 409, 'authority'), new CatalogQueryError('QUERY', 400, 'query')]) {
       assert.equal(errorMap(error), error);
@@ -123,17 +131,15 @@ for (const [variant, intent, nativeCodes, withDetail, unavailable, timeoutNoun] 
     if (variant === 'purge') assert.equal(errorMap(purgeError), purgeError);
     else assert.equal(errorMap(purgeError).code, 'CATALOG_UNAVAILABLE');
     const message = 'pg'.repeat(110);
-    for (const code of ['BGL01', 'BGN04', 'BGA05', 'BGC02', 'BGR03', '40001', '40P01', '57014', undefined]) {
+    for (const code of [...nativeCodes, 'BGR03', '40001', '40P01', '57014', undefined]) {
       const detail = { sqlstate: code || null };
       let expected;
       if (code === '57014') {
         expected = { code: 'CATALOG_QUERY_TIMEOUT', status: 503, message: `CATALOG_QUERY_TIMEOUT: catalog ${timeoutNoun} timed out`, detail };
       } else if (nativeCodes.includes(code)) {
-        if (withDetail) detail.detail = 'native detail';
         expected = { code: 'CATALOG_NATIVE_RULE', status: 409, message: 'CATALOG_NATIVE_RULE: database native rule rejected the mutation', detail };
       } else {
         if (unavailable !== 'sqlstate') detail.reason = 'SQL_ERROR';
-        if (unavailable === 'sqlMessage') detail.sql_message = code ? message.slice(0, 200) : null;
         expected = { code: 'CATALOG_UNAVAILABLE', status: 503,
           message: unavailable === 'sqlstate' ? 'CATALOG_UNAVAILABLE: catalog database is unavailable' : 'CATALOG_UNAVAILABLE: catalog is unavailable (SQL_ERROR)', detail };
       }
@@ -141,6 +147,63 @@ for (const [variant, intent, nativeCodes, withDetail, unavailable, timeoutNoun] 
     }
   });
 }
+
+test('D13.1/2: todas las variantes traducen las cuatro reglas nativas a 409', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  for (const [name] of policies) {
+    const [variant, intent] = name.split('.');
+    for (const code of nativeCodes) {
+      const pg = Object.assign(new Error('native rule'), { code });
+      const db = fake({ queryError(sql) { if (sql.startsWith('SET LOCAL')) throw pg; } });
+      const tx = createLibraryTx({ ...db, variant });
+      await assert.rejects(invoke(tx, intent, () => assert.fail('callback ran')), (error) => {
+        assert.deepEqual([error.status, error.code, error.detail.sqlstate], [409, 'CATALOG_NATIVE_RULE', code], `${name}: ${code}`);
+        return true;
+      });
+    }
+  }
+});
+
+test('D13.5: MAIN bloquea lectura y mutación en cuarentena', async () => {
+  for (const [call, before] of [
+    [(prefix) => prefix.manifest({ userId: 'u' }), []],
+    [(prefix) => prefix.cancelMain({ userId: 'u', ...headers, packId: 'pk-12345678' }), ['availability']],
+  ]) {
+    const db = fake({ quarantined: true });
+    await assert.rejects(call(createPrefixPacks(db)), { code: 'VAULT_QUARANTINED', status: 409 });
+    assert.deepEqual(db.events, [...before, 'connect', 'BEGIN', 'SET LOCAL statement_timeout = 5000', quarantineQuery, 'ROLLBACK', 'release']);
+  }
+});
+
+test('D13.6: deriveWrite en cuarentena termina antes de consultar el contexto', async () => {
+  const db = fake({ quarantined: true });
+  const tx = createLibraryTx({ ...db, variant: 'queries' });
+  await assert.rejects(tx.deriveWrite('u', () => 'written'), { code: 'VAULT_QUARANTINED', status: 409 });
+  assert.deepEqual(db.events, ['availability', 'connect', 'BEGIN', 'SET LOCAL statement_timeout = 1000', quarantineQuery, 'ROLLBACK', 'release']);
+});
+
+test('D13.7: el JSON HTTP omite el texto de PostgreSQL y el log conserva el SQLSTATE', async (t) => {
+  const log = t.mock.method(console, 'error', () => {});
+  for (const [variant, intent, unavailable] of errorVariants) {
+    for (const sqlstate of ['40001', 'BGL01']) {
+      const native = sqlstate === 'BGL01';
+      const pg = Object.assign(new Error('internal constraint name'), { code: sqlstate, detail: 'internal row detail' });
+      const db = fake({ queryError(sql) { if (sql.startsWith('SET LOCAL')) throw pg; } });
+      const tx = createLibraryTx({ ...db, variant });
+      await assert.rejects(invoke(tx, intent, () => assert.fail('callback ran')), (error) => {
+        let status;
+        const body = respondError({ status(code) { status = code; return this; }, json(value) { return value; } }, error);
+        assert.equal(status, native ? 409 : 503, variant);
+        assert.equal(body.code, native ? 'CATALOG_NATIVE_RULE' : 'CATALOG_UNAVAILABLE', variant);
+        assert.doesNotMatch(JSON.stringify(body), /internal constraint name|internal row detail/, variant);
+        assert.deepEqual(body.detail, !native && unavailable === 'reason' ? { sqlstate, reason: 'SQL_ERROR' } : { sqlstate }, variant);
+        assert.deepEqual(log.mock.calls.at(-1)?.arguments[1], { variant, sqlstate, message: pg.message, detail: pg.detail });
+        return true;
+      });
+    }
+  }
+  assert.equal(log.mock.callCount(), errorVariants.length * 2);
+});
 
 test('cierre ante error: commit estricto, rollback o commit en finally según la intención', async () => {
   for (const [name, , , , , , , , , , onError] of policies) {
