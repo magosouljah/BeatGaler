@@ -1,7 +1,8 @@
-// LAB navegador: utilidades compartidas por los runners V09 y V10 (WebdriverIO 9 + WebDriver BiDi, Chrome o Edge).
+// LAB navegador: utilidades compartidas por las sondas (WebdriverIO 9 + WebDriver BiDi, Chrome o Edge).
 // Evidencia LAB: gateway Telegram FAKE, PostgreSQL efímero, sin proveedor real. No sustituye G2/G3/G4 ni CI.
 import fs from 'node:fs';
 import os from 'node:os';
+import net from 'node:net';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -35,12 +36,48 @@ export function loadLab() {
   return { cfg, POSTGRES: `http://127.0.0.1:${cfg.ports.webPostgres}`, LEGACY: `http://127.0.0.1:${cfg.ports.webLegacy}`, N: cfg.seedN, L };
 }
 
+export async function requireFakeLab(missingFakeMessage = 'cloud.log sin «[lab] preload active: Telegram FAKE» (lab-preload.cjs)') {
+  const lab = loadLab();
+  const logFile = lab.L.statePath('cloud.log');
+  const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+  if (!log.includes('[lab] preload active: Telegram FAKE')) throw new Error(missingFakeMessage);
+  const fakePort = lab.cfg.ports.cloud + 5;
+  const up = await new Promise((resolve) => {
+    const socket = net.connect(fakePort, '127.0.0.1');
+    socket.once('connect', () => { socket.destroy(); resolve(true); });
+    socket.once('error', () => resolve(false));
+  });
+  if (!up) throw new Error(`doble /lab-telegram no escucha en 127.0.0.1:${fakePort}`);
+  if (/real-preload|gateway=REAL/i.test(log) || log.includes('[real]')) throw new Error('cloud.log indica gateway/proveedor real: abortado');
+  return lab;
+}
+
+export function localChromeOptions() {
+  const findFirst = (paths) => paths.filter(Boolean).find((file) => fs.existsSync(file));
+  const cacheDir = path.join(process.env.TEMP || process.env.TMP || '', 'chromedriver');
+  let cached = [];
+  try {
+    cached = fs.readdirSync(cacheDir).map((version) => path.join(cacheDir, version, 'chromedriver-win64', 'chromedriver.exe'));
+  } catch { /* ChromeDriver puede llegar por variable de entorno. */ }
+  const chromedriver = findFirst([process.env.SMOKE_CHROMEDRIVER, ...cached]);
+  const bases = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA];
+  const chromeBinary = findFirst([process.env.SMOKE_CHROME, ...bases.filter(Boolean).map((base) => path.join(base, 'Google', 'Chrome', 'Application', 'chrome.exe'))]);
+  if (!chromedriver) throw new Error('ChromeDriver local no encontrado: fija SMOKE_CHROMEDRIVER=<ruta a chromedriver.exe> (no se descarga nada)');
+  if (!chromeBinary) throw new Error('Chrome local no encontrado: fija SMOKE_CHROME=<ruta a chrome.exe>');
+  return { chromedriver, chromeBinary };
+}
+
 export function edgeInstalled() {
   const bases = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles].filter(Boolean);
   return bases.map((b) => path.join(b, 'Microsoft', 'Edge', 'Application', 'msedge.exe')).find((p) => fs.existsSync(p)) || null;
 }
 
 export async function createRun({ kind, args }) {
+  const smokeCase = process.env.CATALOG_LAB_SMOKE_CASE === '1';
+  if (smokeCase) {
+    if (args.browser !== 'chrome') throw new Error('El runner del humo V1 requiere Chrome local');
+    Object.assign(args, localChromeOptions());
+  }
   const lab = loadLab();
   const OUT = path.join(args.out, kind); fs.mkdirSync(OUT, { recursive: true });
   const results = []; const t0 = Date.now();
@@ -60,7 +97,12 @@ export async function createRun({ kind, args }) {
   if (args.chromedriver && browserName === 'chrome') caps['wdio:chromedriverOptions'] = { binary: args.chromedriver };
   let browser;
   try { browser = await remote({ logLevel: 'error', capabilities: caps }); }
-  catch (e) { rec('BROWSER', 'NO EJECUTADO', { reason: `no se pudo abrir ${args.browser}: ${String(e.message).slice(0, 200)}` }); fs.writeFileSync(path.join(OUT, `${kind}-results.json`), JSON.stringify({ kind, browser: args.browser, results }, null, 2)); return null; }
+  catch (e) {
+    rec('BROWSER', 'NO EJECUTADO', { reason: `no se pudo abrir ${args.browser}: ${String(e.message).slice(0, 200)}` });
+    fs.writeFileSync(path.join(OUT, `${kind}-results.json`), JSON.stringify({ kind, browser: args.browser, results }, null, 2));
+    if (smokeCase) throw e;
+    return null;
+  }
 
   // Captura del <audio> del motor aprobado (new Audio() sin DOM) ANTES de cualquier script de la página (BiDi preload).
   try { await browser.scriptAddPreloadScript({ functionDeclaration: "() => { const Orig = window.Audio; const Hooked = function (...a) { const el = new Orig(...a); window.__v09Audio = el; return el; }; Hooked.prototype = Orig.prototype; window.Audio = Hooked; const oc = document.createElement.bind(document); document.createElement = (tag, ...r) => { const el = oc(tag, ...r); if (String(tag).toLowerCase() === 'audio') window.__v09Audio = el; return el; }; window.__v09AudioHooked = true; }" }); } catch (e) { console.log('audio preload unavailable', e.message); }
@@ -161,7 +203,46 @@ export async function createRun({ kind, args }) {
       .map((f) => `${crypto.createHash('sha256').update(fs.readFileSync(path.join(OUT, f))).digest('hex')}  ${f}`);
     fs.writeFileSync(path.join(OUT, 'SHA256SUMS'), sums.join('\n') + '\n');
     console.log('SUMMARY', JSON.stringify(summary), 'OUT', OUT);
+    if (smokeCase && (summary.FAIL || summary.ERROR)) process.exitCode = 1;
     return summary;
   }
   return { ...lab, args, OUT, browser, browserName, results, rec, want, ex, shot, waitFor, sleep, cdp, setViewport, login, logout, galleryState, installAudioCapture, audioState, typeSearch, openTagBar, scrollTo, drainNet, apiReqs, NET, finish, t0 };
+}
+
+export function cardActions(ex) {
+  const cardOf = (name) => ex((n) => { const c = [...document.querySelectorAll('[data-beat-card-id]')].find((x) => x.textContent.includes(n)); return c ? c.getAttribute('data-beat-card-id') : null; }, name);
+  const menu = (cardId, label) => ex((id, l) => { const c = document.querySelector(`[data-beat-card-id="${id}"]`); if (!c) return false; const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 20 })); return new Promise((res) => setTimeout(() => { const m = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent.trim() === l); if (m) m.click(); res(Boolean(m)); }, 300)); }, cardId, label);
+  return { cardOf, menu };
+}
+
+export function reviewActions(ex) {
+  const setName = (v) => ex((x) => { const i = [...document.querySelectorAll('input')].find((e) => e.offsetParent !== null && !/file|checkbox|search/.test(e.type) && !/Add tag/.test(e.placeholder)); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, x); i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('blur', { bubbles: true })); }, v);
+  const saveReview = () => ex(() => { const b = [...document.querySelectorAll('button')].find((x) => /^Save/.test(x.textContent.trim()) && !x.disabled); if (b) b.click(); return Boolean(b); });
+  return { setName, saveReview };
+}
+
+export function importReviewState(ex) {
+  const apiBeat = (name) => ex(async (n) => { const r = await fetch(`/beatgaler-api/catalog/v1/beats?limit=200&q=${encodeURIComponent(n)}`, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); const it = ((await r.json()).items || []).find((x) => x.name === n); return it ? { id: it.id, rating: it.rating, bpm: it.bpm, key: it.key, tags: it.tags, hasWav: it.hasWav, hasProject: it.hasProject, hasArtwork: it.hasArtwork, master: it.playback?.fileId ?? null } : null; }, name);
+  const review = () => ex(() => ({ open: /Review beat 1 of 1/.test(document.body.innerText), name: [...document.querySelectorAll('input')].find((i) => i.offsetParent !== null && i.value && !i.type.match(/file|checkbox|search/))?.value, inputs: [...document.querySelectorAll('input:not([type=file]):not([type=checkbox]):not([type=search])')].filter((x) => x.offsetParent !== null).map((x) => ({ v: x.value, p: x.placeholder })) }));
+  return { apiBeat, review };
+}
+
+export function buttonActions(ex) {
+  const click = (text, match) => ex((label, mode) => {
+    const button = [...document.querySelectorAll('button')].find((node) => {
+      const raw = node.textContent || '';
+      const trimmed = raw.trim();
+      if (mode === 'prefix') return trimmed.startsWith(label) && !node.disabled;
+      if (mode === 'loose') return trimmed === label || (label.length > 8 && raw.includes(label));
+      return trimmed === label && (mode !== 'enabled' || !node.disabled);
+    });
+    button?.click();
+    return Boolean(button);
+  }, text, match);
+  return {
+    clickByText: (text) => click(text, 'loose'),
+    clickStarts: (text) => click(text, 'prefix'),
+    press: (text, prefix = false) => click(text, prefix ? 'prefix' : 'exact'),
+    pressEnabled: (text) => click(text, 'enabled'),
+  };
 }

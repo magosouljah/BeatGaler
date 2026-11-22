@@ -1,11 +1,12 @@
 // Sonda LAB: estados VISUALES y funcionales del arrastre sobre la Gallery POSTGRES (Chrome aislado, Cloud real + gateway FAKE + PostgreSQL efímero).
 // Congela el estado de arrastre (dragenter/dragover sin soltar), mide la geometría de los indicadores y captura pantallas; después suelta de verdad.
 //   node scripts/catalog-lab/probe-drop-visuals.mjs [--out DIR]
-import { parseArgs, createRun } from './browser-common.mjs';
+import { buttonActions, parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
 const R = await createRun({ kind: 'drop-visuals', args });
 if (!R) process.exit(0);
 const { rec, ex, shot, waitFor, login, galleryState, typeSearch, browser, POSTGRES, cfg, sleep } = R;
+const { press } = buttonActions(ex);
 
 const mp3b64 = (() => { const f = Buffer.alloc(417); f[0] = 0xff; f[1] = 0xfb; f[2] = 0x90; return Buffer.concat(Array.from({ length: 1500 }, () => f)).toString('base64'); })();
 const dismissNotice = () => ex(() => { document.querySelector('.bg-catalog-notice button')?.click(); });
@@ -37,7 +38,6 @@ const enter = async (name, kind, targetSel, partSel = null) => {
 };
 const leave = () => ex(() => { const el = window.__tgt || document.body; el.dispatchEvent(new DragEvent('dragleave', { bubbles: true, cancelable: true, dataTransfer: window.__dt })); });
 const release = () => ex(() => { const el = window.__tgt || document.body; const e = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt }); el.dispatchEvent(e); return e.defaultPrevented; });
-const press = (label) => ex((l) => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === l); b?.click(); return Boolean(b); }, label);
 const alertText = () => ex(() => { const t = document.body.innerText; const m = /Unsupported file|Drop the image on a beat|Nothing to import|Drop one file at a time/.exec(t); return m ? m[0] : null; });
 const closeAlert = () => ex(() => { const b = [...document.querySelectorAll('button')].find((x) => /^(OK|Close|Got it)$/i.test(x.textContent.trim())); b?.click(); return Boolean(b); });
 

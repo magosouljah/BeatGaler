@@ -2,35 +2,19 @@
 // Landing -> sesión -> Gallery -> reproducir -> Add beat (File inyectado) -> editar en Drawer (persiste tras recargar) -> papelera.
 // Cada paso imprime «STEP <id> PASS|FAIL <ms> <causa>»; sale con código 1 si alguno falla. Un fallo no oculta los pasos siguientes.
 // Receta en README (sección «Humo V1»).
-import fs from 'node:fs';
-import path from 'node:path';
-import net from 'node:net';
-import { parseArgs, createRun, loadLab } from './browser-common.mjs';
+import { buttonActions, cardActions, parseArgs, createRun, requireFakeLab, localChromeOptions } from './browser-common.mjs';
 import { makeFileInjector, silentMp3Base64, BUILD } from './file-inject.mjs';
 const args = parseArgs();
 const abort = (why) => { console.log('STEP 0-PREFLIGHT FAIL ' + why); console.log('SMOKE-V1 FAIL (LAB con dobles) fallos: 0-PREFLIGHT'); process.exit(1); };
-// 0) Aislamiento: solo contra el LAB con gateway Telegram FAKE (nunca proveedor real). Antes de abrir navegador o tocar el catálogo.
-{
-  let lab; try { lab = loadLab(); } catch (e) { abort(String(e.message)); }
-  const logFile = lab.L.statePath('cloud.log');
-  const log = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
-  if (!log.includes('[lab] preload active: Telegram FAKE')) abort('cloud.log sin «[lab] preload active: Telegram FAKE» (lab-preload.cjs): no se prueba contra un LAB sin doble confirmado');
-  const fakePort = lab.cfg.ports.cloud + 5; // doble HTTP «Telegram» FAKE del preload (/lab-telegram)
-  const up = await new Promise((res) => { const sk = net.connect(fakePort, '127.0.0.1'); sk.once('connect', () => { sk.destroy(); res(true); }); sk.once('error', () => res(false)); });
-  if (!up) abort(`doble /lab-telegram no escucha en 127.0.0.1:${fakePort}`);
-  if (/real-preload|gateway=REAL/i.test(log) || log.includes('[real]')) abort('cloud.log indica gateway/proveedor real: abortado');
-}
-// 0b) Red: Chrome y ChromeDriver locales ya instalados (SMOKE_CHROME / SMOKE_CHROMEDRIVER o detección local); nunca se descarga nada.
-const findFirst = (c) => c.filter(Boolean).find((p) => fs.existsSync(p)) || null;
-const tmpBase = process.env.TEMP || process.env.TMP || '';
-const cached = (() => { try { const d = path.join(tmpBase, 'chromedriver'); return fs.readdirSync(d).map((v) => path.join(d, v, 'chromedriver-win64', 'chromedriver.exe')); } catch { return []; } })();
-args.chromedriver = findFirst([process.env.SMOKE_CHROMEDRIVER, ...cached]);
-args.chromeBinary = findFirst([process.env.SMOKE_CHROME, ...[process.env['ProgramFiles'], process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA].filter(Boolean).map((b) => path.join(b, 'Google', 'Chrome', 'Application', 'chrome.exe'))]);
-if (!args.chromedriver) abort('ChromeDriver local no encontrado: fija SMOKE_CHROMEDRIVER=<ruta a chromedriver.exe> (no se descarga nada)');
-if (!args.chromeBinary) abort('Chrome local no encontrado: fija SMOKE_CHROME=<ruta a chrome.exe>');
+try {
+  await requireFakeLab('cloud.log sin «[lab] preload active: Telegram FAKE» (lab-preload.cjs): no se prueba contra un LAB sin doble confirmado');
+  Object.assign(args, localChromeOptions());
+} catch (error) { abort(String(error.message)); }
+
 const R = await createRun({ kind: 'smoke-v1', args });
 if (!R) { console.log('STEP BROWSER FAIL no se pudo abrir Chrome'); process.exit(1); }
 const { ex, shot, waitFor, login, logout, galleryState, typeSearch, installAudioCapture, audioState, browser, POSTGRES, cfg, sleep } = R;
+const { clickByText, clickStarts } = buttonActions(ex);
 const inj = makeFileInjector(ex);
 
 const PLAY_SELECTOR = process.env.SMOKE_PLAY_SELECTOR || '[data-beat-artwork-id]'; // solo para la prueba de mutación (README)
@@ -49,7 +33,6 @@ async function step(id, fn) {
   timings.push([id, ms]);
   if (status === 'FAIL') { failures.push(id); await shot(`fail-${id}`); }
 }
-// Nota: menu/cardOf replican dos helpers de probe-e2e-ui.mjs, que es un script ejecutable sin exportaciones (no importable).
 const api = (p) => ex(async (p0) => { const r = await fetch('/beatgaler-api/catalog/v1' + p0, { credentials: 'include', headers: { 'X-BeatGaler-Client': 'web' } }); let b = null; try { b = await r.json(); } catch {} return { status: r.status, body: b }; }, p);
 // Lista completa con paginación por cursor; HTTP 200 y esquema {items:[{id,name}]} obligatorios (un fallo NO se interpreta como lista vacía).
 const listAll = async (p) => {
@@ -66,10 +49,7 @@ const listAll = async (p) => {
 const beats = () => listAll('/beats');
 const byName = async (n) => (await beats()).find((b) => b.name === n) || null;
 const idIn = async (p, id) => (await listAll(p)).some((b) => b.id === id);
-const clickByText = (text) => ex((t) => { const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim() === t || (t.length > 8 && (x.textContent || '').includes(t))); if (!b) return false; b.click(); return true; }, text);
-const clickStarts = (text) => ex((t) => { const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim().startsWith(t) && !x.disabled); if (!b) return false; b.click(); return true; }, text);
-const cardOf = (name) => ex((n) => { const c = [...document.querySelectorAll('[data-beat-card-id]')].find((x) => x.textContent.includes(n)); return c ? c.getAttribute('data-beat-card-id') : null; }, name);
-const menu = (cardId, label) => ex((id, l) => { const c = document.querySelector(`[data-beat-card-id="${id}"]`); if (!c) return false; const r = c.getBoundingClientRect(); c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + 20, clientY: r.y + 20 })); return new Promise((res) => setTimeout(() => { const m = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent.trim() === l); if (m) m.click(); res(Boolean(m)); }, 300)); }, cardId, label);
+const { cardOf, menu } = cardActions(ex);
 const fieldSel = 'input:not([type=search]):not([type=file]):not([type=checkbox]):not([type=range])';
 const setVal = (idx, v) => ex((i, x, s) => { const els = [...document.querySelectorAll(s)].filter((e) => e.offsetParent !== null); const e = els[i]; if (!e) return -1; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, x); e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('blur', { bubbles: true })); return els.length; }, idx, v, fieldSel);
 const galleryReady = () => waitFor(async () => { const g = await galleryState(); return g.mode === 'postgres' && g.storeStatus !== 'loading' && g.cards > 0 ? g : null; }, { timeout: 90000, msg: 'gallery con tarjetas' });

@@ -1,14 +1,18 @@
 // E71 — Probe LAB: compatibilidad REAL de MSE `audio/mpeg` en Chrome con el código de streaming de producción (empaquetado con esbuild).
 // Red SIMULADA dentro de la página (latencia + ancho de banda por petición); no es Telegram ni red real. Sin servicios externos.
-// Uso: node scripts/catalog-lab/probe-mse-stream.mjs  → tmp/e71-mse/results.json
+// Caso mse-stream del humo V1. Salida: tmp/e71-mse/results.json.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { remote } from 'webdriverio';
 import { Mp3Encoder } from '@breezystack/lamejs';
+import { localChromeOptions } from './browser-common.mjs';
 
-const ROOT = 'E:/777/app/BeatGaler'; const OUT = path.join(ROOT, 'tmp', 'e71-mse'); fs.mkdirSync(OUT, { recursive: true });
+const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const OUT = path.join(ROOT, 'tmp', 'e71-mse');
+fs.mkdirSync(OUT, { recursive: true });
 await build({ entryPoints: [path.join(ROOT, 'scripts/catalog-lab/mse-probe-entry.ts')], bundle: true, format: 'iife', outfile: path.join(OUT, 'bundle.js'), platform: 'browser', target: 'es2020', logLevel: 'error',
   plugins: [{ name: 'stub-account', setup(b) { b.onResolve({ filter: /components\/AccountGate$/ }, () => ({ path: path.join(ROOT, 'scripts/catalog-lab/mse-probe-accountgate-stub.ts') })); } }] });
 
@@ -36,7 +40,13 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 const profile = path.join(ROOT, 'tmp', 'catalog-lab', 'state', 'e71-mse-profile');
-const browser = await remote({ logLevel: 'error', capabilities: { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', `--user-data-dir=${profile}`, '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--no-first-run', `--disk-cache-dir=${path.join(profile, 'cache')}`] } } });
+const localChrome = process.env.CATALOG_LAB_SMOKE_CASE === '1' ? localChromeOptions() : null;
+const caps = { browserName: 'chrome', 'goog:chromeOptions': { args: ['--headless=new', `--user-data-dir=${profile}`, '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--no-first-run', `--disk-cache-dir=${path.join(profile, 'cache')}`] } };
+if (localChrome) {
+  caps['goog:chromeOptions'].binary = localChrome.chromeBinary;
+  caps['wdio:chromedriverOptions'] = { binary: localChrome.chromedriver };
+}
+const browser = await remote({ logLevel: 'error', capabilities: caps });
 try {
   await browser.url(base + '/');
   const net = { latencyMs: 250, bytesPerMs: 1000 }; // ≈ 250 ms por petición y ≈ 8 Mbit/s (simulado)

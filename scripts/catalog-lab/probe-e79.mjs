@@ -2,11 +2,12 @@
 // desvinculación), estado único de la Gallery con subidas simultáneas y otro orden, estrellas de BeatCard (normal/hover/reproducción) y regresión
 // de reproducción + MAIN. Mide peticiones de portadas: concesiones al Cloud (POST /files/:id/access) y lecturas del «Telegram» del LAB.
 //   LAB_STATE_DIR=... node scripts/catalog-lab/probe-e79.mjs [--out DIR]
-import { parseArgs, createRun } from './browser-common.mjs';
+import { buttonActions, reviewActions, parseArgs, createRun } from './browser-common.mjs';
 const args = parseArgs();
 const R = await createRun({ kind: 'e79', args });
 if (!R) process.exit(0);
 const { rec, ex, shot, waitFor, login, galleryState, installAudioCapture, audioState, browser, POSTGRES, cfg, sleep } = R;
+const { pressEnabled: press } = buttonActions(ex);
 
 // Contadores por carga de página: concesiones (Cloud, metadatos) y lecturas/envíos al «Telegram» del LAB (bytes). Retraso opcional de los envíos.
 await browser.scriptAddPreloadScript({ functionDeclaration: `() => {
@@ -42,9 +43,7 @@ const dropFile = async (name, base64, type, targetSel = null) => {
   await ex(() => { const el = window.__tgt ? document.querySelector(window.__tgt) : window; el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: window.__dt })); });
 };
 const png = (color, size = 256) => ex((c, s) => new Promise((res) => { const cv = Object.assign(document.createElement('canvas'), { width: s, height: s }); const g = cv.getContext('2d'); g.fillStyle = c; g.fillRect(0, 0, s, s); g.fillStyle = '#ffffff'; g.fillRect(s / 4, s / 4, s / 2, s / 2); res(cv.toDataURL('image/png').split(',')[1]); }), color, size);
-const setName = (v) => ex((x) => { const i = [...document.querySelectorAll('input')].find((e) => e.offsetParent !== null && !/file|checkbox|search/.test(e.type) && !/Add tag/.test(e.placeholder)); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, x); i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('blur', { bubbles: true })); }, v);
-const press = (label) => ex((l) => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === l && !x.disabled); if (b) b.click(); return Boolean(b); }, label);
-const saveReview = () => ex(() => { const b = [...document.querySelectorAll('button')].find((x) => /^Save/.test(x.textContent.trim()) && !x.disabled); if (b) b.click(); return Boolean(b); });
+const { setName, saveReview } = reviewActions(ex);
 const reviewOpen = () => ex(() => /Review beat 1 of 1/.test(document.body.innerText));
 const startImport = async (name, salt) => { await dropFile(name + '.mp3', silentMp3(salt), 'audio/mpeg'); await waitFor(async () => (await reviewOpen()) || null, { timeout: 30000, msg: 'review ' + name }); await sleep(500); await setName(name); await sleep(300); await saveReview(); await waitFor(async () => !(await reviewOpen()) || null, { timeout: 15000, msg: 'review closed ' + name }); };
 const domOrder = () => ex(() => [...document.querySelectorAll('[data-card]')].sort((a, b) => Number(a.getAttribute('data-ordinal')) - Number(b.getAttribute('data-ordinal'))).map((c) => c.getAttribute('data-card')));
@@ -97,7 +96,7 @@ try {
   await sleep(300); const play = await starInfo(rated.id); await (await browser.$('[data-card="' + rated.id + '"]')).saveScreenshot(R.OUT + '/c3-card-playing.png').catch(() => {});
   const unrated = (await list()).find((b) => b.rating === 0); const zero = await starInfo(unrated.id);
   await (await browser.$('.lab-gallery-main')).moveTo({ xOffset: 0, yOffset: 300 }).catch(() => {}); await shot('c1-stars');
-  const okState = (s, filled) => s && s.count === 5 && s.opacity === '1' && s.visibility === 'visible' && s.display !== 'none' && s.w > 20 && s.fontSize === '11px' && s.stars.filter((c) => c === 'rgb(212, 212, 212)').length === filled && s.stars.every((c) => contrast(c) >= 3);
+  const okState = (s, filled) => s && s.count === 5 && s.opacity === '1' && s.visibility === 'visible' && s.display !== 'none' && s.w > 20 && s.fontSize === '11px' && s.stars.filter((c) => c === 'rgb(242, 242, 242)').length === filled && s.stars.every((c) => contrast(c) >= 3);
   const sameBox = (a, b) => a && b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
   rec('STARS-ALWAYS-VISIBLE', pr.status === 200 && okState(normal, 3) && okState(hover, 3) && okState(play, 3) && okState(zero, 0) && sameBox(normal, hover) && sameBox(normal, play) && play.playing === 'true' ? 'PASS' : 'FAIL', {
     normal, hover, playing: play, unrated: zero, contrastEmpty: zero ? contrast(zero.stars[0]) : null, contrastFilled: normal ? contrast(normal.stars[0]) : null, contrastEmptyBefore: contrast('rgb(69, 69, 69)'), audio: playing });
@@ -119,7 +118,7 @@ try {
   const maxNamed = Math.max(...frames.flatMap((f) => Object.values(f.named))); const ordChanges = names.map((n) => { const seen = frames.filter((f) => f.ord[n] !== null).map((f) => f.ord[n]); return { name: n.slice(0, 3), firstOrdinal: seen[0] ?? null, lastOrdinal: seen[seen.length - 1] ?? null, shownFrames: seen.length }; });
   const finalByName = await ex((list0) => Object.fromEntries(list0.map((n) => { const c = [...document.querySelectorAll('[data-card]')].find((x) => x.textContent.includes(n)); return [n, c ? Number(c.getAttribute('data-ordinal')) : null]; })), names);
   const srv = await list('name'); const srvOrd = Object.fromEntries(names.map((n) => [n, srv.findIndex((b) => b.name === n)]));
-  rec('UPLOAD-SINGLE-STATE-MULTI', maxNamed === 1 && !frames.some((f) => f.pending > 0 || f.status) && Math.min(...frames.map((f) => f.cards)) >= cardsBefore && during.uploads >= 2 && during.notice.includes('Subiendo') && JSON.stringify(dom) === JSON.stringify(serverOrder.slice(0, dom.length)) && names.every((n) => finalByName[n] === null || finalByName[n] === srvOrd[n]) && names.filter((n) => finalByName[n] !== null).length >= 2 ? 'PASS' : 'FAIL', { // null = fuera de la ventana virtual (no montada)
+  rec('UPLOAD-SINGLE-STATE-MULTI', maxNamed === 1 && frames.some((f) => f.pending > 0 && f.uploads > 0) && !frames.some((f) => f.status) && Math.min(...frames.map((f) => f.cards)) >= cardsBefore && during.uploads >= 2 && during.notice.includes('Subiendo') && JSON.stringify(dom) === JSON.stringify(serverOrder.slice(0, dom.length)) && names.every((n) => finalByName[n] === null || finalByName[n] === srvOrd[n]) && names.filter((n) => finalByName[n] !== null).length >= 2 ? 'PASS' : 'FAIL', { // null = fuera de la ventana virtual (no montada)
     frames: frames.length, during, maxCardsPerBeat: maxNamed, provisionalCardsEver: frames.some((f) => f.pending > 0), emptyOrLoadingEver: frames.some((f) => Boolean(f.status)), cardsBefore, minCards: Math.min(...frames.map((f) => f.cards)), maxCards: Math.max(...frames.map((f) => f.cards)),
     ordinals: ordChanges, finalOrdinalDom: finalByName, finalOrdinalPostgres: srvOrd, domOrderMatchesPostgres: JSON.stringify(dom) === JSON.stringify(serverOrder.slice(0, dom.length)), notice: await notice() });
 
