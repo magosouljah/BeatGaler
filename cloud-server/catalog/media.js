@@ -8,20 +8,14 @@
 // Solo SQL.
 
 const { requireUserId } = require('./contract');
-const { CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
-const { STATEMENT_TIMEOUT_MS } = require('./queries');
+const { createLibraryTx } = require('./library-tx');
 
 const ACCESS_TTL_MS = 15 * 60_000; // validez orientativa de la respuesta en la caché del cliente (las referencias cambian con la versión)
 const FILE_ID_RE = /^[A-Za-z0-9._:@+-]{1,256}$/;
 
 const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
 const notFound = (what) => new CatalogQueryError('NOT_FOUND', 404, `${what} is not accessible`, {});
-const sqlError = (error) => {
-  if (error instanceof CatalogAuthorityError || error instanceof CatalogQueryError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog statement timed out', { sqlstate: '57014' });
-  return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog is unavailable (SQL_ERROR)', { reason: 'SQL_ERROR', sqlstate: error?.code || null, sql_message: error?.code ? String(error.message).slice(0, 200) : null });
-};
 const LIB_SQL = `SELECT l.authority, l.authority_era::text AS authority_era, l.authority_epoch::text AS authority_epoch, l.revision::text AS revision, l.active_generation_id FROM catalog_libraries l WHERE l.user_id = $1`;
 
 function createCatalogMedia({ pool = null, authority = null, accessTtlMs = ACCESS_TTL_MS } = {}) {
@@ -29,18 +23,9 @@ function createCatalogMedia({ pool = null, authority = null, accessTtlMs = ACCES
   if (!authority || typeof authority.availability !== 'function') throw new Error('createCatalogMedia requires the catalog authority');
   const metrics = { accesses: 0, denied: 0 };
 
-  async function readTx(userId, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      try { await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`); return await fn(client, uid); } finally { await client.query('COMMIT').catch(() => {}); }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'media' });
+  const { translateError: sqlError } = libraryTx;
   async function libraryOf(client, uid) {
-    const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-    if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
     const lib = (await client.query(LIB_SQL, [uid])).rows[0];
     if (!lib || lib.authority !== 'POSTGRES' || !lib.active_generation_id) throw new CatalogQueryError('LIBRARY_NOT_PROVISIONED', 404, 'library is not native', {});
     return lib;
@@ -50,7 +35,7 @@ function createCatalogMedia({ pool = null, authority = null, accessTtlMs = ACCES
   // ---------- POST /files/:fileId/access ----------
   async function issueAccess({ userId, fileId, epoch = null } = {}) {
     if (typeof fileId !== 'string' || !FILE_ID_RE.test(fileId)) throw inputInvalid('FILE_ID');
-    const plan = await readTx(userId, async (client, uid) => {
+    const plan = await libraryTx.read(userId, async ({ client, uid }) => {
       const lib = await libraryOf(client, uid);
       if (epoch !== null && String(epoch) !== lib.authority_epoch) throw new CatalogQueryError('CATALOG_EPOCH_STALE', 409, 'client epoch differs from the library epoch', { current_epoch: lib.authority_epoch });
       const gen = lib.active_generation_id;
@@ -98,7 +83,7 @@ function createCatalogMedia({ pool = null, authority = null, accessTtlMs = ACCES
     if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)) throw inputInvalid('SHA256');
     if (!Number.isSafeInteger(size) || size <= 0) throw inputInvalid('SIZE');
     const uid = requireUserId(userId);
-    const row = await readTx(uid, async (client) => {
+    const row = await libraryTx.read(uid, async ({ client }) => {
       const lib = await libraryOf(client, uid);
       const found = (await client.query(`SELECT p.size_bytes::text AS size_bytes, coalesce(p.verified_sha256, p.declared_sha256) AS expected, l.verification_level, fv.status, b.state AS beat_state
         FROM catalog_file_parts p JOIN catalog_file_versions fv ON fv.user_id = p.user_id AND fv.generation_id = p.generation_id AND fv.file_id = p.file_id

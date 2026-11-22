@@ -23,9 +23,9 @@
 
 const crypto = require('crypto');
 const { requireUserId } = require('./contract');
-const { canonicalJson, CatalogAuthorityError } = require('./authority');
+const { canonicalJson } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
-const { STATEMENT_TIMEOUT_MS } = require('./queries');
+const { createLibraryTx, PurgeStepError } = require('./library-tx');
 const facets = require('./facets');
 
 const ENUMERATE_BATCH = 50;
@@ -43,15 +43,6 @@ const PARKED_REASON = 'PROVIDER_UNCERTAIN';
 const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
 const notFound = (what) => new CatalogQueryError('NOT_FOUND', 404, `${what} is not accessible`, {});
 const sha256Hex = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
-const sqlError = (error) => {
-  if (error instanceof CatalogAuthorityError || error instanceof CatalogQueryError || error instanceof PurgeStepError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog statement timed out', { sqlstate: '57014' });
-  if (['BGL01', 'BGN04', 'BGA05', 'BGC02'].includes(error?.code)) return new CatalogQueryError('CATALOG_NATIVE_RULE', 409, 'database native rule rejected the mutation', { sqlstate: error.code, detail: error.detail || null });
-  return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog is unavailable (SQL_ERROR)', { reason: 'SQL_ERROR', sqlstate: error?.code || null, sql_message: error?.code ? String(error.message).slice(0, 200) : null });
-};
-class PurgeStepError extends Error {
-  constructor(code, message, { transient = true, retryAfterMs = 0, reason = null } = {}) { super(message); this.name = 'PurgeStepError'; this.code = code; this.transient = transient; this.retryAfterMs = retryAfterMs; this.reason = reason; }
-}
 
 // Evaluaciones puras (también las usa la prueba unitaria).
 // Beat: lo que impide sacarlo del catálogo (sigue en la papelera, restaurable).
@@ -85,33 +76,8 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   const hasGateway = () => Boolean(gateway && typeof gateway.deleteMessage === 'function' && typeof gateway.probeAbsence === 'function');
   const hasJournal = () => Boolean(journal && typeof journal.append === 'function' && typeof journal.verify === 'function');
 
-  async function mutationTx(userId, { era, epoch }, fn, { allowFrozen = false } = {}) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      try {
-        await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-        const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-        if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
-        const ctx = await authority.requireLibraryForMutation(client, { userId: uid, era, epoch });
-        if (!allowFrozen && ctx.migration_state !== 'IDLE') throw new CatalogQueryError('LIBRARY_FROZEN', 409, 'library is not accepting mutations', { migration_state: ctx.migration_state });
-        const out = await fn(client, ctx, uid);
-        await client.query('COMMIT');
-        return out;
-      } catch (error) { if (error && error.commit === true) await client.query('COMMIT').catch(() => {}); else await client.query('ROLLBACK').catch(() => {}); throw error; }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
-  async function readTx(userId, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      try { await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`); return await fn(client, uid); } finally { await client.query('COMMIT').catch(() => {}); }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'purge' });
+  const { translateError: sqlError } = libraryTx;
   const libFlags = async (client, uid) => (await client.query('SELECT restore_hold, cleanup_enabled FROM catalog_libraries WHERE user_id = $1', [uid])).rows[0];
   // Los pasos del worker no traen cabeceras C5: la era/época vigentes se leen en una consulta corta (igual que worker.libraryHeaders).
   async function libraryHeaders(userId) {
@@ -210,7 +176,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
     const ids = kind === 'ITEMS' ? [...new Set((beatIds || []).map(String))] : [];
     if (kind === 'ITEMS' && (ids.length === 0 || ids.length > 240)) throw inputInvalid('PURGE_ITEMS', { max: 240 });
     const hash = sha256Hex(canonicalJson({ kind, ids }));
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const replay = (await client.query('SELECT purge_id, request_hash FROM catalog_purges WHERE user_id = $1 AND idempotency_key = $2', [uid, idempotencyKey])).rows[0];
       if (replay) { if (replay.request_hash !== hash) throw new CatalogQueryError('IDEMPOTENCY_MISMATCH', 409, 'idempotency key was used with a different request', { operation_id: replay.purge_id }); return purgeDto(client, uid, replay.purge_id, { replay: true, created: false }); }
       const gen = ctx.generation_id;
@@ -245,7 +211,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   // ---------- fase de catálogo (worker): lotes ≤50 → manifiesto de limpieza + PURGED en la misma transacción ----------
   async function enumerateStep({ userId, purgeId, batch = ENUMERATE_BATCH } = {}) {
     const h = await libraryHeaders(userId);
-    return mutationTx(userId, h, async (client, ctx, uid) => {
+    return libraryTx.continuePurge(userId, h, async ({ client, ctx, uid }) => {
       const p = (await client.query(`${PURGE_SQL} FOR UPDATE`, [uid, purgeId])).rows[0]; if (!p) throw notFound('purge');
       if (p.status !== 'ENUMERATING') return { purgeId, status: p.status, enumerated: 0, done: true };
       if (p.generation_id !== ctx.generation_id || p.authority_epoch !== ctx.authority_epoch) { await client.query("UPDATE catalog_purges SET status = 'BLOCKED', last_error = 'EPOCH_CHANGED', completed_at = now(), updated_at = now() WHERE user_id = $1 AND purge_id = $2", [uid, purgeId]); return { purgeId, status: 'BLOCKED', enumerated: 0, done: true }; }
@@ -294,7 +260,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
       await client.query('UPDATE catalog_purges SET enumeration_cursor = $3, updated_at = now() WHERE user_id = $1 AND purge_id = $2', [uid, purgeId, cursor]);
       const status = done ? await finishPurgeRow(client, uid, purgeId) : 'ENUMERATING';
       return { purgeId, status, enumerated, done };
-    }, { allowFrozen: true });
+    });
   }
 
   // ---------- fase de limpieza física (worker): un objeto por paso ----------
@@ -325,7 +291,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   const countDeleted = (client, uid, purgeId, beatId) => client.query("UPDATE catalog_purge_items SET objects_deleted = (SELECT count(*) FROM catalog_purge_objects WHERE user_id = $1 AND purge_id = $2 AND beat_id = $3 AND status = 'DELETED') WHERE user_id = $1 AND purge_id = $2 AND beat_id = $3", [uid, purgeId, beatId]);
   // DELETED condicionado a la generación de borrado (un objeto re-adoptado o restaurado no se marca); recuento del item.
   async function confirmDeleted(userId, purgeId, po, evidence) {
-    return mutationTx(userId, await libraryHeaders(userId), async (client, _ctx, uid) => {
+    return libraryTx.continuePurge(userId, await libraryHeaders(userId), async ({ client, uid }) => {
       const r = await client.query("UPDATE catalog_media_objects SET status = 'DELETED' WHERE user_id = $1 AND object_id = $2 AND status = 'DELETING' AND deletion_generation = $3 RETURNING object_id", [uid, po.object_id, po.generation]);
       if (!r.rows.length) { await client.query("UPDATE catalog_purge_objects SET status = 'UNCERTAIN', block_reason = $4, last_error = 'DELETION_GENERATION_MISMATCH' WHERE user_id = $1 AND purge_id = $2 AND object_id = $3", [uid, purgeId, po.object_id, PARKED_REASON]); metrics.objectsUncertain++; return { purgeId, objectId: po.object_id, deleted: false, outcome: 'UNCERTAIN', reason: 'GENERATION_MISMATCH' }; }
       await client.query("UPDATE catalog_purge_objects SET status = 'DELETED', block_reason = NULL, deleted_at = now(), last_error = NULL WHERE user_id = $1 AND purge_id = $2 AND object_id = $3", [uid, purgeId, po.object_id]);
@@ -333,12 +299,12 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
       await countDeleted(client, uid, purgeId, po.beat_id);
       metrics.objectsDeleted++;
       return { purgeId, objectId: po.object_id, deleted: true, outcome: 'DELETED', evidence };
-    }, { allowFrozen: true });
+    });
   }
   async function cleanupStep({ userId, purgeId } = {}) {
     // (1) tx corta: siguiente objeto; revalidar bajo lock de biblioteca (ya tomado por requireLibraryForMutation) y luego objeto
     const h = await libraryHeaders(userId);
-    const picked = await mutationTx(userId, h, async (client, ctx, uid) => {
+    const picked = await libraryTx.continuePurge(userId, h, async ({ client, ctx, uid }) => {
       const p = (await client.query(PURGE_SQL, [uid, purgeId])).rows[0]; if (!p) throw notFound('purge');
       const po = await nextObject(client, uid, purgeId);
       if (!po) return { none: true, status: p.status };
@@ -365,7 +331,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
       if (obj.status !== 'DELETING') await client.query("UPDATE catalog_media_objects SET status = 'DELETING', deletion_generation = $3 WHERE user_id = $1 AND object_id = $2", [uid, po.object_id, p.generation_id]);
       await client.query('UPDATE catalog_purge_objects SET attempts = attempts + 1 WHERE user_id = $1 AND purge_id = $2 AND object_id = $3', [uid, purgeId, po.object_id]);
       return { none: false, po: { ...po, attempt: po.attempts + 1, generation: obj.status === 'DELETING' && obj.deletion_generation ? obj.deletion_generation : p.generation_id }, uid };
-    }, { allowFrozen: true });
+    });
     if (!picked.po) return { purgeId, ...picked };
     const { po, uid } = picked;
     if (picked.reconcile) {
@@ -434,13 +400,13 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   }
   async function getPurge({ userId, purgeId } = {}) {
     if (typeof purgeId !== 'string' || !ID_RE.test(purgeId)) throw inputInvalid('PURGE_ID');
-    return readTx(userId, (client, uid) => purgeDto(client, uid, purgeId));
+    return libraryTx.read(userId, ({ client, uid }) => purgeDto(client, uid, purgeId));
   }
   // cancel: solo detiene la fase de catálogo (lo no enumerado sigue en la papelera). Lo ya eliminado de la biblioteca es definitivo y su
   // limpieza física continúa.
   async function cancelPurge({ userId, era, epoch, purgeId } = {}) {
     if (typeof purgeId !== 'string' || !ID_RE.test(purgeId)) throw inputInvalid('PURGE_ID');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const p = (await client.query(`${PURGE_SQL} FOR UPDATE`, [uid, purgeId])).rows[0]; if (!p) throw notFound('purge');
       if (p.status !== 'ENUMERATING') return purgeDto(client, uid, purgeId, { changed: false });
       const open = (await client.query("UPDATE catalog_purge_items SET status = 'BLOCKED', block_reason = 'BEAT_STATE' WHERE user_id = $1 AND purge_id = $2 AND status = 'PENDING'", [uid, purgeId])).rowCount;
@@ -450,14 +416,14 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   }
   // Reanudación de la limpieza por evento explícito (operador / CLI): mismas reglas que al pedir una purga.
   async function resumeCleanup({ userId, era, epoch } = {}) {
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => ({ settled: await settlePriorPurging(client, uid, ctx.generation_id, ctx.revision), ...(await resumeCleanupTx(client, uid)) }));
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => ({ settled: await settlePriorPurging(client, uid, ctx.generation_id, ctx.revision), ...(await resumeCleanupTx(client, uid)) }));
   }
   // ---------- restore_hold: solo con el journal externo reconciliado y cleanup aprobado; al liberarse se reanuda lo diferido ----------
   async function releaseRestoreHold({ userId, era, epoch } = {}) {
     if (!journal || typeof journal.list !== 'function') throw new CatalogQueryError('JOURNAL_UNAVAILABLE', 503, 'deletion journal is required to reconcile restore_hold', {});
     const uid = requireUserId(userId);
     const entries = await journal.list(uid);
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, u) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid: u }) => {
       const flags = await libFlags(client, u);
       if (!flags.cleanup_enabled) throw new CatalogQueryError('CLEANUP_DISABLED', 409, 'cleanup is not enabled for this library (owner approval, T24)', {});
       const unresolved = [];

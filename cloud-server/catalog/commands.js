@@ -11,12 +11,12 @@
 // El scheduling durable de los pasos es T10; aquí los pasos son funciones de módulo.
 
 const crypto = require('crypto');
-const { requireUserId } = require('./contract');
-const { canonicalJson, CatalogAuthorityError } = require('./authority');
+const { canonicalJson } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
+const { createLibraryTx } = require('./library-tx');
 const { deepDiff, applyPatchToDoc, tagsEqual, writeBeatDoc, refreshBeatTagFacets, PATCH_BEAT_COLUMNS, patchBeatDto } = require('./beat-projection');
 const rules = require('./metadata-rules');
-const { TUPLES, SORTS, STATEMENT_TIMEOUT_MS } = require('./queries');
+const { TUPLES, SORTS } = require('./queries');
 const facets = require('./facets');
 const { nameKey, assertNameFree } = require('./name-uniqueness');
 
@@ -34,12 +34,6 @@ const BULK_KINDS = Object.freeze(['BULK_PATCH', 'BULK_TRASH', 'BULK_RESTORE']);
 const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
 const notFound = (what) => new CatalogQueryError('NOT_FOUND', 404, `${what} is not accessible`, {});
 const sha256Hex = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
-const sqlError = (error) => {
-  if (error instanceof CatalogAuthorityError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog statement timed out', { sqlstate: '57014' });
-  if (error?.code === 'BGL01' || error?.code === 'BGN04' || error?.code === 'BGA05') return new CatalogQueryError('CATALOG_NATIVE_RULE', 409, 'database native rule rejected the mutation', { sqlstate: error.code, detail: error.detail || null });
-  return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog is unavailable (SQL_ERROR)', { reason: 'SQL_ERROR', sqlstate: error?.code || null, sql_message: error?.code ? String(error.message).slice(0, 200) : null });
-};
 
 // ---------- documento canónico v2 y proyecciones (codec T04) ----------
 function docChanged(before, after) { return deepDiff(before, after).length > 0; }
@@ -67,30 +61,7 @@ async function normKeysOf(client, uid, gen, beatIds) {
 function createCatalogCommands({ pool = null, authority = null, now = () => new Date(), randomUUID = () => crypto.randomUUID() } = {}) {
   if (!authority || typeof authority.requireLibraryForMutation !== 'function') throw new Error('createCatalogCommands requires the catalog authority');
 
-  // Lock de biblioteca + autoridad/era/época (authority.requireLibraryForMutation) + IDLE; devuelve lib con revision actual.
-  async function mutationTx(userId, { era, epoch }, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    if (!pool || typeof pool.connect !== 'function') throw new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog is unavailable (POSTGRES_UNAVAILABLE)', { reason: 'POSTGRES_UNAVAILABLE' });
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      try {
-        await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-        const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-        if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
-        const ctx = await authority.requireLibraryForMutation(client, { userId: uid, era, epoch }); // FOR UPDATE de catalog_libraries
-        if (ctx.migration_state !== 'IDLE') throw new CatalogQueryError('LIBRARY_FROZEN', 409, 'library is not accepting mutations', { migration_state: ctx.migration_state });
-        const out = await fn(client, ctx, uid);
-        await client.query('COMMIT');
-        return out;
-      } catch (error) {
-        // Un error con `commit` confirma lo escrito antes de propagarse (marcar CONFLICT en la selección debe sobrevivir al rechazo).
-        if (error && error.commit === true) await client.query('COMMIT').catch(() => {}); else await client.query('ROLLBACK').catch(() => {});
-        throw error;
-      }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'commands' });
   async function bumpRevision(client, uid, delta = { active: 0, trash: 0 }) {
     const r = await client.query(`UPDATE catalog_libraries SET revision = revision + 1, active_count = active_count + $2, trash_count = trash_count + $3, updated_at = now()
       WHERE user_id = $1 RETURNING revision::text AS revision`, [uid, delta.active, delta.trash]);
@@ -138,7 +109,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     const expected = parseVersion(expectedVersion, ifMatch);
     const payload = { kind: 'PATCH', target: beatId, patch: v.set, expectedVersion: expected };
     const hash = sha256Hex(canonicalJson(payload));
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const gen = ctx.generation_id;
       const replay = await idempotency(client, uid, idempotencyKey, hash);
       if (replay) return { ...replay.result, replay: true, operationId: replay.operationId };
@@ -229,7 +200,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     const payload = { kind: mode, items: batch };
     const hash = sha256Hex(canonicalJson(payload));
     const from = mode === 'TRASH' ? 'ACTIVE' : 'TRASH';
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const gen = ctx.generation_id;
       const replay = await idempotency(client, uid, idempotencyKey, hash);
       if (replay) return { ...replay.result, replay: true, operationId: replay.operationId };
@@ -287,21 +258,12 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     const params = [uid, selectionId];
     return (await client.query(`SELECT count(*)::text AS n ${MEMBERS_FROM} AND ${selectedPredicateSql(sort, params, '$2')}`, params)).rows[0].n;
   }
-  async function readTx(userId, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      try { await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`); return await fn(client, uid); } finally { await client.query('COMMIT').catch(() => {}); }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
   async function createSelection({ userId, era, epoch, setId, sort = 'rating', defaultSelected = false, consumerId } = {}) {
     if (typeof setId !== 'string' || !ID_RE.test(setId)) throw inputInvalid('SET_ID');
     if (!SORTS.includes(sort)) throw inputInvalid('ENUM', { param: 'sort' });
     if (typeof defaultSelected !== 'boolean') throw inputInvalid('DEFAULT_SELECTED');
     if (typeof consumerId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(consumerId)) throw inputInvalid('CONSUMER');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const set = (await client.query("SELECT status, generation_id, base_revision::text AS base_revision FROM catalog_query_sets WHERE user_id = $1 AND set_id = $2", [uid, setId])).rows[0];
       if (!set) throw notFound('query set');
       if (set.status !== 'READY' || set.generation_id !== ctx.generation_id || set.base_revision !== ctx.revision) throw new CatalogQueryError('CURSOR_STALE', 409, 'query set is not READY for the current revision', { set_status: set.status, set_revision: set.base_revision, current_revision: ctx.revision });
@@ -322,7 +284,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     const payload = { kind: 'SELECTION_OP', selectionId, selectionVersion: String(selectionVersion), op: { kind: op.kind, beatIds: ids.length ? [...ids].sort() : undefined, fromBeatId: op.fromBeatId, toBeatId: op.toBeatId } };
     const hash = sha256Hex(canonicalJson(payload));
     if (typeof idempotencyKey !== 'string' || !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) throw inputInvalid('IDEMPOTENCY_KEY');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const s = (await client.query(`${SELECTION_SQL} FOR UPDATE OF s`, [uid, selectionId])).rows[0];
       if (!s) throw notFound('selection');
       const prior = (await client.query('SELECT op_seq::text AS op_seq, request_hash FROM catalog_selection_ops WHERE user_id = $1 AND selection_id = $2 AND idempotency_key = $3', [uid, selectionId, idempotencyKey])).rows[0];
@@ -362,7 +324,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   async function getSelection({ userId, selectionId, beatIds = [] } = {}) {
     if (typeof selectionId !== 'string' || !ID_RE.test(selectionId)) throw inputInvalid('SELECTION_ID');
     if (!Array.isArray(beatIds) || beatIds.length > 240 || beatIds.some((x) => typeof x !== 'string')) throw inputInvalid('FLAGS_IDS', { max: 240 });
-    return readTx(userId, async (client, uid) => {
+    return libraryTx.read(userId, async ({ client, uid }) => {
       const s = (await client.query(SELECTION_SQL, [uid, selectionId])).rows[0];
       if (!s) throw notFound('selection');
       const lib = (await client.query('SELECT revision::text AS revision FROM catalog_libraries WHERE user_id = $1', [uid])).rows[0];
@@ -377,7 +339,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   }
   async function releaseSelection({ userId, era, epoch, selectionId } = {}) {
     if (typeof selectionId !== 'string' || !ID_RE.test(selectionId)) throw inputInvalid('SELECTION_ID');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const s = (await client.query(`${SELECTION_SQL} FOR UPDATE OF s`, [uid, selectionId])).rows[0];
       if (!s) throw notFound('selection');
       if (s.status === 'FROZEN') throw new CatalogQueryError('SELECTION_CONFLICT', 409, 'selection is frozen by an operation', {});
@@ -392,7 +354,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     const target = rules.validateTag(to);
     if (!target.valid) throw inputInvalid('RENAME_TO', { reason: target.reason });
     const fromKey = rules.normalizeTag(from);
-    return readTx(userId, async (client, uid) => {
+    return libraryTx.read(userId, async ({ client, uid }) => {
       const lib = (await client.query('SELECT active_generation_id, revision::text AS revision, authority_epoch::text AS epoch, authority_era::text AS era FROM catalog_libraries WHERE user_id = $1 AND authority = \'POSTGRES\'', [uid])).rows[0];
       if (!lib) throw new CatalogQueryError('LIBRARY_RESET_REQUIRED', 409, 'no PostgreSQL library for this tenant', {});
       const counts = (await client.query(`SELECT b.state, count(*)::int AS n FROM catalog_beat_tag_groups g JOIN catalog_beats b USING (user_id, generation_id, beat_id)
@@ -459,7 +421,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     }
     const payload = { kind, selectionId, selectionVersion: selectionVersion == null ? null : String(selectionVersion), patch: validatedPatch, rename: renameSpec, tagsOp: validatedTagsOp };
     const hash = sha256Hex(canonicalJson(payload));
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const replay = await idempotency(client, uid, idempotencyKey, hash);
       if (replay) { const o = (await client.query(OP_SQL, [uid, replay.operationId])).rows[0]; return opDto(o, { replay: true }); }
       let extra = { expectedRevision: ctx.revision };
@@ -486,7 +448,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   async function stepOperation({ userId, era, epoch, operationId, batch = BATCH_MAX } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
     if (!Number.isInteger(batch) || batch < 1 || batch > BATCH_MAX) throw inputInvalid('BATCH', { max: BATCH_MAX });
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const gen = ctx.generation_id;
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
@@ -600,7 +562,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   }
   async function getOperation({ userId, operationId, detailsAfter = null } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return readTx(userId, async (client, uid) => {
+    return libraryTx.read(userId, async ({ client, uid }) => {
       const o = (await client.query(OP_SQL, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       const params = [uid, operationId, BATCH_MAX + 1];
@@ -617,7 +579,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   }
   async function cancelOperation({ userId, era, epoch, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (['COMPLETED', 'PARTIAL', 'CANCELLED'].includes(o.status)) return opDto(o, { changed: false });
@@ -636,7 +598,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   async function resumeOperation({ userId, era, epoch, operationId, revision } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
     if (!/^[1-9][0-9]{0,17}$/.test(String(revision ?? ''))) throw inputInvalid('REVISION');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (o.status !== 'CONFLICT') throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
@@ -651,7 +613,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   async function listChanges({ userId, query = {} } = {}) {
     const after = query.after;
     if (typeof after !== 'string' || !/^(0|[1-9][0-9]{0,17})$/.test(after)) throw inputInvalid('AFTER');
-    return readTx(userId, async (client, uid) => {
+    return libraryTx.read(userId, async ({ client, uid }) => {
       const lib = (await client.query("SELECT revision::text AS revision, authority_epoch::text AS epoch, authority_era::text AS era, active_generation_id FROM catalog_libraries WHERE user_id = $1 AND authority = 'POSTGRES'", [uid])).rows[0];
       if (!lib) throw new CatalogQueryError('LIBRARY_RESET_REQUIRED', 409, 'no PostgreSQL library for this tenant', {});
       const bounds = (await client.query('SELECT coalesce(min(event_seq), 0)::text AS lo, coalesce(max(event_seq), 0)::text AS hi FROM catalog_events WHERE user_id = $1', [uid])).rows[0];
