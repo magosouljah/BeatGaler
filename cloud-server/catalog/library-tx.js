@@ -15,23 +15,21 @@ const NO_LIBRARY = Symbol('no native library');
 
 const mutation = { availability: true, quarantine: true, lock: true, rejectFrozen: true, onError: 'commitFlag' };
 const snapshot = { availability: true, begin: 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', onError: 'commitFinally' };
-const native = ['BGL01', 'BGN04', 'BGA05'];
-const nativeWithCascade = [...native, 'BGC02'];
+const nativeRules = new Set(['BGL01', 'BGN04', 'BGA05', 'BGC02']);
 
-// Perfiles de compatibilidad del paso (a). Los adaptadores de medios y MAIN
+// Perfiles de transacción por variante. Los adaptadores de medios y MAIN
 // conservan sus consultas de dominio dentro del callback de la transacción.
 const VARIANTS = {
-  commands: { mutate: { ...mutation, checkPool: true }, read: snapshot, native, nativeDetail: true, unavailable: 'sqlMessage' },
-  operations: { mutate: mutation, read: snapshot, native: nativeWithCascade, nativeDetail: true, unavailable: 'sqlMessage' },
-  purge: { mutate: mutation, continuePurge: { ...mutation, rejectFrozen: false }, read: snapshot, native: nativeWithCascade, nativeDetail: true, unavailable: 'sqlMessage' },
-  direct: { mutate: mutation, native: nativeWithCascade, nativeDetail: true, unavailable: 'sqlstate' },
-  playback: { mutate: { ...mutation, rejectFrozen: false }, read: snapshot, native: nativeWithCascade, unavailable: 'sqlMessage' },
-  prefixPacks: { mutate: { ...mutation, timeoutMs: 5000 }, read: { timeoutMs: 5000, onError: 'commitFlag' }, unavailable: 'sqlstate' },
-  media: { read: { ...snapshot, quarantine: true }, unavailable: 'sqlMessage' },
+  commands: { mutate: { ...mutation, checkPool: true }, read: snapshot },
+  operations: { mutate: mutation, read: snapshot },
+  purge: { mutate: mutation, continuePurge: { ...mutation, rejectFrozen: false }, read: snapshot },
+  direct: { mutate: mutation, unavailable: 'sqlstate' },
+  playback: { mutate: { ...mutation, rejectFrozen: false }, read: snapshot },
+  prefixPacks: { mutate: { ...mutation, timeoutMs: 5000 }, read: { timeoutMs: 5000, quarantine: true, onError: 'commitFlag' }, unavailable: 'sqlstate' },
+  media: { read: { ...snapshot, quarantine: true } },
   queries: {
     read: { ...snapshot, checkPool: true, quarantine: true, queryContext: true, deadlineMs: API_TIMEOUT_MS },
-    deriveWrite: { availability: true, queryContext: true, onError: 'rollback' },
-    unavailable: 'reason',
+    deriveWrite: { availability: true, quarantine: true, queryContext: true, onError: 'rollback' },
   },
 };
 
@@ -43,20 +41,19 @@ const unavailable = (reason, extra = {}) => new CatalogQueryError('CATALOG_UNAVA
 
 function sqlError(variant, error) {
   if (error instanceof CatalogAuthorityError || (variant === 'purge' && error instanceof PurgeStepError)) return error;
-  const profile = VARIANTS[variant];
-  if (error?.code === '57014') {
+  const sqlstate = error?.code || null;
+  if (typeof sqlstate === 'string' && /^[0-9A-Z]{5}$/.test(sqlstate)) {
+    console.error('[catalog/library-tx] PostgreSQL', { variant, sqlstate, message: error.message, detail: error.detail });
+  }
+  if (sqlstate === '57014') {
     const message = variant === 'queries' ? 'catalog query timed out' : 'catalog statement timed out';
     return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, message, { sqlstate: '57014' });
   }
-  if (profile.native?.includes(error?.code)) {
-    const detail = { sqlstate: error.code };
-    if (profile.nativeDetail) detail.detail = error.detail || null;
-    return new CatalogQueryError('CATALOG_NATIVE_RULE', 409, 'database native rule rejected the mutation', detail);
+  if (nativeRules.has(sqlstate)) {
+    return new CatalogQueryError('CATALOG_NATIVE_RULE', 409, 'database native rule rejected the mutation', { sqlstate });
   }
-  const detail = { sqlstate: error?.code || null };
-  if (profile.unavailable === 'sqlstate') return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog database is unavailable', detail);
-  if (profile.unavailable === 'sqlMessage') detail.sql_message = error?.code ? String(error.message).slice(0, 200) : null;
-  return unavailable('SQL_ERROR', detail);
+  if (VARIANTS[variant].unavailable === 'sqlstate') return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog database is unavailable', { sqlstate });
+  return unavailable('SQL_ERROR', { sqlstate });
 }
 
 function decide(variant, { intent }) {
