@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const queries = require('../../catalog/queries.js');
 const authority = require('../../catalog/authority.js');
+const { itemDto } = require('../../catalog/beat-projection');
 
 const KEYS = [{ kid: 'k1', secret: crypto.randomBytes(32) }];
 const LIB = { user_id: 'u1', vault_id: 'v1', authority: 'POSTGRES', migration_state: 'IDLE', authority_era: 'era-1', authority_epoch: '1', revision: '5', active_generation_id: 'native-g',
@@ -34,6 +35,23 @@ function make(pool, opts = {}) {
   const auth = authority.createCatalogAuthority({ pool, env: { BEATGALER_CATALOG_NATIVE_ENABLED: 'true' }, controlPlaneAuthority: 'postgres' });
   return queries.createCatalogQueries({ pool, authority: auth, cursorKeys: KEYS, ...opts });
 }
+
+test('LIST conserva la forma y el orden del beat en la respuesta', async (t) => {
+  const cases = [
+    { name: 'referencias y roles', row: ROW(1, { files: [
+      { slot: 'ARTWORK', fileId: 'art', role: 'ARTWORK', revision: '3' },
+      ...ROW(1).files, { slot: 'FILES:0', role: 'WAV' }, { slot: 'FILES:1', role: 'STEMS' }, { slot: 'PROJECT', role: 'PROJECT' },
+    ] }), wire: '{"id":"b1","version":"1","state":"ACTIVE","name":"Beat 1","bpm":"120","key":"Cm","tags":["Trap"],"rating":5,"color":null,"color2":null,"artwork":{"fileId":"art","revision":"3"},"playback":{"fileId":"f1","revision":"1"},"hasArtwork":true,"hasWav":true,"hasStems":true,"hasProject":true,"fileCount":5}' },
+    { name: 'tags y archivos ausentes; portada marcada', row: ROW(1, { tags: null, files: null, has_artwork: true }), wire: '{"id":"b1","version":"1","state":"ACTIVE","name":"Beat 1","bpm":"120","key":"Cm","tags":[],"rating":5,"color":null,"color2":null,"artwork":null,"playback":null,"hasArtwork":true,"hasWav":false,"hasStems":false,"hasProject":false,"fileCount":0}' },
+  ];
+  for (const { name, row, wire } of cases) {
+    await t.test(name, async () => {
+      assert.equal(JSON.stringify(itemDto(row)), wire);
+      const page = await make(fakePool({ rows: [row] })).listBeats({ userId: 'u1', query: {} });
+      assert.equal(JSON.stringify(page.items[0]), wire);
+    });
+  }
+});
 
 test('parseListRequest: defaults C12 §4.1, enums/limit estrictos, escalares repetidos, cursor+edge, q canónico y conjuntos de tags por bytes', () => {
   const d = queries.parseListRequest({});

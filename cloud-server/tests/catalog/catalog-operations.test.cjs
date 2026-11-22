@@ -2,7 +2,50 @@
 // T09 — Unidad: random_id int64, validación de intención C7, backoff C8 y precondiciones sin DB. Sin red.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const ops = require('../../catalog/operations.js');
+
+test('IMPORT y REPLACE conservan sus sentencias, parámetros y respuesta de commit', async (t) => {
+  const cases = [
+    { kind: 'IMPORT', metadata: { name: 'Écho', tags: ['trap'] }, version: '1', golden: 'f71779d556e2a582b69fa65d85bbe4d1a7f9b119c2c1e737e2d7bf0bfea48960' },
+    { kind: 'REPLACE', metadata: { rating: 5 }, version: '2', golden: '0ee5d1642af0d1488263494d05376ce8a98269f575c53e423a0b1445cce90ac9' },
+    { kind: 'REPLACE', metadata: null, version: '2', golden: '978736c8a5d2d2c298ec61f5308966136f49902fda98af201f8d58feccd810e2' },
+  ];
+  for (const { kind, metadata, version, golden } of cases) {
+    await t.test(`${kind} ${JSON.stringify(metadata)}`, async () => {
+      const trace = [];
+      const operation = { operation_id: 'op-fixed-1', kind, status: 'READY', beat_id: 'b1', generation_id: 'g1', authority_epoch: '1',
+        expected_version: '1', intent_json: JSON.stringify({ metadata }) };
+      const rows = [
+        [/FROM catalog_transfer_operations o/, [operation]],
+        [/FROM catalog_operation_parts p/, [{ slot_key: 'MASTER', role: 'MASTER', part_index: 0, dispatch_state: 'VERIFIED', verified_size: '10', chat_id: '-1', provider_message_id: '2' }]],
+        [/SELECT state, expires_at <=/, [{ state: 'HELD', expired: false }]],
+        [/active_count::int AS a/, [{ a: 0, t: 0, p: 0, n: 1 }]],
+        [/min\(manual_rank\)/, [{ r: '1000' }]],
+        [/SELECT state, version::text/, [{ state: 'ACTIVE', version: '1' }]],
+        [/SELECT legacy_json FROM catalog_beats/, [{ legacy_json: '{"name":"Écho","tags":[" Old  Tag "],"rating":5}' }]],
+        [/RETURNING version::text AS v/, [{ v: '2' }]],
+        [/RETURNING revision::text/, [{ revision: '8' }]],
+        [/max\(event_seq\)/, [{ seq: '2' }]],
+      ];
+      const client = { async query(sql, args = []) {
+        trace.push([sql, args]);
+        if (sql.startsWith("UPDATE catalog_transfer_operations SET status = 'COMMITTED'")) {
+          operation.status = 'COMMITTED';
+          operation.result_json = args[2];
+        }
+        return { rows: rows.find(([pattern]) => pattern.test(sql))?.[1] ?? [] };
+      }, release() {} };
+      const authority = { availability: async () => {}, requireLibraryForMutation: async () => ({ migration_state: 'IDLE', generation_id: 'g1', authority_epoch: '1' }) };
+      const service = ops.createCatalogOperations({ pool: { connect: async () => client }, authority, resolveAccess: async () => ({ maxBeats: null }) });
+      const response = await service.commitOperation({ userId: 'u1', era: 'era-1', epoch: '1', operationId: operation.operation_id });
+      assert.equal(response.status, 200);
+      assert.equal(response.operation.result.version, version);
+      // Huella de la traza completa (texto SQL, parámetros, orden) y del JSON enviado antes de M4.2.
+      assert.equal(createHash('sha256').update(JSON.stringify([trace, response])).digest('hex'), golden);
+    });
+  }
+});
 
 test('random_id: entero firmado de 64 bits como texto, uniforme en todo el rango, con extremos exactos', () => {
   for (let i = 0; i < 2000; i++) assert.ok(ops.int64(ops.randomInt64String()), 'dentro del rango int64');

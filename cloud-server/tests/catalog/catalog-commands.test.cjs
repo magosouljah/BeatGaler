@@ -2,8 +2,10 @@
 // T07 — Comandos: transformación del documento canónico, precondiciones y contratos con pool falso. Sin red ni DB.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const commands = require('../../catalog/commands.js');
 const authority = require('../../catalog/authority.js');
+const { beatRowsFromDoc, patchBeatDto } = require('../../catalog/beat-projection');
 
 function fakePool({ lib = null, onQuery = null } = {}) {
   const statements = [];
@@ -23,8 +25,77 @@ function fakePool({ lib = null, onQuery = null } = {}) {
 }
 const LIB = { user_id: 'u1', vault_id: 'v1', authority: 'POSTGRES', migration_state: 'IDLE', authority_era: 'era-1', authority_epoch: '1', revision: '5', active_generation_id: 'native-g',
   active_count: '3', trash_count: '0', purging_count: '0', pending_count: '0', cleanup_enabled: false, restore_hold: true, generation_origin: 'NATIVE', generation_status: 'ACTIVE', current_chat_id: '-1' };
-const make = (pool) => commands.createCatalogCommands({ pool, authority: authority.createCatalogAuthority({ pool, env: { BEATGALER_CATALOG_NATIVE_ENABLED: 'true' }, controlPlaneAuthority: 'postgres' }) });
+const make = (pool, options = {}) => commands.createCatalogCommands({ pool, authority: authority.createCatalogAuthority({ pool, env: { BEATGALER_CATALOG_NATIVE_ENABLED: 'true' }, controlPlaneAuthority: 'postgres' }), ...options });
 const H = { era: 'era-1', epoch: '1', idempotencyKey: 'k-1' };
+
+test('PATCH conserva la forma y el orden del beat en la respuesta', async (t) => {
+  const cases = [
+    { name: 'tags y portada ausente', tags: ['Trap'], has_artwork: false, wire: '{"id":"b1","version":"1","state":"ACTIVE","name":"Beat","bpm":"120","key":"Cm","tags":["Trap"],"rating":5,"color":null,"color2":null,"hasArtwork":false}' },
+    { name: 'valores nulos del lector', tags: null, has_artwork: null, wire: '{"id":"b1","version":"1","state":"ACTIVE","name":"Beat","bpm":"120","key":"Cm","tags":null,"rating":5,"color":null,"color2":null,"hasArtwork":null}' },
+  ];
+  for (const { name, tags, has_artwork, wire } of cases) {
+    await t.test(name, async () => {
+      const row = { id: 'b1', version: '1', state: 'ACTIVE', name: 'Beat', bpm: '120', key: 'Cm', tags, rating: 5, color: null, color2: null, has_artwork };
+      assert.equal(JSON.stringify(patchBeatDto(row)), wire);
+      const pool = fakePool({ lib: LIB, onQuery(sql) {
+        if (sql.includes('SELECT beat_id, state')) return { rows: [{ state: 'ACTIVE', version: '1', legacy_json: '{"rating":5}' }] };
+        if (sql.includes('SELECT b.beat_id AS id')) return { rows: [row] };
+      } });
+      const result = await make(pool).patchBeat({ userId: 'u1', beatId: 'b1', ...H, expectedVersion: '1', patch: { rating: 5 } });
+      assert.equal(JSON.stringify(result.beat), wire);
+    });
+  }
+});
+
+test('PATCH conserva escrituras y orden de facetas cuando cambian o se conservan los tags', async (t) => {
+  const cases = [
+    { patch: { rating: 5 }, tags: ['trap'], golden: '798df688e9d431af1f1be86b7418525a20b173f1e9b52aab554da2f8cd713aaa' },
+    { patch: { rating: 5, tags: ['dark', 'trap'] }, tags: ['dark', 'trap'], golden: 'd7bd5ecaff105ce79e05da28e62427c498389549196d2980a1c7b45fccc591e4' },
+  ];
+  for (const { patch, tags, golden } of cases) {
+    await t.test(JSON.stringify(patch), async () => {
+      const pool = fakePool({ lib: LIB, onQuery(sql) {
+        if (sql.includes('SELECT beat_id, state')) return { rows: [{ state: 'ACTIVE', version: '1', legacy_json: '{"name":"Écho","key":"Cm","rating":3,"tags":["trap"],"color":"#336699"}' }] };
+        if (sql.includes('RETURNING version::text')) return { rows: [{ version: '2' }] };
+        if (sql.includes('RETURNING revision::text')) return { rows: [{ revision: '6' }] };
+        if (sql.includes('max(event_seq)')) return { rows: [{ seq: '2' }] };
+        if (sql.includes('SELECT b.beat_id AS id')) return { rows: [{ id: 'b1', version: '2', state: 'ACTIVE', name: 'Écho', bpm: '', key: 'Cm', tags, rating: 5, color: '#336699', color2: null, has_artwork: false }] };
+      } });
+      const result = await make(pool, { randomUUID: () => 'patch-fixed' }).patchBeat({ userId: 'u1', beatId: 'b1', ...H, expectedVersion: '1', patch });
+      assert.equal(result.noop, false);
+      // Huella de la traza completa (texto SQL, parámetros, orden) y del JSON enviado antes de M4.2.
+      assert.equal(createHash('sha256').update(JSON.stringify([pool.statements, result])).digest('hex'), golden);
+    });
+  }
+});
+
+test('filas del documento: columna derivada de BPM y rating de presentación', () => {
+  const cases = [
+    { doc: { bpm: '-0', rating: '3.9' }, columns: [1, 0, null, 3] },
+    { doc: { bpm: 'no-numérico', rating: 999 }, columns: [3, null, null, 255] },
+    { doc: { bpm: '-Infinity', rating: 12 }, columns: [0, null, 12, 12] },
+  ];
+  for (const { doc, columns } of cases) {
+    const row = beatRowsFromDoc(doc);
+    assert.deepEqual([row.bpmSortClass, row.bpmSort, row.rating, row.ratingDisplay], columns);
+  }
+});
+
+test('filas del documento: tags históricos conservan posición y espacios internos', () => {
+  const row = beatRowsFromDoc({ tags: ['  Lo   Fi  ', null, 'CAFÉ'] });
+  assert.deepEqual(row.tags, [
+    { position: 0, label: '  Lo   Fi  ', normKey: 'lo   fi', searchKey: '  lo   fi  ' },
+    { position: 2, label: 'CAFÉ', normKey: 'café', searchKey: 'café' },
+  ]);
+});
+
+test('filas del documento: search_text conserva el separador y el orden de los campos', () => {
+  const cases = [
+    { doc: { name: ' Écho ', key: 'Cm', bpm: '120', tags: [' TRAP ', 'Dark'] }, searchText: 'écho\x1fcm\x1f120\x1f trap \x1fdark' },
+    { doc: {}, searchText: 'untitled\x1f\x1f' },
+  ];
+  for (const { doc, searchText } of cases) assert.equal(beatRowsFromDoc(doc).searchText, searchText);
+});
 
 test('applyPatchToDoc conserva claves no editadas y su orden; docChanged detecta no-op y cambios (incluido crop null vs ausente)', () => {
   const doc = { id: 'b1', sort_order: 3, name: 'Old', bpm: '90', key: 'C', tags: ['a'], rating: 1, artwork: { telegram_message_id: 5 }, extra: { keep: true } };

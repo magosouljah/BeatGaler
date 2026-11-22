@@ -14,7 +14,7 @@ const crypto = require('crypto');
 const { requireUserId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
-const codec = require('./beat-projection');
+const { deepDiff, applyPatchToDoc, tagsEqual, writeBeatDoc, refreshBeatTagFacets, PATCH_BEAT_COLUMNS, patchBeatDto } = require('./beat-projection');
 const rules = require('./metadata-rules');
 const { TUPLES, SORTS, STATEMENT_TIMEOUT_MS } = require('./queries');
 const facets = require('./facets');
@@ -42,13 +42,7 @@ const sqlError = (error) => {
 };
 
 // ---------- documento canónico v2 y proyecciones (codec T04) ----------
-const DOC_KEYS = Object.freeze({ name: 'name', bpm: 'bpm', key: 'key', tags: 'tags', rating: 'rating', color: 'color', color2: 'color2', crop: 'image_crop' });
-function applyPatchToDoc(doc, set) {
-  const out = { ...doc };
-  for (const [field, value] of Object.entries(set)) out[DOC_KEYS[field]] = field === 'tags' ? [...value] : field === 'crop' ? (value === null ? null : { ...value }) : value;
-  return out;
-}
-function docChanged(before, after) { return codec.deepDiff(before, after).length > 0; }
+function docChanged(before, after) { return deepDiff(before, after).length > 0; }
 // T16/V09 — bulk add/remove de tags sobre BULK_PATCH (payload.tagsOp); nunca reemplaza el conjunto (eso sigue siendo TAG_RENAME
 // para un tag o PATCH individual para el set completo). Añade preservando orden y dedupe por norm_key; quita por norm_key.
 function addTagsToDoc(doc, tags) {
@@ -63,32 +57,6 @@ function removeTagsFromDoc(doc, tags) {
   const removeSet = new Set(tags.map((t) => rules.normalizeTag(t)));
   const next = doc.tags.filter((t) => !(typeof t === 'string' && removeSet.has(rules.normalizeTag(t))));
   return next.length !== doc.tags.length ? { ...doc, tags: next } : null;
-}
-function beatRowsFromDoc(doc) {
-  const p = codec.projectBeat(doc);
-  const legacyJson = JSON.stringify(doc);
-  return { p, legacyJson, legacySha256: sha256Hex(legacyJson), legacyExportBytes: Buffer.byteLength(legacyJson, 'utf8') };
-}
-const BEAT_UPDATE_SQL = `UPDATE catalog_beats SET name = $4, bpm_text = $5, key_text = $6, rating = $7, color = $8, color2 = $9, bpm_sort_class = $10, bpm_sort = $11,
-    has_artwork = $12, legacy_json = $13, legacy_sha256 = $14, legacy_export_bytes = $15, name_display = $16, name_search = $17, key_display = $18, key_search = $19,
-    bpm_display = $20, rating_display = $21, search_text = $22, version = version + 1, updated_at = now()
-  WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 RETURNING version::text AS version`;
-// Evita reescribir tags y grupos cuando el PATCH conserva el conjunto y el orden de tags.
-// El FK ON UPDATE CASCADE de 0026 mantiene state/manual_rank de los grupos.
-function tagsEqual(a, b) {
-  const x = Array.isArray(a) ? a : []; const y = Array.isArray(b) ? b : [];
-  return x.length === y.length && x.every((v, i) => v === y[i]);
-}
-async function writeBeatDoc(client, uid, gen, beatId, doc, { tagsChanged = true } = {}) {
-  const { p, legacyJson, legacySha256, legacyExportBytes } = beatRowsFromDoc(doc);
-  const r = await client.query(BEAT_UPDATE_SQL, [uid, gen, beatId, p.name, p.bpmText, p.keyText, p.rating, p.color, p.color2, p.bpmSortClass, p.bpmSort, p.hasArtwork,
-    legacyJson, legacySha256, legacyExportBytes, p.nameDisplay, p.nameSearch, p.keyDisplay, p.keySearch, p.bpmDisplay, p.ratingDisplay, p.searchText]);
-  if (tagsChanged) {
-    await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
-    await client.query('DELETE FROM catalog_beat_tags WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, beatId]);
-    for (const t of p.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, beatId, t.position, t.label, t.normKey, t.searchKey]);
-  }
-  return { version: r.rows[0].version, normKeys: [...new Set(p.tags.map((t) => t.normKey))], tagsChanged };
 }
 async function normKeysOf(client, uid, gen, beatIds) {
   if (!beatIds.length) return [];
@@ -152,10 +120,9 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     return operationId;
   }
   const beatDto = async (client, uid, gen, beatId) => {
-    const r = (await client.query(`SELECT b.beat_id AS id, b.version::text AS version, b.state, b.name_display AS name, b.bpm_display AS bpm, b.key_display AS key, b.rating_display AS rating, b.color, b.color2, b.has_artwork,
-        (SELECT coalesce(array_agg(t.label ORDER BY t.position), '{}') FROM catalog_beat_tags t WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id) AS tags
+    const r = (await client.query(`SELECT ${PATCH_BEAT_COLUMNS}
       FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.beat_id = $3`, [uid, gen, beatId])).rows[0];
-    return r ? { id: r.id, version: r.version, state: r.state, name: r.name, bpm: r.bpm, key: r.key, tags: r.tags, rating: r.rating, color: r.color, color2: r.color2, hasArtwork: r.has_artwork } : null;
+    return patchBeatDto(r);
   };
   const lockBeats = async (client, uid, gen, beatIds) => (await client.query(`SELECT beat_id, state, version::text AS version, legacy_json, manual_rank::text AS manual_rank FROM catalog_beats
       WHERE user_id = $1 AND generation_id = $2 AND beat_id = ANY($3::text[]) ORDER BY beat_id COLLATE "C" FOR UPDATE`, [uid, gen, beatIds])).rows;
@@ -204,8 +171,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
         }
         const revision = await bumpRevision(client, uid);
         if (tagsChanged) {
-          await facets.insertGroups(client, uid, gen, [beatId]);
-          await facets.applyFacetDelta(client, uid, gen, facetsBefore, await facets.snapshotGroups(client, uid, gen, [beatId]), revision);
+          await refreshBeatTagFacets(client, uid, gen, [beatId], facetsBefore, revision);
         }
         const eventSeq = await emitEvent(client, uid, gen, revision, 'BEAT_PATCHED', { beatId, version, payload: { fields: Object.keys(v.set), ...(artworkSlot ? { artworkUnlinked: artworkSlot.file_id } : {}) } });
         result = { noop: false, beat: await beatDto(client, uid, gen, beatId), revision, eventSeq };

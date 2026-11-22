@@ -17,10 +17,9 @@ const crypto = require('crypto');
 const { requireUserId, partJobId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
-const codec = require('./beat-projection');
+const { nativeBeatDocument, beatRowsFromDoc, insertBeatDoc, replaceBeatMetadata, refreshBeatTagFacets } = require('./beat-projection');
 const rules = require('./metadata-rules');
 const { STATEMENT_TIMEOUT_MS } = require('./queries');
-const facets = require('./facets');
 const { nameKey, assertNameFree } = require('./name-uniqueness');
 
 const RESERVATION_TTL_MS = 15 * 60_000;
@@ -104,13 +103,6 @@ function validateIntent(input) {
   const intent = { kind, parts, metadata, beatId, expectedVersion };
   if (Buffer.byteLength(JSON.stringify(intent), 'utf8') > INTENT_MAX_BYTES) throw new CatalogQueryError('PAYLOAD_TOO_LARGE', 413, 'intent exceeds 64 KiB', { max_bytes: INTENT_MAX_BYTES });
   return intent;
-}
-
-// Documento canónico v2 de un beat nativo nuevo (NATIVO §7: generado por el servidor; codec T04 lo valida igual).
-function nativeBeatDocument(beatId, metadata) {
-  const doc = { id: beatId, name: metadata.name, bpm: metadata.bpm ?? '', key: metadata.key ?? '', tags: metadata.tags ?? [], rating: metadata.rating ?? 0, color: metadata.color ?? '', color2: metadata.color2 ?? '' };
-  if (metadata.crop !== undefined) doc.image_crop = metadata.crop;
-  return doc;
 }
 
 function createCatalogOperations({ pool = null, authority = null, resolveAccess = null, now = () => new Date(), randomUUID = () => crypto.randomUUID(), randomBytes = crypto.randomBytes } = {}) {
@@ -390,14 +382,10 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       if (o.kind === 'IMPORT') {
         await assertNameFree(client, uid, gen, intent.metadata.name); // carrera entre importaciones simultáneas: la segunda en confirmar recibe NAME_TAKEN
         const doc = nativeBeatDocument(o.beat_id, intent.metadata);
-        const p = codec.projectBeat(doc); const json = JSON.stringify(doc);
+        const rows = beatRowsFromDoc(doc);
         const rank = (await client.query("SELECT coalesce(min(manual_rank), 1000)::text AS r FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND state = 'ACTIVE'", [uid, gen])).rows[0].r;
         const newRank = (BigInt(rank) - 1000n).toString(); // alta prepend (C6): rango menor que el mínimo, sin renumerar
-        await client.query(`INSERT INTO catalog_beats(user_id, generation_id, beat_id, state, name, bpm_text, key_text, rating, color, color2, bpm_sort_class, bpm_sort, sort_order, manual_rank, has_artwork,
-            legacy_json, legacy_sha256, legacy_export_bytes, name_display, name_search, key_display, key_search, bpm_display, rating_display, search_text)
-          VALUES ($1,$2,$3,'ACTIVE',$4,$5,$6,$7,$8,$9,$10,$11,NULL,$12::numeric,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
-        [uid, gen, o.beat_id, p.name, p.bpmText, p.keyText, p.rating, p.color, p.color2, p.bpmSortClass, p.bpmSort, newRank, parts.some((x) => x.slot_key === 'ARTWORK'), json, sha256Hex(json), Buffer.byteLength(json, 'utf8'), p.nameDisplay, p.nameSearch, p.keyDisplay, p.keySearch, p.bpmDisplay, p.ratingDisplay, p.searchText]);
-        for (const t of p.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, o.beat_id, t.position, t.label, t.normKey, t.searchKey]);
+        await insertBeatDoc(client, [uid, gen, o.beat_id], rows, { manualRank: newRank, hasArtwork: parts.some((x) => x.slot_key === 'ARTWORK') });
         beatVersion = '1';
       } else {
         const b = (await client.query('SELECT state, version::text AS version FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 FOR UPDATE', [uid, gen, o.beat_id])).rows[0];
@@ -410,16 +398,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
         if (intent.metadata) {
           if (typeof intent.metadata.name === 'string') await assertNameFree(client, uid, gen, intent.metadata.name, o.beat_id);
           const before = JSON.parse((await client.query('SELECT legacy_json FROM catalog_beats WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, o.beat_id])).rows[0].legacy_json);
-          const after = { ...before };
-          for (const [k, val] of Object.entries(intent.metadata)) after[k === 'crop' ? 'image_crop' : k] = val;
-          const pj = codec.projectBeat(after); const json = JSON.stringify(after);
-          await client.query(`UPDATE catalog_beats SET name = $4, bpm_text = $5, key_text = $6, rating = $7, color = $8, color2 = $9, bpm_sort_class = $10, bpm_sort = $11, legacy_json = $12, legacy_sha256 = $13, legacy_export_bytes = $14,
-              name_display = $15, name_search = $16, key_display = $17, key_search = $18, bpm_display = $19, rating_display = $20, search_text = $21 WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3`,
-          [uid, gen, o.beat_id, pj.name, pj.bpmText, pj.keyText, pj.rating, pj.color, pj.color2, pj.bpmSortClass, pj.bpmSort, json, sha256Hex(json), Buffer.byteLength(json, 'utf8'), pj.nameDisplay, pj.nameSearch, pj.keyDisplay, pj.keySearch, pj.bpmDisplay, pj.ratingDisplay, pj.searchText]);
-          facetsBefore = await facets.snapshotGroups(client, uid, gen, [o.beat_id]);
-          await client.query('DELETE FROM catalog_beat_tag_groups WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, o.beat_id]);
-          await client.query('DELETE FROM catalog_beat_tags WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3', [uid, gen, o.beat_id]);
-          for (const t of pj.tags) await client.query('INSERT INTO catalog_beat_tags(user_id, generation_id, beat_id, position, label, norm_key, search_key) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uid, gen, o.beat_id, t.position, t.label, t.normKey, t.searchKey]);
+          facetsBefore = await replaceBeatMetadata(client, uid, gen, o.beat_id, before, intent.metadata);
           tagsChanged = true;
         }
         beatVersion = (await client.query('UPDATE catalog_beats SET version = version + 1, updated_at = now(), has_artwork = has_artwork OR $4 WHERE user_id = $1 AND generation_id = $2 AND beat_id = $3 RETURNING version::text AS v', [uid, gen, o.beat_id, parts.some((x) => x.slot_key === 'ARTWORK')])).rows[0].v;
@@ -465,8 +444,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       if (o.kind === 'IMPORT' || (o.kind === 'REPLACE' && tagsChanged)) {
         // Grupos del beat (IMPORT: nuevo; REPLACE: reescritos) y facetas por delta en la misma transacción, bajo el lock de
         // biblioteca tomado por requireLibraryForMutation (ver facets.js). Sin recuento completo del grupo.
-        await facets.insertGroups(client, uid, gen, [o.beat_id]);
-        await facets.applyFacetDelta(client, uid, gen, facetsBefore, await facets.snapshotGroups(client, uid, gen, [o.beat_id]), revision);
+        await refreshBeatTagFacets(client, uid, gen, [o.beat_id], facetsBefore, revision);
       }
       const result = { beatId: o.beat_id, version: beatVersion, revision, installed, eventSeq: String(seq) };
       await client.query("UPDATE catalog_transfer_operations SET status = 'COMMITTED', result_json = $3, completed_at = now() WHERE user_id = $1 AND operation_id = $2", [uid, operationId, canonicalJson(result)]);
