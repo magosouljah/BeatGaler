@@ -10,9 +10,9 @@
 // Sin importar transporte: solo SQL + crypto.
 
 const crypto = require('crypto');
-const { requireUserId } = require('./contract');
-const { canonicalJson, CatalogAuthorityError } = require('./authority');
+const { canonicalJson } = require('./authority');
 const { CatalogQueryError, createCursorSigner, keysFromEnv } = require('./cursor');
+const { createLibraryTx, STATEMENT_TIMEOUT_MS, API_TIMEOUT_MS } = require('./library-tx');
 const { SEARCH_TEXT_SEP, QUERY_BEAT_COLUMNS, itemDto } = require('./beat-projection');
 
 const LIMIT_DEFAULT = 100;
@@ -23,8 +23,6 @@ const QUERY_SET_BATCH_MAX = 240;
 const Q_MAX_BYTES = 64 * 1024;
 const PAGE_MAX_BYTES = 2 * 1024 * 1024;
 const PREDICATE_MAX_BYTES = 8192; // CHECK de catalog_query_sets.predicate_json (0026)
-const STATEMENT_TIMEOUT_MS = 1000;
-const API_TIMEOUT_MS = 2000;
 const LEGACY_OFFSET_MAX = 10000;
 const LEGACY_BLOCK = 240;
 const LEASE_MINUTES = 30;
@@ -36,7 +34,6 @@ const SORTS = Object.freeze(['manual', 'rating', 'name', 'bpm']);
 const INCLUDE_MODES = Object.freeze(['any', 'all']);
 
 const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
-const unavailable = (reason, extra = {}) => new CatalogQueryError('CATALOG_UNAVAILABLE', 503, `catalog is unavailable (${reason})`, { reason, ...extra });
 const sha256Hex = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
 
 // ---------- tuplas de orden (C12 §4.3): todas ASC para comparar filas; rating como 255 - rating_display ----------
@@ -200,11 +197,6 @@ function orderBy(sort, desc) { return TUPLES[sort].map((c) => `${c}${desc ? ' DE
 function tupleOf(row, sort) { return TUPLE_TEXT[sort].map((_, i) => row[`k${i}`]); }
 function tupleSelect(sort) { return TUPLE_TEXT[sort].map((c, i) => `${c} AS k${i}`).join(', '); }
 
-const LIB_SQL = `SELECT l.user_id, l.vault_id, l.authority, l.migration_state, l.authority_era::text AS authority_era, l.authority_epoch::text AS authority_epoch,
-  l.revision::text AS revision, l.active_generation_id, l.active_count::text AS active_count, l.trash_count::text AS trash_count,
-  l.purging_count::text AS purging_count, l.pending_count::text AS pending_count, l.restore_hold, l.cleanup_enabled
-  FROM catalog_libraries l WHERE l.user_id = $1`;
-
 function contextDto(lib) {
   return {
     authority: 'POSTGRES', authorityEra: lib.authority_era, epoch: lib.authority_epoch, revision: lib.revision, generationId: lib.active_generation_id,
@@ -213,55 +205,12 @@ function contextDto(lib) {
   };
 }
 
-function sqlError(error) {
-  if (error instanceof CatalogAuthorityError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog query timed out', { sqlstate: '57014' });
-  return unavailable('SQL_ERROR', { sqlstate: error?.code || null });
-}
-function withDeadline(promise, ms, onTimeout) {
-  let timer;
-  const t = new Promise((_, reject) => { timer = setTimeout(() => { onTimeout?.(); reject(new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog request exceeded the total time budget', { budget_ms: ms })); }, ms); });
-  return Promise.race([promise, t]).finally(() => clearTimeout(timer));
-}
-
 function createCatalogQueries({ pool = null, authority = null, env = process.env, cursorKeys = null, now = () => Date.now(), randomUUID = () => crypto.randomUUID() } = {}) {
   if (!authority || typeof authority.availability !== 'function') throw new Error('createCatalogQueries requires the catalog authority');
   const keyring = cursorKeys ? { keys: cursorKeys, source: 'explicit' } : keysFromEnv(env);
   const signer = createCursorSigner({ keys: keyring.keys });
 
-  // Transacción de lectura breve y consistente: la disponibilidad (flag/activación) se exige antes; la biblioteca POSTGRES
-  // se lee dentro del snapshot. Sin fila POSTGRES, la respuesta exacta (404/409/503) la decide authority.resolveContext.
-  async function readTx(userId, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    if (!pool || typeof pool.connect !== 'function') throw unavailable('POSTGRES_UNAVAILABLE');
-    const client = await pool.connect();
-    let r;
-    try {
-      const run = (async () => {
-        await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-        try {
-          await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-          const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-          if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
-          const lib = (await client.query(LIB_SQL, [uid])).rows[0] || null;
-          if (!lib || lib.authority !== 'POSTGRES' || !lib.active_generation_id) return { noLibrary: true };
-          const out = await fn(client, lib, uid);
-          return { value: out };
-        } finally { await client.query('COMMIT').catch(() => {}); }
-      })();
-      r = await withDeadline(run, API_TIMEOUT_MS);
-    } catch (error) {
-      throw sqlError(error);
-    } finally {
-      client.release();
-    }
-    if (r.noLibrary) {
-      await authority.resolveContext({ userId: uid }); // lanza 404/409/503 con el cliente ya liberado
-      throw unavailable('CONTEXT_RACE');
-    }
-    return r.value;
-  }
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'queries' });
 
   // ---------- cursor ↔ contexto ----------
   function cursorBase(lib, uid, req) {
@@ -291,7 +240,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   // ---------- GET /catalog/v1/beats ----------
   async function listBeats({ userId, query = {}, request = null } = {}) {
     const req = request || parseListRequest(query);
-    return readTx(userId, async (client, lib, uid) => {
+    return libraryTx.read(userId, async ({ client, ctx: lib, uid }) => {
       const hasFilters = Boolean(req.q) || req.includeTags.length > 0 || req.excludeTags.length > 0;
       let cur = null;
       if (req.cursor) cur = verifyCursor(req.cursor, lib, uid, req);
@@ -359,7 +308,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   // ---------- GET /catalog/v1/beats/:id ----------
   async function getBeat({ userId, beatId } = {}) {
     if (typeof beatId !== 'string' || !beatId || Buffer.byteLength(beatId, 'utf8') > 1024) throw inputInvalid('BEAT_ID');
-    return readTx(userId, async (client, lib, uid) => {
+    return libraryTx.read(userId, async ({ client, ctx: lib, uid }) => {
       const r = await client.query(`SELECT ${QUERY_BEAT_COLUMNS}, b.sort_order, b.telegram_topic_id::text AS telegram_topic_id, b.created_at, b.updated_at,
           (SELECT json_build_object('trashId', te.trash_id, 'trashedAt', te.trashed_at, 'purgeAfter', te.purge_after) FROM catalog_trash_entries te
              WHERE te.user_id = b.user_id AND te.generation_id = b.generation_id AND te.beat_id = b.beat_id) AS trash
@@ -377,7 +326,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
     if (typeof beatId !== 'string' || !beatId) throw inputInvalid('BEAT_ID');
     const limit = parseLimit(scalar(query, 'limit'), { max: FILES_LIMIT_MAX, dflt: FILES_LIMIT_MAX });
     const after = scalar(query, 'after') || null;
-    return readTx(userId, async (client, lib, uid) => {
+    return libraryTx.read(userId, async ({ client, ctx: lib, uid }) => {
       const exists = await client.query("SELECT 1 FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.beat_id = $3 AND b.state IN ('ACTIVE', 'TRASH', 'PURGING')", [uid, lib.active_generation_id, beatId]);
       if (!exists.rows.length) throw new CatalogQueryError('NOT_FOUND', 404, 'beat is not accessible', {});
       const params = [uid, lib.active_generation_id, beatId, limit + 1];
@@ -410,7 +359,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
     const offset = Number(offsetRaw);
     const req = Object.freeze({ state: 'ACTIVE', q: '', includeMode: 'any', includeTags: [], excludeTags: [], sort, limit: LEGACY_BLOCK, includeTotal: true, cursor: null, edge: null,
       filterHash: filterHashOf({ state: 'ACTIVE', q: '', includeMode: 'any', includeTags: [], excludeTags: [] }) });
-    const r = await readTx(userId, async (client, lib, uid) => {
+    const r = await libraryTx.read(userId, async ({ client, ctx: lib, uid }) => {
       const total = Number(lib.active_count);
       const params = [uid, lib.active_generation_id];
       const where = "b.user_id = $1 AND b.generation_id = $2 AND b.state = 'ACTIVE'";
@@ -460,7 +409,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   const facetDto = (f) => ({ key: f.norm_key, label: f.rep_label, count: Number(f.beat_count), representativeBeatId: f.rep_beat_id });
   async function listFacets({ userId, query = {} } = {}) {
     const req = parseFacetsRequest(query);
-    return readTx(userId, async (client, lib, uid) => {
+    return libraryTx.read(userId, async ({ client, ctx: lib, uid }) => {
       const params = [uid, lib.active_generation_id, req.scope];
       let where = 'f.user_id = $1 AND f.generation_id = $2 AND f.scope = $3 AND f.beat_count > 0';
       if (req.q) { params.push(likePattern(req.q)); where += ` AND f.norm_key COLLATE "C" LIKE $${params.length} ESCAPE '\\'`; }
@@ -488,7 +437,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   async function activeFacets({ userId, keys = [] } = {}, scope = 'ACTIVE') {
     if (!Array.isArray(keys) || keys.length > FACETS_LIMIT_MAX || keys.some((k) => typeof k !== 'string')) throw inputInvalid('FACET_KEYS');
     if (!STATES.includes(scope)) throw inputInvalid('ENUM', { param: 'scope' });
-    return readTx(userId, async (client, lib, uid) => {
+    return libraryTx.read(userId, async ({ client, ctx: lib, uid }) => {
       const rows = (await client.query('SELECT f.norm_key, f.rep_label, f.rep_beat_id, f.beat_count::text AS beat_count FROM catalog_facets f WHERE f.user_id = $1 AND f.generation_id = $2 AND f.scope = $3 AND f.norm_key = ANY($4::text[])', [uid, lib.active_generation_id, scope, [...new Set(keys)]])).rows;
       return { items: rows.map(facetDto), missing: keys.filter((k) => !rows.some((r) => r.norm_key === k)), revision: lib.revision };
     });
@@ -506,29 +455,13 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
     if (Buffer.byteLength(json, 'utf8') > PREDICATE_MAX_BYTES) throw new CatalogQueryError('QUERY_SET_PREDICATE_TOO_LARGE', 413, 'query-set predicate exceeds 8 KiB', { max_bytes: PREDICATE_MAX_BYTES });
     return { json, hash: filterHashOf(filters), filters: p };
   }
-  async function writeTx(userId, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      try {
-        await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-        const lib = (await client.query(LIB_SQL, [uid])).rows[0] || null;
-        if (!lib || lib.authority !== 'POSTGRES' || !lib.active_generation_id) { await client.query('ROLLBACK'); await authority.resolveContext({ userId: uid }); throw unavailable('CONTEXT_RACE'); }
-        const out = await fn(client, lib, uid);
-        await client.query('COMMIT');
-        return out;
-      } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
   async function createQuerySet({ userId, query = {}, consumer = {} } = {}) {
     const req = parseListRequest({ ...query, cursor: undefined, edge: undefined, limit: undefined, includeTotal: undefined, sort: undefined });
     const { json, hash } = predicateOf(req);
     const consumerId = typeof consumer.id === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(consumer.id) ? consumer.id : null;
     const consumerKind = ['SELECTION', 'SHUFFLE', 'OPERATION', 'BUILD'].includes(consumer.kind) ? consumer.kind : null;
     if (!consumerId || !consumerKind) throw inputInvalid('CONSUMER');
-    return writeTx(userId, async (client, lib, uid) => {
+    return libraryTx.deriveWrite(userId, async ({ client, ctx: lib, uid }) => {
       const reuse = (await client.query(`SELECT set_id FROM catalog_query_sets WHERE user_id = $1 AND generation_id = $2 AND predicate_hash = $3 AND base_revision = $4::bigint AND status IN ('BUILDING', 'READY')`,
         [uid, lib.active_generation_id, hash, lib.revision])).rows[0];
       let setId = reuse ? reuse.set_id : null; let created = false;
@@ -560,7 +493,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   async function stepQuerySet({ userId, setId, batch = QUERY_SET_BATCH_MAX } = {}) {
     if (!Number.isInteger(batch) || batch < 1 || batch > QUERY_SET_BATCH_MAX) throw inputInvalid('BATCH', { max: QUERY_SET_BATCH_MAX });
     if (typeof setId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(setId)) throw inputInvalid('SET_ID');
-    return writeTx(userId, async (client, lib, uid) => {
+    return libraryTx.deriveWrite(userId, async ({ client, ctx: lib, uid }) => {
       const s = (await client.query(`${SET_SQL} FOR UPDATE OF s`, [uid, setId])).rows[0];
       if (!s) throw new CatalogQueryError('NOT_FOUND', 404, 'query set is not accessible', {});
       if (s.status !== 'BUILDING') return { ...setDto(s), advanced: 0 };
@@ -605,7 +538,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   }
   async function getQuerySet({ userId, setId } = {}) {
     if (typeof setId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(setId)) throw inputInvalid('SET_ID');
-    return readTx(userId, async (client, lib, uid) => {
+    return libraryTx.read(userId, async ({ client, ctx: lib, uid }) => {
       const s = (await client.query(SET_SQL, [uid, setId])).rows[0];
       if (!s) throw new CatalogQueryError('NOT_FOUND', 404, 'query set is not accessible', {});
       const leases = (await client.query('SELECT count(*)::int AS n FROM catalog_query_set_leases WHERE user_id = $1 AND set_id = $2 AND lease_until > now()', [uid, setId])).rows[0].n;
@@ -615,7 +548,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   async function transitionQuerySet({ userId, setId, to } = {}) {
     if (typeof setId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(setId)) throw inputInvalid('SET_ID');
     if (!['CANCELLED', 'RELEASED'].includes(to)) throw inputInvalid('TRANSITION');
-    return writeTx(userId, async (client, _lib, uid) => {
+    return libraryTx.deriveWrite(userId, async ({ client, uid }) => {
       const s = (await client.query(`${SET_SQL} FOR UPDATE OF s`, [uid, setId])).rows[0];
       if (!s) throw new CatalogQueryError('NOT_FOUND', 404, 'query set is not accessible', {});
       const ok = to === 'CANCELLED' ? s.status === 'BUILDING' : ['READY', 'STALE', 'FAILED', 'CANCELLED'].includes(s.status);

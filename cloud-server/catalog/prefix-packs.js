@@ -12,9 +12,8 @@
 //    sustituido o una publicación perdedora quedan como mensajes sin referencia.
 const crypto = require('crypto');
 const { requireUserId } = require('./contract');
-const { CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
-const { STATEMENT_TIMEOUT_MS } = require('./queries');
+const { createLibraryTx } = require('./library-tx');
 const { packCaptionFor } = require('./transport-gateway');
 
 const PREFIX_BYTES = 128 * 1024;
@@ -26,11 +25,6 @@ const SHA_RE = /^[0-9a-f]{64}$/;
 const FILE_ID_RE = /^[A-Za-z0-9._:-]{1,120}$/;
 const MP3_SQL = "(lower(coalesce(fv.mime, '')) IN ('audio/mpeg', 'audio/mp3') OR lower(coalesce(fv.filename, '')) LIKE '%.mp3')";
 
-const sqlError = (error) => {
-  if (error instanceof CatalogAuthorityError || error instanceof CatalogQueryError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog statement timed out', { sqlstate: '57014' });
-  return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog database is unavailable', { sqlstate: error?.code || null });
-};
 const inputInvalid = (reason) => new CatalogQueryError('INPUT_INVALID', 400, 'invalid MAIN pack request', { reason });
 
 // Prefijos vigentes: MASTER MP3 VERIFIED de beats ACTIVE con hash declarado y ubicación PRIMARY conocida de la parte 0.
@@ -57,29 +51,15 @@ function createPrefixPacks({ pool = null, authority = null, gateway = null, pref
   const metrics = { tickets: 0, published: 0, conflicts: 0, busy: 0, cancelled: 0, verifyFailed: 0 };
   const canVerify = () => Boolean(gateway && typeof gateway.verifyMessage === 'function');
 
-  async function tx(fn) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      try { await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS * 5}`); const out = await fn(client); await client.query('COMMIT'); return out; }
-      catch (error) { if (error && error.commit === true) await client.query('COMMIT').catch(() => {}); else await client.query('ROLLBACK').catch(() => {}); throw error; }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
-  // Mutación con era/época verificadas y la biblioteca bloqueada (misma regla que el resto de escrituras del catálogo).
-  async function mutationTx(userId, { era, epoch }, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    return tx(async (client) => {
-      const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-      if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
-      const ctx = await authority.requireLibraryForMutation(client, { userId: uid, era, epoch });
-      if (ctx.migration_state !== 'IDLE') throw new CatalogQueryError('LIBRARY_FROZEN', 409, 'library is not accepting mutations', { migration_state: ctx.migration_state });
-      const lib = (await client.query(`SELECT l.active_generation_id, v.transport_bot_id AS bot_id,
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'prefixPacks' });
+  const { translateError: sqlError } = libraryTx;
+
+  async function lockVaultChat(client, uid) {
+    const lib = (await client.query(`SELECT l.active_generation_id, v.transport_bot_id AS bot_id,
           (SELECT c.chat_id FROM catalog_library_chats c WHERE c.user_id = l.user_id AND c.state = 'CURRENT') AS chat_id
         FROM catalog_libraries l JOIN vaults v ON v.user_id = l.user_id WHERE l.user_id = $1 FOR UPDATE OF l`, [uid])).rows[0];
-      if (!lib || !lib.active_generation_id) throw new CatalogQueryError('LIBRARY_NOT_PROVISIONED', 404, 'library is not native', {});
-      return fn(client, lib, uid);
-    });
+    if (!lib || !lib.active_generation_id) throw new CatalogQueryError('LIBRARY_NOT_PROVISIONED', 404, 'library is not native', {});
+    return lib;
   }
   async function libraryOf(client, uid) {
     const lib = (await client.query('SELECT authority, active_generation_id FROM catalog_libraries WHERE user_id = $1', [uid])).rows[0];
@@ -91,8 +71,7 @@ function createPrefixPacks({ pool = null, authority = null, gateway = null, pref
   // ---------- GET /catalog/v1/prefix-packs/manifest ----------
   // `entries`: prefijos vigentes que el MAIN cubre (dónde leerlos). `pending`: archivos vigentes que el MAIN no cubre (el contador de cambios).
   async function manifest({ userId } = {}) {
-    const uid = requireUserId(userId);
-    return tx(async (client) => {
+    return libraryTx.read(userId, async ({ client, uid }) => {
       const lib = await libraryOf(client, uid);
       const cands = (await client.query(CANDIDATES_SQL, [uid, lib.active_generation_id])).rows;
       const main = await currentMain(client, uid, lib.active_generation_id);
@@ -135,7 +114,8 @@ function createPrefixPacks({ pool = null, authority = null, gateway = null, pref
     const { sorted, data } = checkEntries(entries, sizeBytes);
     if (!canVerify()) throw new CatalogQueryError('TRANSFER_UNAVAILABLE', 503, 'the provider verifier is not configured', { reason: 'NO_VERIFIER' });
     const caption = packCaptionFor(packId);
-    const out = await mutationTx(userId, { era, epoch }, async (client, lib, uid) => {
+    const out = await libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
+      const lib = await lockVaultChat(client, uid);
       if (!lib.chat_id || !lib.bot_id) throw new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'library has no CURRENT chat or transport bot', {});
       const main = await currentMain(client, uid, lib.active_generation_id);
       const current = main ? main.seq : '0';
@@ -183,7 +163,8 @@ function createPrefixPacks({ pool = null, authority = null, gateway = null, pref
       throw new CatalogQueryError('TRANSFER_UNAVAILABLE', 503, 'the provider could not be reached to verify the MAIN document', { code: (error && error.code) || null, retry: true });
     }
     if (!evidence || evidence.size !== Number(pack.size_bytes)) { metrics.verifyFailed++; await fail('PACK_SIZE_MISMATCH'); throw new CatalogQueryError('PACK_VERIFY_FAILED', 409, 'the published message has a different size', { code: 'PACK_SIZE_MISMATCH' }); }
-    const out = await mutationTx(uid, { era, epoch }, async (client, lib) => {
+    const out = await libraryTx.mutate(uid, { era, epoch }, async ({ client }) => {
+      const lib = await lockVaultChat(client, uid);
       const st = (await client.query('SELECT status, base_seq::text AS base_seq, generation_id FROM catalog_prefix_packs WHERE user_id = $1 AND pack_id = $2 FOR UPDATE', [uid, packId])).rows[0];
       if (!st || st.status !== 'STAGED') throw new CatalogQueryError('PACK_STATE_CONFLICT', 409, `pack is ${st ? st.status : 'missing'}`, {});
       const main = await currentMain(client, uid, lib.active_generation_id);
@@ -208,8 +189,11 @@ function createPrefixPacks({ pool = null, authority = null, gateway = null, pref
   // El constructor informa de que NO hubo efecto (fallo antes de enviar o rechazo explícito): libera la construcción en curso. Idempotente.
   async function cancelMain({ userId, era, epoch, packId, code = null } = {}) {
     if (typeof packId !== 'string' || !PACK_ID_RE.test(packId)) throw inputInvalid('PACK_ID');
-    const r = await mutationTx(userId, { era, epoch }, async (client, _lib, uid) => (await client.query("UPDATE catalog_prefix_packs SET status = 'FAILED', last_error = $3 WHERE user_id = $1 AND pack_id = $2 AND status = 'STAGED' RETURNING pack_id",
-      [uid, packId, `CANCELLED:${String(code || 'CLIENT').replace(/[^A-Za-z0-9_:-]/g, '_').slice(0, 80)}`])).rows.length);
+    const r = await libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
+      await lockVaultChat(client, uid);
+      return (await client.query("UPDATE catalog_prefix_packs SET status = 'FAILED', last_error = $3 WHERE user_id = $1 AND pack_id = $2 AND status = 'STAGED' RETURNING pack_id",
+        [uid, packId, `CANCELLED:${String(code || 'CLIENT').replace(/[^A-Za-z0-9_:-]/g, '_').slice(0, 80)}`])).rows.length;
+    });
     if (r) metrics.cancelled++;
     return { cancelled: r === 1 };
   }

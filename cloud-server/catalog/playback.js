@@ -14,10 +14,10 @@
 // Solo SQL + crypto. Sin transporte.
 
 const crypto = require('crypto');
-const { requireUserId } = require('./contract');
-const { canonicalJson, CatalogAuthorityError } = require('./authority');
+const { canonicalJson } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
-const { STATEMENT_TIMEOUT_MS, TUPLES, SORTS } = require('./queries');
+const { createLibraryTx } = require('./library-tx');
+const { TUPLES, SORTS } = require('./queries');
 
 const REBUILD_BATCH = 240;
 const REBUILD_MAX_LOOPS = 64;
@@ -27,12 +27,6 @@ const LEASE_MINUTES = 30;
 
 const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
 const notFound = (what) => new CatalogQueryError('NOT_FOUND', 404, `${what} is not accessible`, {});
-const sqlError = (error) => {
-  if (error instanceof CatalogAuthorityError || error instanceof CatalogQueryError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog statement timed out', { sqlstate: '57014' });
-  if (['BGL01', 'BGN04', 'BGA05', 'BGC02'].includes(error?.code)) return new CatalogQueryError('CATALOG_NATIVE_RULE', 409, 'database native rule rejected the mutation', { sqlstate: error.code });
-  return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog is unavailable (SQL_ERROR)', { reason: 'SQL_ERROR', sqlstate: error?.code || null, sql_message: error?.code ? String(error.message).slice(0, 200) : null });
-};
 
 // ---------- RNG: entero uniforme en [0, m) por rejection sampling sobre 48 bits (sin módulo sesgado ni floats) ----------
 const RNG_BITS = 48n; const RNG_SPACE = 1n << RNG_BITS;
@@ -77,32 +71,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
   if (!pool || typeof pool.connect !== 'function') throw new Error('createCatalogPlayback requires a pool');
   if (!authority || typeof authority.requireLibraryForMutation !== 'function') throw new Error('createCatalogPlayback requires the catalog authority');
 
-  async function mutationTx(userId, { era, epoch }, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      try {
-        await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-        const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-        if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
-        const ctx = await authority.requireLibraryForMutation(client, { userId: uid, era, epoch });
-        const out = await fn(client, ctx, uid);
-        await client.query('COMMIT');
-        return out;
-      } catch (error) { if (error && error.commit === true) await client.query('COMMIT').catch(() => {}); else await client.query('ROLLBACK').catch(() => {}); throw error; }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
-  async function readTx(userId, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      try { await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`); return await fn(client, uid); } finally { await client.query('COMMIT').catch(() => {}); }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'playback' });
 
   const ROUND_SQL = `SELECT round_id, set_id, generation_id, authority_epoch::text AS authority_epoch, base_revision::text AS base_revision, status, member_count::text AS member_count, remaining::text AS remaining,
     sequence::text AS sequence, consumer_id, rebuild_from, rebuild_cursor::text AS rebuild_cursor, created_at, updated_at FROM catalog_playback_rounds WHERE user_id = $1 AND round_id = $2`;
@@ -167,7 +136,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
     if (typeof consumerId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(consumerId)) throw inputInvalid('CONSUMER_ID');
     if (fromRoundId !== null && (typeof fromRoundId !== 'string' || !ID_RE.test(fromRoundId))) throw inputInvalid('FROM_ROUND_ID');
     const roundId = `rnd-${randomUUID()}`;
-    const created = await mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    const created = await libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const set = await readySet(client, uid, ctx, setId);
       let from = null;
       if (fromRoundId) { from = (await client.query(ROUND_SQL, [uid, fromRoundId])).rows[0]; if (!from) throw notFound('round'); }
@@ -192,7 +161,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
   async function rebuildRound({ userId, era, epoch, roundId, batch = REBUILD_BATCH } = {}) {
     if (typeof roundId !== 'string' || !ID_RE.test(roundId)) throw inputInvalid('ROUND_ID');
     const n = Math.min(REBUILD_BATCH, Math.max(1, batch));
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const round = await lockRound(client, uid, roundId);
       if (round.status !== 'BUILDING') return roundDto(round, { processed: 0 });
       await assertRoundFresh(client, uid, ctx, round);
@@ -214,7 +183,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
     if (typeof roundId !== 'string' || !ID_RE.test(roundId)) throw inputInvalid('ROUND_ID');
     if (!/^[0-9]{1,18}$/.test(String(sequence ?? ''))) throw inputInvalid('SEQUENCE');
     if (typeof idempotencyKey !== 'string' || !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) throw inputInvalid('IDEMPOTENCY_KEY');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const round = await lockRound(client, uid, roundId);
       const replay = (await client.query('SELECT result_json FROM catalog_round_commands WHERE user_id = $1 AND round_id = $2 AND idempotency_key = $3', [uid, roundId, idempotencyKey])).rows[0];
       if (replay) return { ...JSON.parse(replay.result_json), replay: true };
@@ -238,7 +207,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
     if (typeof beatId !== 'string' || !beatId) throw inputInvalid('BEAT_ID');
     if (!/^[0-9]{1,18}$/.test(String(sequence ?? ''))) throw inputInvalid('SEQUENCE');
     if (typeof idempotencyKey !== 'string' || !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) throw inputInvalid('IDEMPOTENCY_KEY');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const round = await lockRound(client, uid, roundId);
       const replay = (await client.query('SELECT result_json FROM catalog_round_commands WHERE user_id = $1 AND round_id = $2 AND idempotency_key = $3', [uid, roundId, idempotencyKey])).rows[0];
       if (replay) return { ...JSON.parse(replay.result_json), replay: true };
@@ -255,7 +224,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
   }
   async function getRound({ userId, roundId } = {}) {
     if (typeof roundId !== 'string' || !ID_RE.test(roundId)) throw inputInvalid('ROUND_ID');
-    return readTx(userId, async (client, uid) => {
+    return libraryTx.read(userId, async ({ client, uid }) => {
       const r = (await client.query(ROUND_SQL, [uid, roundId])).rows[0]; if (!r) throw notFound('round');
       const c = (await client.query('SELECT count(*)::int AS n FROM catalog_round_consumed WHERE user_id = $1 AND round_id = $2', [uid, roundId])).rows[0].n;
       return roundDto(r, { consumedCount: c });
@@ -263,7 +232,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
   }
   async function releaseRound({ userId, era, epoch, roundId } = {}) {
     if (typeof roundId !== 'string' || !ID_RE.test(roundId)) throw inputInvalid('ROUND_ID');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const r = await lockRound(client, uid, roundId);
       if (r.status !== 'RELEASED') await client.query("UPDATE catalog_playback_rounds SET status = 'RELEASED', updated_at = now() WHERE user_id = $1 AND round_id = $2", [uid, roundId]);
       await client.query('DELETE FROM catalog_query_set_leases WHERE user_id = $1 AND set_id = $2 AND consumer_id = $3', [uid, r.set_id, r.consumer_id]);
@@ -275,7 +244,7 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
     if (typeof setId !== 'string' || !ID_RE.test(setId)) throw inputInvalid('SET_ID');
     if (!['next', 'previous'].includes(direction)) throw inputInvalid('DIRECTION');
     if (!SORTS.includes(sort)) throw inputInvalid('SORT');
-    return readTx(userId, async (client, uid) => {
+    return libraryTx.read(userId, async ({ client, uid }) => {
       const s = (await client.query('SELECT status, generation_id, member_count::text AS n, base_revision::text AS base_revision FROM catalog_query_sets WHERE user_id = $1 AND set_id = $2', [uid, setId])).rows[0];
       if (!s) throw notFound('query set');
       if (s.status !== 'READY') throw new CatalogQueryError('CURSOR_STALE', 409, `query set is ${s.status}`, { status: s.status });

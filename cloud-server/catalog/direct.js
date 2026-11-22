@@ -17,9 +17,9 @@
 //    distinto (RECEIPT_CONFLICT) y la operación ya cerrada rechaza cualquier recibo (OPERATION_TRANSITION_INVALID).
 const crypto = require('crypto');
 const { requireUserId, partJobId } = require('./contract');
-const { canonicalJson, CatalogAuthorityError } = require('./authority');
+const { canonicalJson } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
-const { STATEMENT_TIMEOUT_MS } = require('./queries');
+const { createLibraryTx } = require('./library-tx');
 const { captionFor } = require('./transport-gateway');
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -32,12 +32,6 @@ const TICKET_TTL_MS = 30 * 60_000;
 
 const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
 const notFound = (what) => new CatalogQueryError('NOT_FOUND', 404, `${what} is not accessible`, {});
-const sqlError = (error) => {
-  if (error instanceof CatalogAuthorityError || error instanceof CatalogQueryError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog statement timed out', { sqlstate: '57014' });
-  if (['BGL01', 'BGN04', 'BGA05', 'BGC02'].includes(error?.code)) return new CatalogQueryError('CATALOG_NATIVE_RULE', 409, 'database native rule rejected the mutation', { sqlstate: error.code, detail: error.detail || null });
-  return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog database is unavailable', { sqlstate: error?.code || null });
-};
 const ticketHash = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 
 const PART_SQL = `SELECT p.part_key, p.role, p.filename, p.mime, p.declared_size::text AS declared_size, p.declared_sha256, p.random_id, p.sender_id, p.chat_id, p.dispatch_state, p.attempts,
@@ -51,24 +45,8 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
   if (!operations || typeof operations.markDispatched !== 'function' || typeof operations.putReceipt !== 'function') throw new Error('createCatalogDirect requires catalog operations');
   const metrics = { sessions: 0, sessionRejected: 0, tickets: 0, reported: 0, receipts: 0, uncertain: 0, conflicts: 0, prewarmed: 0, lastSessionMs: 0 };
 
-  async function mutationTx(userId, { era, epoch }, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      try {
-        await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-        const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-        if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
-        const ctx = await authority.requireLibraryForMutation(client, { userId: uid, era, epoch });
-        if (ctx.migration_state !== 'IDLE') throw new CatalogQueryError('LIBRARY_FROZEN', 409, 'library is not accepting mutations', { migration_state: ctx.migration_state });
-        const out = await fn(client, ctx, uid);
-        await client.query('COMMIT');
-        return out;
-      } catch (error) { if (error && error.commit === true) await client.query('COMMIT').catch(() => {}); else await client.query('ROLLBACK').catch(() => {}); throw error; }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'direct' });
+  const { translateError: sqlError } = libraryTx;
   async function journal(sql, params) { try { return await pool.query(sql, params); } catch (error) { throw sqlError(error); } }
   async function loadPart(client, uid, operationId, partKey, { forUpdate = false } = {}) {
     const r = await client.query(`${PART_SQL}${forUpdate ? ' FOR UPDATE OF p' : ''}`, [uid, operationId, partKey]);
@@ -152,7 +130,7 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
     checkIds(operationId, partKey);
     await assertProjectAllowed(requireUserId(userId), operationId, partKey);
     const hash = ticketHash(randomBytes(32));
-    const planned = await mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    const planned = await libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const part = await loadPart(client, uid, operationId, partKey, { forUpdate: true });
       if (!INFLIGHT.includes(part.op_status)) throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${part.op_status}`, { status: part.op_status });
       if (!['PENDING', 'DISPATCHED'].includes(part.dispatch_state)) throw new CatalogQueryError('PART_STATE_CONFLICT', 409, 'part already has a receipt or verification', { dispatch_state: part.dispatch_state });
@@ -193,7 +171,7 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
     if (!known && o !== 'UNCERTAIN') throw inputInvalid('OUTCOME');
     const reason = typeof code === 'string' ? code.slice(0, 200) : null;
     const wait = Number.isFinite(Number(retryAfterMs)) && Number(retryAfterMs) > 0 ? Math.min(Number(retryAfterMs), 3_600_000) : 0;
-    const r = await mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    const r = await libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       await loadPart(client, uid, operationId, partKey, { forUpdate: true });
       const cap = (await client.query(`SELECT capability_hash, status FROM catalog_transfer_capabilities WHERE user_id = $1 AND operation_id = $2 AND part_key = $3 AND attempt = $4 FOR UPDATE`, [uid, operationId, partKey, attempt])).rows[0];
       if (!cap) throw notFound('ticket');

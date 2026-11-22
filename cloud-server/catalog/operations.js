@@ -15,8 +15,9 @@
 
 const crypto = require('crypto');
 const { requireUserId, partJobId } = require('./contract');
-const { canonicalJson, CatalogAuthorityError } = require('./authority');
+const { canonicalJson } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
+const { createLibraryTx } = require('./library-tx');
 const { nativeBeatDocument, beatRowsFromDoc, insertBeatDoc, replaceBeatMetadata, refreshBeatTagFacets } = require('./beat-projection');
 const rules = require('./metadata-rules');
 const { STATEMENT_TIMEOUT_MS } = require('./queries');
@@ -40,12 +41,6 @@ const SHA_RE = /^[0-9a-f]{64}$/;
 const inputInvalid = (reason, extra = {}) => new CatalogQueryError('INPUT_INVALID', 400, `input is invalid (${reason})`, { ...extra, reason });
 const notFound = (what) => new CatalogQueryError('NOT_FOUND', 404, `${what} is not accessible`, {});
 const sha256Hex = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
-const sqlError = (error) => {
-  if (error instanceof CatalogAuthorityError) return error;
-  if (error?.code === '57014') return new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog statement timed out', { sqlstate: '57014' });
-  if (['BGL01', 'BGN04', 'BGA05', 'BGC02'].includes(error?.code)) return new CatalogQueryError('CATALOG_NATIVE_RULE', 409, 'database native rule rejected the mutation', { sqlstate: error.code, detail: error.detail || null });
-  return new CatalogQueryError('CATALOG_UNAVAILABLE', 503, 'catalog is unavailable (SQL_ERROR)', { reason: 'SQL_ERROR', sqlstate: error?.code || null, sql_message: error?.code ? String(error.message).slice(0, 200) : null });
-};
 
 // random_id de Telegram: entero firmado de 64 bits, uniforme, como string decimal (C7.3). Se persiste antes del efecto.
 function randomInt64String(bytes = crypto.randomBytes) {
@@ -109,33 +104,8 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   if (!authority || typeof authority.requireLibraryForMutation !== 'function') throw new Error('createCatalogOperations requires the catalog authority');
   if (typeof resolveAccess !== 'function') throw new Error('createCatalogOperations requires resolveAccess(userId) → { maxBeats: number|null }');
 
-  async function mutationTx(userId, { era, epoch }, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      try {
-        await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-        const q = await client.query('SELECT 1 FROM control_plane_flush_quarantine WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1', [uid]);
-        if (q.rows.length) throw new CatalogAuthorityError('VAULT_QUARANTINED', 409, 'vault is quarantined by the control-plane flush', {});
-        const ctx = await authority.requireLibraryForMutation(client, { userId: uid, era, epoch });
-        if (ctx.migration_state !== 'IDLE') throw new CatalogQueryError('LIBRARY_FROZEN', 409, 'library is not accepting mutations', { migration_state: ctx.migration_state });
-        const out = await fn(client, ctx, uid);
-        await client.query('COMMIT');
-        return out;
-      } catch (error) { if (error && error.commit === true) await client.query('COMMIT').catch(() => {}); else await client.query('ROLLBACK').catch(() => {}); throw error; }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
-  async function readTx(userId, fn) {
-    const uid = requireUserId(userId);
-    await authority.availability();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-      try { await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`); return await fn(client, uid); } finally { await client.query('COMMIT').catch(() => {}); }
-    } catch (error) { throw sqlError(error); } finally { client.release(); }
-  }
+  const libraryTx = createLibraryTx({ pool, authority, variant: 'operations' });
+  const { translateError: sqlError } = libraryTx;
 
   const OP_SQL = `SELECT o.operation_id, o.kind, o.status, o.beat_id, o.expected_version::text AS expected_version, o.generation_id, o.authority_era::text AS authority_era, o.authority_epoch::text AS authority_epoch,
     o.idempotency_key, o.request_hash, o.intent_json, o.result_json, o.chat_id, o.sender_id, o.reservation_id, o.declared_bytes::text AS declared_bytes, o.last_error, o.created_at, o.updated_at, o.completed_at
@@ -187,7 +157,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   async function createOperation({ userId, era, epoch, idempotencyKey, intent } = {}) {
     const v = validateIntent(intent);
     const hash = sha256Hex(canonicalJson({ kind: v.kind, parts: v.parts, metadata: v.metadata, beatId: v.beatId, expectedVersion: v.expectedVersion }));
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const replay = await idempotent(client, uid, idempotencyKey, hash);
       if (replay) return opDto(client, uid, replay, { replay: true, created: false });
       const gen = ctx.generation_id;
@@ -241,7 +211,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   // Marca de despacho (gateway T11): evidencia de que se intentó el envío; sin ella un cancel es CANCELED limpio.
   async function markDispatched({ userId, era, epoch, operationId, partKey } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId) || typeof partKey !== 'string') throw inputInvalid('OPERATION_OR_PART');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (!['PREPARED', 'TRANSFERRING', 'VERIFYING'].includes(o.status)) throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
@@ -257,7 +227,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   async function assignSender({ userId, era, epoch, operationId, partKey, senderId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId) || typeof partKey !== 'string') throw inputInvalid('OPERATION_OR_PART');
     if (typeof senderId !== 'string' || !/^[A-Za-z0-9_:-]{1,128}$/.test(senderId)) throw inputInvalid('SENDER_ID');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (!['PREPARED', 'TRANSFERRING', 'VERIFYING'].includes(o.status)) throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
@@ -285,7 +255,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     if (bytesSha256 !== null && !SHA_RE.test(bytesSha256)) throw inputInvalid('RECEIPT_BYTES_SHA256');
     const canonical = canonicalJson({ messageId, documentId, size, senderId: receipt.senderId == null ? null : String(receipt.senderId), chatId: receipt.chatId == null ? null : String(receipt.chatId), bytesSha256 });
     const hash = sha256Hex(canonical);
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       // Fencing atómico (T10): un worker con lease perdido/reasignado no persiste recibos; la fila del job queda bloqueada hasta el COMMIT.
       if (lease) {
         const j = (await client.query('SELECT state, lease_owner, lease_generation::text AS g FROM catalog_jobs WHERE job_id = $1 FOR UPDATE', [lease.jobId])).rows[0];
@@ -352,7 +322,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   // ---------- POST /operations/:id/commit (idempotente; 202 | 200 | 409) ----------
   async function commitOperation({ userId, era, epoch, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (o.status === 'COMMITTED') return { status: 200, operation: await opDto(client, uid, operationId, { replay: true }) };
@@ -455,7 +425,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   // ---------- POST /operations/:id/cancel ----------
   async function cancelOperation({ userId, era, epoch, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (o.status === 'COMMITTED') throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, 'a committed operation cannot be cancelled', { status: o.status });
@@ -481,7 +451,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   // ---------- reservas: renovar (15 min, máximo 24 h) y readmitir tras vencimiento (re-comprueba cuota) ----------
   async function renewReservation({ userId, era, epoch, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const res = (await client.query('SELECT reservation_id, state, expires_at <= now() AS expired, max_until <= now() AS capped FROM catalog_reservations WHERE user_id = $1 AND operation_id = $2 FOR UPDATE', [uid, operationId])).rows[0];
       if (!res) throw notFound('reservation');
       if (res.state !== 'HELD') throw new CatalogQueryError('RESERVATION_INVALID', 409, `reservation is ${res.state}`, { state: res.state });
@@ -493,7 +463,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   }
   async function readmitReservation({ userId, era, epoch, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return mutationTx(userId, { era, epoch }, async (client, ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o || o.kind !== 'IMPORT') throw notFound('operation');
       const res = (await client.query('SELECT reservation_id, state, expires_at <= now() AS expired FROM catalog_reservations WHERE user_id = $1 AND operation_id = $2 FOR UPDATE', [uid, operationId])).rows[0];
@@ -515,7 +485,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   }
   // Vencimiento de reservas (paso de mantenimiento invocable; T10 lo programa): libera plazas vencidas sin tocar bytes ni operaciones.
   async function expireReservations({ userId, era, epoch, limit = 50 } = {}) {
-    return mutationTx(userId, { era, epoch }, async (client, _ctx, uid) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
       const r = await client.query(`UPDATE catalog_reservations SET state = 'EXPIRED', resolved_at = now() WHERE (user_id, reservation_id) IN (
           SELECT user_id, reservation_id FROM catalog_reservations WHERE user_id = $1 AND state = 'HELD' AND expires_at <= now() ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED) RETURNING reservation_id`, [uid, limit]);
       if (r.rows.length) await client.query('UPDATE catalog_libraries SET pending_count = pending_count - $2, updated_at = now() WHERE user_id = $1', [uid, r.rows.length]);
@@ -524,7 +494,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   }
   async function getOperation({ userId, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return readTx(userId, (client, uid) => opDto(client, uid, operationId));
+    return libraryTx.read(userId, ({ client, uid }) => opDto(client, uid, operationId));
   }
 
   // ---------- Jobs C8 (primitivas; el bucle es T10) ----------
