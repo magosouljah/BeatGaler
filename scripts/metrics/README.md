@@ -13,4 +13,8 @@ Miden el repo sin escribir nada en él (solo `git ls-files` y lectura de archivo
 - `lib.mjs` — utilidades comunes.
 
 `refs.mjs` excluye `scripts/metrics/` de sus objetivos y referencias, para que las herramientas no se cuenten a sí mismas.
-Informativos: CI los publica como artefacto `metrics` y nunca bloquea. El trinquete bloqueante llegará en M8.
+CI publica las tablas como artefacto informativo `metrics`, incluso si el trinquete falla.
+
+`node scripts/metrics/ratchet.mjs .` comprueba los umbrales y los archivos F/M contra la línea base. Una mejora avisa «actualiza el baseline» y solo falla si se usa `--strict-improve`. Las rutas F/M iniciales quedan registradas en el baseline. Una guarda estática intencional nueva requiere una entrada nominal en `static-guards.allowlist.txt` y sigue contando en F+M.
+
+`--against <ref>` lee el baseline histórico con `git show` y rechaza aumentos de umbrales, umbrales eliminados o altas en el conjunto inicial de archivos F/M. CI usa el SHA base del PR o el SHA anterior al push. En un push inicial de rama o en una ejecución manual usa `HEAD^`. Una referencia anterior a la incorporación del trinquete permite su primera instalación.

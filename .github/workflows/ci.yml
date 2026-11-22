@@ -125,14 +125,14 @@ jobs:
         run: node scripts/run-cloud-tests.mjs --integration
 
   metrics:
-    name: Métricas de solo lectura (informativo, no bloquea)
+    name: Trinquete de métricas
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
@@ -144,6 +144,14 @@ jobs:
           node scripts/metrics/classify-tests.mjs . summary > metrics-out/classify-tests.tsv
           node scripts/metrics/cloud-reach.mjs . summary > metrics-out/cloud-reach.tsv
           node scripts/metrics/src-reach.mjs . summary > metrics-out/src-reach.tsv
+      - name: Bloquear regresiones de métricas
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA=HEAD^
+          fi
+          node scripts/metrics/ratchet.mjs . --against "$BASE_SHA"
       - name: Publicar métricas
         if: always()
         continue-on-error: true

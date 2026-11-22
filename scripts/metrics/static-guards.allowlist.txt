@@ -1,0 +1,19 @@
+# D-M8-3-METRICA10.md y M8.3-INVENTARIO.md. Una ruta por archivo de prueba.
+# Incluye casos estáticos conservados en pruebas mixtas y guardas provisionales del inventario.
+cloud-server/tests/account-lifecycle-request-guard.test.cjs
+cloud-server/tests/auth-identity-preflight.test.cjs
+cloud-server/tests/billing-polar-daily.test.cjs
+cloud-server/tests/catalog/catalog-backup-infra.test.cjs
+cloud-server/tests/catalog/catalog-contract.test.cjs
+cloud-server/tests/password-kdf.test.cjs
+cloud-server/tests/plan-dev-switch-removed.test.cjs
+cloud-server/tests/unit.test.cjs
+scripts/regression-legacy-media-upload-disable.mjs
+scripts/regression-task-5.1-hardening.mjs
+scripts/regression-web-bound-temp-rpc.mjs
+scripts/test-public-operations-pages.mjs
+tests/component-dom/designFoundations.test.tsx
+tests/component-dom/libraryUxBridge.test.ts
+tests/component-dom/startupRevealArchitecture.test.ts
+tests/integration/appMigrationCleanup.test.ts
+tests/integration/webStartupCloudResolutionRace.test.ts
