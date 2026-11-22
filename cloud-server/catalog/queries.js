@@ -13,7 +13,7 @@ const crypto = require('crypto');
 const { requireUserId } = require('./contract');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 const { CatalogQueryError, createCursorSigner, keysFromEnv } = require('./cursor');
-const { SEARCH_TEXT_SEP } = require('./beat-projection');
+const { SEARCH_TEXT_SEP, QUERY_BEAT_COLUMNS, itemDto } = require('./beat-projection');
 
 const LIMIT_DEFAULT = 100;
 const LIMIT_MAX = 240;
@@ -197,24 +197,6 @@ function boundaryRow(sort, params, tuple) {
   return `ROW(${refs.join(', ')})`;
 }
 function orderBy(sort, desc) { return TUPLES[sort].map((c) => `${c}${desc ? ' DESC' : ''}`).join(', '); }
-const DTO_COLUMNS = `b.beat_id AS id, b.version::text AS version, b.state, b.name_display AS name, b.bpm_display AS bpm, b.key_display AS key,
-  b.rating_display AS rating, b.color, b.color2, b.has_artwork, b.manual_rank::text AS manual_rank,
-  (SELECT coalesce(array_agg(t.label ORDER BY t.position), '{}') FROM catalog_beat_tags t WHERE t.user_id = b.user_id AND t.generation_id = b.generation_id AND t.beat_id = b.beat_id) AS tags,
-  (SELECT coalesce(json_agg(json_build_object('slot', cf.slot_key, 'fileId', cf.file_id, 'role', fv.role, 'revision', fv.revision::text) ORDER BY cf.slot_key), '[]'::json)
-     FROM catalog_current_files cf JOIN catalog_file_versions fv ON fv.user_id = cf.user_id AND fv.generation_id = cf.generation_id AND fv.file_id = cf.file_id
-     WHERE cf.user_id = b.user_id AND cf.generation_id = b.generation_id AND cf.beat_id = b.beat_id) AS files`;
-
-function itemDto(row) {
-  const files = Array.isArray(row.files) ? row.files : [];
-  const slot = (k) => files.find((f) => f.slot === k) || null;
-  const ref = (f) => (f ? { fileId: f.fileId, revision: f.revision } : null);
-  return {
-    id: row.id, version: row.version, state: row.state, name: row.name, bpm: row.bpm, key: row.key, tags: row.tags || [], rating: row.rating,
-    color: row.color, color2: row.color2, artwork: ref(slot('ARTWORK')), playback: ref(slot('MASTER')),
-    hasArtwork: row.has_artwork === true || slot('ARTWORK') !== null, hasWav: files.some((f) => f.role === 'WAV'), hasStems: files.some((f) => f.role === 'STEMS'),
-    hasProject: slot('PROJECT') !== null, fileCount: files.length,
-  };
-}
 function tupleOf(row, sort) { return TUPLE_TEXT[sort].map((_, i) => row[`k${i}`]); }
 function tupleSelect(sort) { return TUPLE_TEXT[sort].map((c, i) => `${c} AS k${i}`).join(', '); }
 
@@ -331,7 +313,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
         keyset = ` AND ${tupleRow(req.sort)} ${op} ${boundaryRow(req.sort, params, cur.boundary.tuple)}`;
       }
       const desc = direction === 'last' || (cur && cur.direction === 'backward');
-      const sql = `SELECT ${DTO_COLUMNS}, ${tupleSelect(req.sort)} FROM catalog_beats b WHERE ${where}${keyset} ORDER BY ${orderBy(req.sort, desc)} LIMIT ${req.limit + 1}`;
+      const sql = `SELECT ${QUERY_BEAT_COLUMNS}, ${tupleSelect(req.sort)} FROM catalog_beats b WHERE ${where}${keyset} ORDER BY ${orderBy(req.sort, desc)} LIMIT ${req.limit + 1}`;
       const rows = (await client.query(sql, params)).rows;
       const extra = rows.length > req.limit;
       let page = rows.slice(0, req.limit);
@@ -378,7 +360,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   async function getBeat({ userId, beatId } = {}) {
     if (typeof beatId !== 'string' || !beatId || Buffer.byteLength(beatId, 'utf8') > 1024) throw inputInvalid('BEAT_ID');
     return readTx(userId, async (client, lib, uid) => {
-      const r = await client.query(`SELECT ${DTO_COLUMNS}, b.sort_order, b.telegram_topic_id::text AS telegram_topic_id, b.created_at, b.updated_at,
+      const r = await client.query(`SELECT ${QUERY_BEAT_COLUMNS}, b.sort_order, b.telegram_topic_id::text AS telegram_topic_id, b.created_at, b.updated_at,
           (SELECT json_build_object('trashId', te.trash_id, 'trashedAt', te.trashed_at, 'purgeAfter', te.purge_after) FROM catalog_trash_entries te
              WHERE te.user_id = b.user_id AND te.generation_id = b.generation_id AND te.beat_id = b.beat_id) AS trash
         FROM catalog_beats b WHERE b.user_id = $1 AND b.generation_id = $2 AND b.beat_id = $3 AND b.state IN ('ACTIVE', 'TRASH', 'PURGING')`, [uid, lib.active_generation_id, beatId]);
@@ -440,11 +422,11 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
       if (offset >= total) {
         const lastStart = Math.floor((total - 1) / LEGACY_BLOCK) * LEGACY_BLOCK;
         const n = total - lastStart; // 1…240, por índice inverso
-        page = (await client.query(`SELECT ${DTO_COLUMNS}, ${tupleSelect(sort)} FROM catalog_beats b WHERE ${where} ORDER BY ${orderBy(sort, true)} LIMIT ${n}`, params)).rows.reverse();
+        page = (await client.query(`SELECT ${QUERY_BEAT_COLUMNS}, ${tupleSelect(sort)} FROM catalog_beats b WHERE ${where} ORDER BY ${orderBy(sort, true)} LIMIT ${n}`, params)).rows.reverse();
         startOrdinal = lastStart; resolution = 'last';
       } else if (offset <= LEGACY_OFFSET_MAX) {
         // Único OFFSET autorizado: claves por índice de orden, DTO solo de las 241 filas devueltas.
-        page = (await client.query(`SELECT ${DTO_COLUMNS}, ${tupleSelect(sort)} FROM catalog_beats b
+        page = (await client.query(`SELECT ${QUERY_BEAT_COLUMNS}, ${tupleSelect(sort)} FROM catalog_beats b
           JOIN (SELECT k.beat_id FROM catalog_beats k WHERE k.user_id = $1 AND k.generation_id = $2 AND k.state = 'ACTIVE'
                 ORDER BY ${orderBy(sort, false).replace(/\bb\./g, 'k.')} OFFSET ${offset} LIMIT ${LEGACY_BLOCK + 1}) sel ON sel.beat_id = b.beat_id
           WHERE ${where} ORDER BY ${orderBy(sort, false)}`, params)).rows;

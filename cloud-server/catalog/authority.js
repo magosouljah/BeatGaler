@@ -10,6 +10,26 @@
 const crypto = require('crypto');
 const { requireUserId } = require('./contract');
 
+// Alta nativa y reset de la CLI comparten las sentencias, con sus variantes de retorno y procedencia.
+function libraryBirthSql({ eraColumn, origin, revokeReason, valuesIndent, revokeJoin }) {
+  return Object.freeze({
+    insertLibrary: `INSERT INTO catalog_libraries(user_id, vault_id, authority, migration_state, authority_epoch, revision, active_generation_id,
+            active_count, trash_count, purging_count, pending_count, cleanup_enabled, restore_hold)
+          VALUES ($1, $2, 'POSTGRES', 'IDLE', 1, 1, $3, 0, 0, 0, 0, false, true) RETURNING ${eraColumn}`,
+    insertGeneration: `INSERT INTO catalog_generations(user_id, generation_id, snapshot_id, status, source_hash, raw_index, raw_index_sha256, descriptor_json, validated_at, origin)
+${valuesIndent}VALUES ($1, $2, $3, 'ACTIVE', $4, NULL, NULL, $5, now(), '${origin}')`,
+    insertCurrentChat: "INSERT INTO catalog_library_chats(provider, chat_id, user_id, vault_id, state) VALUES ('telegram', $1, $2, $3, 'CURRENT')",
+    revokeCapabilities: `UPDATE direct_capabilities SET status = 'REVOKED', revoked_at = now(), revoke_reason = '${revokeReason}'${revokeJoin}WHERE user_id = $1 AND status IN ('ACTIVE', 'AUTHORIZED')`,
+    finishBootstrap: 'UPDATE vaults SET index_bootstrap_pending = false, updated_at = now() WHERE id = $1 AND user_id = $2',
+  });
+}
+const PROVISION_LIBRARY_SQL = libraryBirthSql({
+  eraColumn: 'authority_era', origin: 'NATIVE', revokeReason: 'CATALOG_NATIVE', valuesIndent: '          ', revokeJoin: '\n          ',
+});
+const RESET_LIBRARY_SQL = libraryBirthSql({
+  eraColumn: 'authority_era::text AS era', origin: 'RESET', revokeReason: 'CATALOG_RESET', valuesIndent: '        ', revokeJoin: ' ',
+});
+
 const NATIVE_FLAG_ENV = 'BEATGALER_CATALOG_NATIVE_ENABLED';
 const ACCOUNT_DELETION_FLAG_ENV = 'BEATGALER_ACCOUNT_DELETION_ENABLED';
 const CATALOG_SESSION_PROTOCOL = 'catalog-v1';
@@ -219,16 +239,12 @@ function createCatalogAuthority({ pool = null, env = process.env, controlPlaneAu
         if (!verdict.eligible) throw resetRequired(verdict.reasons);
         // 5. Escrituras en orden §3.4.5 (la FK a la generación es DEFERRABLE INITIALLY DEFERRED).
         const generationId = `native-${randomUUID()}`;
-        const lib = (await client.query(`INSERT INTO catalog_libraries(user_id, vault_id, authority, migration_state, authority_epoch, revision, active_generation_id,
-            active_count, trash_count, purging_count, pending_count, cleanup_enabled, restore_hold)
-          VALUES ($1, $2, 'POSTGRES', 'IDLE', 1, 1, $3, 0, 0, 0, 0, false, true) RETURNING authority_era`, [uid, vault.id, generationId])).rows[0];
+        const lib = (await client.query(PROVISION_LIBRARY_SQL.insertLibrary, [uid, vault.id, generationId])).rows[0];
         const descriptor = canonicalJson(nativeGenerationDescriptor({ era: lib.authority_era, chatId: vault.telegram_chat_id, vaultId: vault.id }));
-        await client.query(`INSERT INTO catalog_generations(user_id, generation_id, snapshot_id, status, source_hash, raw_index, raw_index_sha256, descriptor_json, validated_at, origin)
-          VALUES ($1, $2, $3, 'ACTIVE', $4, NULL, NULL, $5, now(), 'NATIVE')`, [uid, generationId, `native:${generationId.slice(7)}`, sha256Hex(descriptor), descriptor]);
-        await client.query(`INSERT INTO catalog_library_chats(provider, chat_id, user_id, vault_id, state) VALUES ('telegram', $1, $2, $3, 'CURRENT')`, [vault.telegram_chat_id, uid, vault.id]);
-        await client.query(`UPDATE direct_capabilities SET status = 'REVOKED', revoked_at = now(), revoke_reason = 'CATALOG_NATIVE'
-          WHERE user_id = $1 AND status IN ('ACTIVE', 'AUTHORIZED')`, [uid]);
-        await client.query('UPDATE vaults SET index_bootstrap_pending = false, updated_at = now() WHERE id = $1 AND user_id = $2', [vault.id, uid]);
+        await client.query(PROVISION_LIBRARY_SQL.insertGeneration, [uid, generationId, `native:${generationId.slice(7)}`, sha256Hex(descriptor), descriptor]);
+        await client.query(PROVISION_LIBRARY_SQL.insertCurrentChat, [vault.telegram_chat_id, uid, vault.id]);
+        await client.query(PROVISION_LIBRARY_SQL.revokeCapabilities, [uid]);
+        await client.query(PROVISION_LIBRARY_SQL.finishBootstrap, [vault.id, uid]);
         const created = (await client.query(LIBRARY_SQL(false), [uid])).rows[0];
         await client.query('COMMIT');
         return { created: true, context: contextOf(created) };
@@ -309,6 +325,7 @@ async function assertVaultRebindAllowedIfConfigured(input) {
 }
 
 module.exports = {
+  RESET_LIBRARY_SQL,
   NATIVE_FLAG_ENV, ACCOUNT_DELETION_FLAG_ENV, CATALOG_SESSION_PROTOCOL, INDEX_OPERATION_TYPES, DIRECT_CREDENTIAL_KEYS, SQLSTATE,
   CatalogAuthorityError, catalogNativeConfig, createCatalogAuthority, evaluateNativePredicate, nativeGenerationDescriptor, canonicalJson,
   stripDirectCredentials, containsDirectCredentials, assertNativeStartupCompatible, assertNoNativeActivation,

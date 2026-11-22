@@ -6,7 +6,7 @@
 // Ningún comando vacía una biblioteca nativa ni borra filas legacy, medios o INDEX: reset las deja inertes (§4.2 "Qué no hace").
 const crypto = require('crypto');
 const fs = require('fs');
-const { canonicalJson } = require('./authority');
+const { canonicalJson, RESET_LIBRARY_SQL } = require('./authority');
 const { deterministicId } = require('../legacy-import-executor');
 
 const VERSION = 'T17-N (NATIVO r2.1)';
@@ -561,9 +561,7 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
         // 5. LEGACY (staging T04): RETIRED primero (índice único ACTIVE), luego la generación nueva, luego la biblioteca.
         await client.query("UPDATE catalog_generations SET status = 'RETIRED' WHERE user_id = $1 AND status <> 'RETIRED'", [userId]);
       } else {
-        era = (await client.query(`INSERT INTO catalog_libraries(user_id, vault_id, authority, migration_state, authority_epoch, revision, active_generation_id,
-            active_count, trash_count, purging_count, pending_count, cleanup_enabled, restore_hold)
-          VALUES ($1, $2, 'POSTGRES', 'IDLE', 1, 1, $3, 0, 0, 0, 0, false, true) RETURNING authority_era::text AS era`, [userId, vaultId, generationId])).rows[0].era;
+        era = (await client.query(RESET_LIBRARY_SQL.insertLibrary, [userId, vaultId, generationId])).rows[0].era;
       }
       if (lib) {
         era = (await client.query(`UPDATE catalog_libraries SET authority = 'POSTGRES', migration_state = 'IDLE', authority_era = gen_random_uuid(), authority_epoch = authority_epoch + 1,
@@ -571,15 +569,14 @@ function createNativeCli({ pool, now = () => new Date(), randomUUID = () => cryp
             cleanup_enabled = false, restore_hold = true WHERE user_id = $1 RETURNING authority_era::text AS era`, [userId, generationId])).rows[0].era;
       }
       const descriptor = canonicalJson({ kind: 'RESET', era, vault_id: vaultId, chat_id: newChat, abandoned: plan.abandoned, ledger_sha256: entry.inventory_sha256, manifest_sha256: manifestSha, inventory_sha256: inventorySha, rebind_id: audit.rebind_id, run_id: runId, approval_ref: approvalRef });
-      await client.query(`INSERT INTO catalog_generations(user_id, generation_id, snapshot_id, status, source_hash, raw_index, raw_index_sha256, descriptor_json, validated_at, origin)
-        VALUES ($1, $2, $3, 'ACTIVE', $4, NULL, NULL, $5, now(), 'RESET')`, [userId, generationId, `reset:${uuid}`, sha256Hex(descriptor), descriptor]);
+      await client.query(RESET_LIBRARY_SQL.insertGeneration, [userId, generationId, `reset:${uuid}`, sha256Hex(descriptor), descriptor]);
       // 4/6. Chats: el legacy queda LEGACY_ABANDONED (el worker nativo nunca escribe ni borra en él); el nuevo es CURRENT.
       await client.query(`INSERT INTO catalog_library_chats(provider, chat_id, user_id, vault_id, state, retired_at) VALUES ('telegram', $1, $2, $3, 'LEGACY_ABANDONED', now())
         ON CONFLICT (provider, chat_id) DO UPDATE SET state = 'LEGACY_ABANDONED', retired_at = now() WHERE catalog_library_chats.user_id = EXCLUDED.user_id`, [legacyChat, userId, vaultId]);
-      await client.query("INSERT INTO catalog_library_chats(provider, chat_id, user_id, vault_id, state) VALUES ('telegram', $1, $2, $3, 'CURRENT')", [newChat, userId, vaultId]);
+      await client.query(RESET_LIBRARY_SQL.insertCurrentChat, [newChat, userId, vaultId]);
       // 7. Capacidades Direct vivas revocadas; el vault deja de esperar bootstrap.
-      await client.query("UPDATE direct_capabilities SET status = 'REVOKED', revoked_at = now(), revoke_reason = 'CATALOG_RESET' WHERE user_id = $1 AND status IN ('ACTIVE', 'AUTHORIZED')", [userId]);
-      await client.query('UPDATE vaults SET index_bootstrap_pending = false, updated_at = now() WHERE id = $1 AND user_id = $2', [vaultId, userId]);
+      await client.query(RESET_LIBRARY_SQL.revokeCapabilities, [userId]);
+      await client.query(RESET_LIBRARY_SQL.finishBootstrap, [vaultId, userId]);
       const after = (await client.query('SELECT authority, authority_era::text AS era, authority_epoch::text AS epoch, active_generation_id FROM catalog_libraries WHERE user_id = $1', [userId])).rows[0];
       return { exitCode: 0, result: { command: 'reset', mode: 'apply', outcome: 'RESET_APPLIED', plan, context: { authority: after.authority, authority_era: after.era, authority_epoch: after.epoch, generation_id: after.active_generation_id }, writes: 'see plan' } };
     });
