@@ -1,6 +1,6 @@
 import { WEB_FOUNDATION_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
-import { getWebClientId } from "./webClientId";
+import { getWebClientId } from "../lib/webClientId";
 import { pickWebSlotFile, webImportPort } from "./webImport";
 import { playTrace } from "../features/playback/playTrace";
 import {

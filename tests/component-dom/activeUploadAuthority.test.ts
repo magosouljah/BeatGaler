@@ -10,7 +10,7 @@ vi.mock("../../src/lib/libraryStateManager", () => ({
 import { mergeActiveUploads, reloadStableLibrary } from "../../src/features/library/mergeActiveUploads";
 import { upsertConfirmedBeat } from "../../src/features/cloud/useCloudUploadQueue";
 import { getLibraryEventSourceId } from "../../src/features/cloud/useCloudLibraryEvents";
-import { getWebClientId } from "../../src/platform/webClientId";
+import { getWebClientId } from "../../src/lib/webClientId";
 
 const beat = (id: string, status = "CLOUD_ONLY") => ({ id, name: id, tags: [], cloud_status: status }) as unknown as Beat;
 

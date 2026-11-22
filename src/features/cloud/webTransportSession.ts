@@ -2,7 +2,7 @@ import { observePlayStep } from "../playback/playTrace";
 import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics";
 import { getBeatGalerAuthToken, getResolvedCloudApiBase, restoreBeatGalerSession } from "../../components/AccountGate";
 import { readWebCsrfToken, WEB_CSRF_SESSION_KEY } from "../auth/webSessionBootstrap";
-import { getWebClientId } from "../../platform/webClientId";
+import { getWebClientId } from "../../lib/webClientId";
 import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";
 import type { WebTransportProgress, WebTransportUploadResult } from "./webTransportWorkerProtocol";
 import {

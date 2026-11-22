@@ -93,7 +93,7 @@ describe("Issue #97 reload/temp-auth resilience", () => {
       getResolvedCloudApiBase: () => "/beatgaler-api",
       restoreBeatGalerSession: vi.fn(async () => ({ id: "account-97" })),
     }));
-    vi.doMock("../../src/platform/webClientId", () => ({ getWebClientId: () => "browser-97" }));
+    vi.doMock("../../src/lib/webClientId", () => ({ getWebClientId: () => "browser-97" }));
 
     const prepared = {
       dcId: 2,

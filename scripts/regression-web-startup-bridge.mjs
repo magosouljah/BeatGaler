@@ -14,7 +14,7 @@ const downloads = fs.readFileSync("src/features/downloads/useBeatDownloads.ts", 
 const library = fs.readFileSync("src/lib/libraryStateManager.ts", "utf8");
 const boundary = fs.readFileSync("cloud-server/productive-temp-auth-boundary.js", "utf8");
 
-expect(tauri, 'import { getWebClientId } from "../platform/webClientId";', "legacy bridge no longer uses the stable Web installation id");
+expect(tauri, 'import { getWebClientId } from "./webClientId";', "legacy bridge no longer uses the stable Web installation id");
 expect(tauri, "beatgaler_user_id: getWebClientId()", "Web settings fallback no longer exposes the stable installation id");
 expect(tauri, "telegram_cloud_connected: true", "Web settings fallback regressed to disconnected");
 expect(tauri, 'return { connected: true, reachable, username: null };', "browser Cloud status fallback no longer reports connectivity from navigator");
