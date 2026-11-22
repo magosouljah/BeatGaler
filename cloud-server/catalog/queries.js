@@ -461,7 +461,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
     const consumerId = typeof consumer.id === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(consumer.id) ? consumer.id : null;
     const consumerKind = ['SELECTION', 'SHUFFLE', 'OPERATION', 'BUILD'].includes(consumer.kind) ? consumer.kind : null;
     if (!consumerId || !consumerKind) throw inputInvalid('CONSUMER');
-    return libraryTx.deriveWrite(userId, async ({ client, ctx: lib, uid }) => {
+    return libraryTx.deriveWrite(userId, async ({ client, ctx: lib, uid, enqueue }) => {
       const reuse = (await client.query(`SELECT set_id FROM catalog_query_sets WHERE user_id = $1 AND generation_id = $2 AND predicate_hash = $3 AND base_revision = $4::bigint AND status IN ('BUILDING', 'READY')`,
         [uid, lib.active_generation_id, hash, lib.revision])).rows[0];
       let setId = reuse ? reuse.set_id : null; let created = false;
@@ -482,7 +482,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
         }
       }
       // T10: la construcción la programa el worker (job idempotente por set); la lectura de Gallery no espera a READY (r4 §3).
-      if (created) await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-qs-${setId}`, uid, 'QUERY_SET_BUILD', null, canonicalJson({ setId })]);
+      if (created) await enqueue({ jobId: `job-qs-${setId}`, kind: 'QUERY_SET_BUILD', operationId: null, payload: { setId } });
       await client.query(`INSERT INTO catalog_query_set_leases(user_id, set_id, consumer_id, consumer_kind, lease_until) VALUES ($1, $2, $3, $4, now() + make_interval(mins => $5::int))
         ON CONFLICT (user_id, set_id, consumer_id) DO UPDATE SET lease_until = EXCLUDED.lease_until, consumer_kind = EXCLUDED.consumer_kind`, [uid, setId, consumerId, consumerKind, LEASE_MINUTES]);
       const s = (await client.query(SET_SQL, [uid, setId])).rows[0];

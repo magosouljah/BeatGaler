@@ -103,7 +103,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
     return { operationId: p.purge_id, purgeId: p.purge_id, kind: 'PURGE', status: p.status, scope: p.scope, baseRevision: p.base_revision, epoch: p.authority_epoch, progress: { total: p.total_items, purged: p.purged_items, blocked: p.blocked_items, pending: Math.max(0, p.total_items - p.purged_items - p.blocked_items), objects: Object.fromEntries(objects.map((o) => [o.status, o.n])) },
       cleanup, items: items.map((i) => ({ beatId: i.beat_id, status: i.status, blockReason: i.block_reason, objectsTotal: i.objects_total, objectsDeleted: i.objects_deleted })), lastError: p.last_error, createdAt: p.created_at, updatedAt: p.updated_at, completedAt: p.completed_at, durable: true, ...extra };
   }
-  const enqueueCleanupJob = (client, uid, purgeId) => client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'PURGE', $3, $4) ON CONFLICT (job_id) DO NOTHING`, [`job-pclean-${randomUUID()}`.slice(0, 64), uid, purgeId, canonicalJson({ purgeId })]);
+  const enqueueCleanupJob = (enqueue, purgeId) => enqueue({ jobId: `job-pclean-${randomUUID()}`.slice(0, 64), kind: 'PURGE', operationId: purgeId, payload: { purgeId } });
   const hasActiveJob = async (client, uid, purgeId) => (await client.query("SELECT 1 FROM catalog_jobs WHERE user_id = $1 AND kind = 'PURGE' AND operation_id = $2 AND state IN ('QUEUED', 'LEASED') LIMIT 1", [uid, purgeId])).rows.length > 0;
 
   // ---------- catálogo: un beat sale definitivamente de la biblioteca (TRASH, o PURGING de antes de E81) → PURGED ----------
@@ -151,7 +151,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   }
   // Reanudación explícita: lo diferido cuya causa ya no aplica vuelve a PENDING, lo incierto aparcado vuelve a reconciliarse (solo consulta),
   // y cada purga con trabajo accionable y sin job vivo recibe uno. REJECTED y el tope de intentos no se tocan (operador).
-  async function resumeCleanupTx(client, uid) {
+  async function resumeCleanupTx(client, uid, enqueue) {
     const flags = await libFlags(client, uid);
     const ready = [];
     if (!flags.restore_hold) ready.push('RESTORE_HOLD');
@@ -163,7 +163,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
     const unparked = hasGateway() ? (await client.query('UPDATE catalog_purge_objects SET block_reason = NULL WHERE user_id = $1 AND status = $2 AND block_reason = $3', [uid, 'UNCERTAIN', PARKED_REASON])).rowCount : 0;
     const purges = (await client.query(`SELECT DISTINCT purge_id FROM catalog_purge_objects WHERE user_id = $1 AND (status IN ('PENDING', 'JOURNALED', 'DELETING') OR (status = 'UNCERTAIN' AND block_reason IS NULL))`, [uid])).rows;
     let jobs = 0;
-    for (const p of purges) if (!(await hasActiveJob(client, uid, p.purge_id))) { await enqueueCleanupJob(client, uid, p.purge_id); jobs++; }
+    for (const p of purges) if (!(await hasActiveJob(client, uid, p.purge_id))) { await enqueueCleanupJob(enqueue, p.purge_id); jobs++; }
     metrics.resumed += requeued + unparked;
     return { requeued, unparked, jobs };
   }
@@ -176,7 +176,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
     const ids = kind === 'ITEMS' ? [...new Set((beatIds || []).map(String))] : [];
     if (kind === 'ITEMS' && (ids.length === 0 || ids.length > 240)) throw inputInvalid('PURGE_ITEMS', { max: 240 });
     const hash = sha256Hex(canonicalJson({ kind, ids }));
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => {
       const replay = (await client.query('SELECT purge_id, request_hash FROM catalog_purges WHERE user_id = $1 AND idempotency_key = $2', [uid, idempotencyKey])).rows[0];
       if (replay) { if (replay.request_hash !== hash) throw new CatalogQueryError('IDEMPOTENCY_MISMATCH', 409, 'idempotency key was used with a different request', { operation_id: replay.purge_id }); return purgeDto(client, uid, replay.purge_id, { replay: true, created: false }); }
       const gen = ctx.generation_id;
@@ -184,7 +184,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
       // Solo la fase de catálogo (ENUMERATING, breve y sin Telegram) es exclusiva; la limpieza física de purgas anteriores no impide otra.
       const live = (await client.query("SELECT purge_id FROM catalog_purges WHERE user_id = $1 AND status = 'ENUMERATING' FOR UPDATE", [uid])).rows[0];
       if (live) {
-        if (!(await hasActiveJob(client, uid, live.purge_id))) { await enqueueCleanupJob(client, uid, live.purge_id); const e = new CatalogQueryError('PURGE_IN_PROGRESS', 409, 'another purge is already in progress for this library', { operation_id: live.purge_id, resumed: true }); e.commit = true; throw e; }
+        if (!(await hasActiveJob(client, uid, live.purge_id))) { await enqueueCleanupJob(enqueue, live.purge_id); const e = new CatalogQueryError('PURGE_IN_PROGRESS', 409, 'another purge is already in progress for this library', { operation_id: live.purge_id, resumed: true }); e.commit = true; throw e; }
         throw new CatalogQueryError('PURGE_IN_PROGRESS', 409, 'another purge is already in progress for this library', { operation_id: live.purge_id });
       }
       // límite de papelera capturado en la revisión actual: lo enviado a la papelera después queda fuera (TAREAS §T15.1)
@@ -200,9 +200,9 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
         VALUES ($1, $2, $3, $4::bigint, $5::bigint, $6, $7, $8, $9, 'ENUMERATING', -1, $10)`, [uid, purgeId, gen, ctx.authority_epoch, ctx.revision, kind, kind === 'ALL_TRASH' && limit >= 0 ? limit : null, idempotencyKey, hash, kind === 'ITEMS' ? ids.length : 0]); // papelera vacía → limit NULL (ningún item entra)
       if (kind === 'ITEMS') for (const id of ids) await client.query("INSERT INTO catalog_purge_items(user_id, purge_id, beat_id, status) VALUES ($1, $2, $3, 'PENDING')", [uid, purgeId, id]);
       // el worker (C8) recorre la papelera en lotes y luego limpia objetos; el job nace en la misma transacción que la intención
-      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'PURGE', $3, $4) ON CONFLICT (job_id) DO NOTHING`, [`job-purge-${purgeId}`.slice(0, 64), uid, purgeId, canonicalJson({ purgeId })]);
+      await enqueue({ jobId: `job-purge-${purgeId}`.slice(0, 64), kind: 'PURGE', operationId: purgeId, payload: { purgeId } });
       // una acción explícita del usuario reanuda la limpieza diferida de purgas anteriores (si su causa ya no aplica)
-      await resumeCleanupTx(client, uid);
+      await resumeCleanupTx(client, uid, enqueue);
       metrics.requested++;
       return purgeDto(client, uid, purgeId, { replay: false, created: true, status: 'ENUMERATING' });
     });
@@ -416,14 +416,14 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
   }
   // Reanudación de la limpieza por evento explícito (operador / CLI): mismas reglas que al pedir una purga.
   async function resumeCleanup({ userId, era, epoch } = {}) {
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => ({ settled: await settlePriorPurging(client, uid, ctx.generation_id, ctx.revision), ...(await resumeCleanupTx(client, uid)) }));
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => ({ settled: await settlePriorPurging(client, uid, ctx.generation_id, ctx.revision), ...(await resumeCleanupTx(client, uid, enqueue)) }));
   }
   // ---------- restore_hold: solo con el journal externo reconciliado y cleanup aprobado; al liberarse se reanuda lo diferido ----------
   async function releaseRestoreHold({ userId, era, epoch } = {}) {
     if (!journal || typeof journal.list !== 'function') throw new CatalogQueryError('JOURNAL_UNAVAILABLE', 503, 'deletion journal is required to reconcile restore_hold', {});
     const uid = requireUserId(userId);
     const entries = await journal.list(uid);
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid: u }) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid: u, enqueue }) => {
       const flags = await libFlags(client, u);
       if (!flags.cleanup_enabled) throw new CatalogQueryError('CLEANUP_DISABLED', 409, 'cleanup is not enabled for this library (owner approval, T24)', {});
       const unresolved = [];
@@ -433,7 +433,7 @@ function createCatalogPurge({ pool = null, authority = null, gateway = null, jou
       }
       if (unresolved.length) throw new CatalogQueryError('RESTORE_HOLD_PENDING', 409, 'deletion journal has entries not reflected in SQL; reconcile before releasing restore_hold', { unresolved: unresolved.slice(0, 20), count: unresolved.length });
       await client.query('UPDATE catalog_libraries SET restore_hold = false, updated_at = now() WHERE user_id = $1', [u]);
-      const resumed = await resumeCleanupTx(client, u);
+      const resumed = await resumeCleanupTx(client, u, enqueue);
       return { userId: u, restoreHold: false, journalEntries: entries.length, cleanupResumed: resumed.requeued };
     });
   }

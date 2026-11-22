@@ -1,7 +1,7 @@
 'use strict';
 
 const { requireUserId } = require('./contract');
-const { CatalogAuthorityError } = require('./authority');
+const { CatalogAuthorityError, canonicalJson } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
 
 const STATEMENT_TIMEOUT_MS = 1000;
@@ -84,6 +84,18 @@ function withDeadline(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function insertJob(connection, uid, { jobId, kind, operationId, payload, onConflict = 'ignore' }, variant) {
+  // Preserve the existing placeholder order, including the two fixed-kind statements.
+  const fixedKind = variant === 'direct' && kind === 'TRANSFER_RECONCILE' ? "'TRANSFER_RECONCILE'"
+    : variant === 'purge' && kind === 'PURGE' ? "'PURGE'" : null;
+  const json = canonicalJson(payload);
+  const params = fixedKind ? [jobId, uid, operationId, json] : [jobId, uid, kind, operationId, json];
+  const fail = onConflict === 'fail';
+  const values = fixedKind ? `$1, $2, ${fixedKind}, $3, $4` : fail ? '$1,$2,$3,$4,$5' : '$1, $2, $3, $4, $5';
+  const conflict = fail ? '' : ' ON CONFLICT (job_id) DO NOTHING';
+  return connection.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES (${values})${conflict}`, params);
+}
+
 function createLibraryTx({ pool, authority, variant }) {
   async function run(userId, intent, headers, fn) {
     const uid = requireUserId(userId);
@@ -115,7 +127,12 @@ function createLibraryTx({ pool, authority, variant }) {
             throw unavailable('CONTEXT_RACE');
           }
         }
-        const out = await fn({ client, ctx, uid });
+        const tx = { client, ctx, uid };
+        if (intent !== 'read') {
+          // Keep the transaction's enumerable context fields stable.
+          Object.defineProperty(tx, 'enqueue', { value: (job) => insertJob(client, uid, job, variant) });
+        }
+        const out = await fn(tx);
         if (policy.onError !== 'commitFinally') await client.query('COMMIT');
         return out;
       } catch (error) {
@@ -157,6 +174,7 @@ function createLibraryTx({ pool, authority, variant }) {
     ...(variant === 'purge' && { continuePurge: (userId, headers, fn) => mutationTx('continuePurge', userId, headers, fn) }),
     read: readTx,
     deriveWrite: (userId, fn) => run(userId, 'deriveWrite', null, fn),
+    ...(variant === 'operations' && { enqueueAutocommit: (uid, job) => insertJob(pool, uid, job, variant) }),
     translateError: (error) => sqlError(variant, error),
   });
 }
