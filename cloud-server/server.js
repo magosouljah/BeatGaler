@@ -31,7 +31,6 @@ const { installSecurityHeaders } = require("./security-headers");
 const { installAuthAbuseControls } = require("./auth-abuse-controls");
 const { postgresConfig } = require("./postgres-runtime-config");
 const { startPostgresControlPlane, installPostgresShutdown } = require("./postgres-bootstrap");
-const { prepareControlPlaneCutover } = require("./control-plane-cutover-runtime");
 const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
 const webBillingRuntime = require("./billing-web-runtime");
@@ -47,18 +46,7 @@ const directPersistentAssignments = require("./direct-persistent-assignment-runt
 const { installPersistentDirectSessionStart } = require("./direct-persistent-session-runtime");
 const { installPersistentDirectMembershipActivation } = require("./direct-persistent-membership-runtime");
 
-const catalogAuthority = require("./catalog/authority");
-const catalogQueries = require("./catalog/queries");
-const catalogCommands = require("./catalog/commands");
-const catalogOperations = require("./catalog/operations");
-const catalogPlayback = require("./catalog/playback");
-const catalogMedia = require("./catalog/media");
-const catalogPurge = require("./catalog/purge");
-const catalogDirect = require("./catalog/direct");
-const catalogNativeTransport = require("./catalog/native-transport-provisioning");
-const catalogPrefixPacks = require("./catalog/prefix-packs");
-const catalogGateway = require("./catalog-gateway-runtime");
-const { createFileDeletionJournal } = require("./catalog-deletion-journal");
+const { prepareControlPlaneCutover, assembleServerCatalog } = require("./catalog-assembly");
 
 installRuntimeOperability(express);
 installSecurityHeaders(express);
@@ -88,59 +76,10 @@ async function start() {
   directPersistentAssignments.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
-  // T05-N: autoridad nativa (solo lectura + provision explícita). Exige control-plane postgres; en json no se monta (§12.1).
-  // El flag BEATGALER_CATALOG_NATIVE_ENABLED se evalúa dentro: sin él, GET /context y provision responden 503.
-  const nativeAuthority = catalogAuthority.configureCatalogAuthority(cutover.authority === 'postgres' && pool
-    ? { pool, env: process.env, controlPlaneAuthority: cutover.authority } : null);
-  const nativeQueries = catalogQueries.configureCatalogQueries(nativeAuthority ? { pool, authority: nativeAuthority, env: process.env } : null);
-  catalogCommands.configureCatalogCommands(nativeAuthority ? { pool, authority: nativeAuthority } : null);
-  // T09: la cuota del catálogo usa el resolver Access vigente (quotas.max_beats; null = sin límite); nunca library_beats ni INDEX.
-  catalogOperations.configureCatalogOperations(nativeAuthority ? { pool, authority: nativeAuthority, resolveAccess: async (userId) => { const access = await accessRuntime.resolveUserAccess({ id: userId }); const max = access && access.quotas ? access.quotas.max_beats : null; return { maxBeats: max === undefined ? null : max }; } } : null);
-  // T16 (capa 2 + montaje): sesión con protocolo catalog-v1 para dueños nativos; rondas, medios, purge y transferencias montados SIN gateway
-  // real (fail-closed: 503 TRANSFER_UNAVAILABLE / jobs en reintento) hasta que T11 fase B lo autorice. El journal de borrados en disco solo si
-  // el propietario fija su destino (BEATGALER_CATALOG_JOURNAL_DIR); sin él, ningún delete puede ejecutarse (C9).
-  // Owner-authorized reduced-fencing rollout: distinct from a G2 PASS.
-  const reusedBotRiskAccepted = String(process.env.BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED || '').trim().toLowerCase() === 'true';
-  if (reusedBotRiskAccepted) {
-    if (!pool || !nativeAuthority || !nativeAuthority.config.nativeEnabled) {
-      throw new Error('STOP-GATE: reused bot risk acceptance requires an enabled native PostgreSQL authority');
-    }
-    const activation = (await pool.query('SELECT transport_bot_ids, direct_token_exposure FROM catalog_native_activation')).rows;
-    if (activation.length !== 1 || activation[0].direct_token_exposure !== 'REUSED_UNROTATED') {
-      throw new Error('STOP-GATE: reused bot risk acceptance requires REUSED_UNROTATED SQL activation');
-    }
-    console.warn('[catalog] OWNER_RISK_ACCEPTED: unrotated Telegram tokens reused; G2 NOT_PROVEN; E8 residual risk');
-  }
-  // Gateway real de medios (§8.6): apagado por defecto. Encendido exige el plano nativo montado; en producción exige además el dictamen G2
-  // (BEATGALER_CATALOG_G2_APPROVED=true). Las sesiones de bot se abren perezosamente; sin flag, todo sigue fail-closed (503 / reintento).
-  catalogGatewayRuntime = catalogGateway.gatewayFromEnv({ pool: nativeAuthority ? pool : null, env: process.env, log: console });
-  const mediaGateway = catalogGatewayRuntime ? catalogGatewayRuntime.gateway : null;
-  const nativeOperations = catalogOperations.currentCatalogOperations();
-  catalogPlayback.configureCatalogPlayback(nativeAuthority ? { pool, authority: nativeAuthority } : null);
-  const directFlag = String(process.env.BEATGALER_CATALOG_DIRECT_ENABLED || '').trim().toLowerCase() === 'true';
-  catalogMedia.configureCatalogMedia(nativeAuthority ? { pool, authority: nativeAuthority } : null);
-  const journalDir = String(process.env.BEATGALER_CATALOG_JOURNAL_DIR || '').trim();
-  catalogPurge.configureCatalogPurge(nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, journal: journalDir ? createFileDeletionJournal({ dir: journalDir }) : null } : null);
-  // Direct B (E70): apagado por defecto. En producción exige el dictamen G2 (misma regla que el gateway); G2 sigue NOT_PROVEN.
-  const directProd = ['production', 'prod'].includes(String(process.env.BEATGALER_DEPLOYMENT_ENV || process.env.NODE_ENV || '').trim().toLowerCase());
-  if (directFlag && directProd && String(process.env.BEATGALER_CATALOG_G2_APPROVED || '').trim().toLowerCase() !== 'true' && !reusedBotRiskAccepted) throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires proven G2 or owner-accepted unrotated-bot risk; refusing to start.');
-  // E75: MAIN de prefijos (solo metadatos). El gateway se usa únicamente para COMPROBAR el mensaje publicado por el navegador (sin bytes).
-  catalogPrefixPacks.configurePrefixPacks(String(process.env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && nativeAuthority ? { pool, authority: nativeAuthority, gateway: mediaGateway, directReads: directFlag, log: console.warn } : null);
-  catalogDirect.configureCatalogDirect(directFlag && nativeAuthority && nativeOperations ? { pool, authority: nativeAuthority, operations: nativeOperations,
-    resolveProjectAccess: catalogDirect.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }),
-    sessionSource: ({ botId, chatId }) => require("./direct-transport-control").catalogDirectSession({ botId, chatId }),
-    bindBuilder: (session, metadata) => require("./productive-temp-auth-boundary").transformSession(session, metadata), log: console.warn } : null);
-  // The native catalog requires an actual existing bot in the vault before
-  // Direct sessions or transfer operations may begin. Its membership is
-  // established lazily and verified by both MASTER and the bot.
-  catalogNativeTransport.configureNativeTransportProvisioner(
-    nativeAuthority?.config.nativeEnabled && directFlag && mediaGateway
-      ? { pool, assignmentStore: require('./direct-vault-assignment').createDirectVaultAssignmentStore(pool), transport: require('./direct-transport-control'), log: console.warn } : null);
-  // E73 (C): precalentamiento en segundo plano de los bots con bibliotecas nativas; nunca bloquea el arranque ni /readyz.
-  // BEATGALER_CATALOG_DIRECT_PREWARM_BOTS (por defecto 3, máximo 8; 0 lo apaga).
-  { const d = catalogDirect.currentCatalogDirect(); const raw = process.env.BEATGALER_CATALOG_DIRECT_PREWARM_BOTS; const n = raw === undefined || raw === '' ? 3 : Number(raw);
-    if (d && n > 0) { const t = setTimeout(() => { d.prewarm({ maxBots: n }).catch(() => {}); }, 3000); if (typeof t.unref === 'function') t.unref(); } }
-  console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'} gateway=${mediaGateway ? 'bot-router(lazy)' : 'none'} journal=${journalDir ? 'file' : 'none'}`);
+  await assembleServerCatalog({
+    pool, env: process.env, cutover,
+    onGatewayConfigured: (runtime) => { catalogGatewayRuntime = runtime; },
+  });
   // T25: INDEX retirado del runtime. PostgreSQL es la única autoridad del catálogo; el arranque ya no fija, recupera ni publica INDEX
   // (los mensajes INDEX históricos permanecen intactos en Telegram, solo como archivo).
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
