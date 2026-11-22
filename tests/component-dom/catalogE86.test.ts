@@ -1,8 +1,9 @@
 // E86 — rating del MP3 (POPM de ID3v2) → estrellas 0–5 al importar.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { id3v2TagSize, readId3Rating, readMp3Rating, starsFromPopmByte } from "../../src/features/audio/id3Rating";
-import { buildBeatGalerId3Tag } from "../../src/features/audio/mp3Metadata";
+import { buildBeatGalerId3Tag, stripId3MetadataForCloud } from "../../src/features/audio/mp3Metadata";
+import { parseId3FromFile } from "../../src/features/import/webAudioMetadata";
 
 const latin1 = (s: string) => Uint8Array.from([...s].map((c) => c.charCodeAt(0)));
 const cat = (...p: Uint8Array[]) => { const o = new Uint8Array(p.reduce((n, x) => n + x.length, 0)); let i = 0; for (const x of p) { o.set(x, i); i += x.length; } return o; };
@@ -55,6 +56,34 @@ describe("E86 lectura del POPM", () => {
   it("ida y vuelta: el ID3 que BeatGaler escribe al descargar (1–5 estrellas) se vuelve a leer igual", async () => {
     for (const n of [1, 2, 3, 4, 5]) expect(await readMp3Rating(new File([buildBeatGalerId3Tag({ name: "x", rating: n })], "d.mp3"))).toBe(n);
     expect(await readMp3Rating(new File([buildBeatGalerId3Tag({ name: "x", rating: 0 })], "d.mp3"))).toBe(0);
+  });
+  it("lee ID3 de un MP3 sin lector global ni peticiones de red", async () => {
+    const bytes = readFileSync("tests/e2e-web/fixtures/stage1-playback.mp3");
+    const source = new File([new Uint8Array(bytes)], "stage1-playback.mp3", { type: "audio/mpeg" });
+    const { file: audio } = await stripId3MetadataForCloud(source);
+    const id3 = buildBeatGalerId3Tag(
+      { name: "Stage 1", bpm: "140", key: "Cm", tags: ["Trap", "Dark"], rating: 4 },
+      { mimeType: "image/png", bytes: Uint8Array.of(137, 80, 78, 71) },
+    );
+    const file = new File([id3, audio], source.name, { type: source.type });
+    const appendChild = vi.spyOn(document.head, "appendChild");
+    const fetch = vi.fn(() => Promise.reject(new Error("El lector ID3 debe funcionar sin red")));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      expect(window).not.toHaveProperty("jsmediatags");
+      expect(await parseId3FromFile(file)).toEqual({
+        bpm: "140",
+        key: "Cm",
+        tags: ["trap", "dark"],
+        image_base64: "data:image/png;base64,iVBORw==",
+        rating: 4,
+      });
+      expect(appendChild).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      appendChild.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
   const REAL = "E:/777/musica/ALL MY BEATS/Restless/Restless [159 F#].mp3";
   it.skipIf(!existsSync(REAL))("MP3 real del propietario (Restless [159 F#], 4 estrellas en su ID3) → 4", async () => {

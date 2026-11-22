@@ -3,6 +3,13 @@ import { createWebImportCandidate, waitForWebImportFiles, webImportPort } from "
 import { createWebWavMaster } from "../../src/features/import/webWavMaster";
 
 vi.mock("../../src/features/import/webWavMaster", () => ({ createWebWavMaster: vi.fn() }));
+vi.mock("../../src/lib/id3BrowserParser", () => ({
+  browserId3Reader: {
+    read: (_file: File, callbacks: import("../../src/lib/id3BrowserParser").BrowserId3Handlers) => {
+      callbacks.onSuccess({ tags: { TBPM: "140", TKEY: "Cm", genre: "Trap; Dark" } });
+    },
+  },
+}));
 
 describe("BeatGaler Web single-beat import", () => {
   beforeEach(() => {
@@ -14,15 +21,9 @@ describe("BeatGaler Web single-beat import", () => {
       configurable: true,
       value: vi.fn(),
     });
-    (window as any).jsmediatags = {
-      read(_file: File, callbacks: any) {
-        callbacks.onSuccess({ tags: { TBPM: "140", TKEY: "Cm", genre: "Trap; Dark" } });
-      },
-    };
   });
 
   afterEach(() => {
-    delete (window as any).jsmediatags;
     vi.restoreAllMocks();
   });
 
