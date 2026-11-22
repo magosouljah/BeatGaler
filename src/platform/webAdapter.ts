@@ -21,10 +21,8 @@ export const webAdapter: PlatformAdapter = {
   // The Web Gallery uses the PostgreSQL catalog. These ports satisfy the shared platform contract.
   library: {
     async load() { throw new Error("Galer Cloud could not load your library. Please retry."); },
-    async loadOffline() { return []; },
     async restoreAuthoritative() { return unavailable("Galer Cloud library refresh"); },
     async commitSnapshot() { return unavailable("Galer Cloud library writes"); },
-    async flushOfflineTrashIntents() { return 0; },
   },
   preferences: {
     async load() { return { beats_folder: null, incomplete_warnings_enabled: readBooleanPreference(WEB_INCOMPLETE_WARNINGS_KEY, true), custom_cursor_enabled: readBooleanPreference(WEB_CUSTOM_CURSOR_KEY, true), beatgaler_user_id: webClientId, telegram_cloud_connected: true, telegram_cloud_username: null }; },
@@ -45,7 +43,6 @@ export const webAdapter: PlatformAdapter = {
     async clear() { return { used_bytes: 0, limit_mb: 100 }; },
   },
   system: { async getLogDirectory() { return ""; }, async getTemplatesDirectory() { return ""; }, async revealPath(path) { void path; return unavailable("Local file reveal"); }, async checkForUpdate() { return unavailable("Native app updates"); }, async installUpdate() { return unavailable("Native app updates"); } },
-  startup: { async loadAuthenticatedShell() { return null; } },
   media: {
     resolveUrl(source) { return source; },
     async preparePlayback(beat) {
@@ -63,15 +60,12 @@ export const webAdapter: PlatformAdapter = {
   events: { async listen<T>(event: string, handler: PlatformEventHandler<T>): Promise<PlatformUnlisten> { const listener = (message: Event) => handler((message as CustomEvent<T>).detail); window.addEventListener(event, listener); return () => window.removeEventListener(event, listener); } },
   external: { async openUrl(url) { window.open(url, "_blank", "noopener,noreferrer"); } },
   account: { async getInstallationId() { return webClientId; } },
-  cloud: { async status() { const reachable = typeof navigator === "undefined" || navigator.onLine !== false; return { connected: true, reachable, username: null }; } },
   cloudData: {
-    async upload() { return unavailable("Galer Cloud upload"); },
     async commitImportedBeat() { return unavailable("Galer Cloud import"); },
     async disconnect() { invalidateAllWebPlaybackIntents(); },
   },
   downloads: {
     start() { return unavailable("Galer Cloud downloads"); },
-    cancelAll() {},
   },
   editor: {
     pickFile: pickWebSlotFile,

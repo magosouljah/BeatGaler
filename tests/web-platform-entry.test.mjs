@@ -40,10 +40,9 @@ for (const hasTauri of [false, true]) {
           if (id.endsWith("/src/app/WebExperience.tsx")) {
             return `
               import { createElement } from "react";
-              import { isDesktopRuntime } from "../platform";
-              import { usePlatform } from "../platform/react";
+              import { platform, isDesktopRuntime } from "../platform";
               export default function WebExperience() {
-                return createElement("output", null, usePlatform().kind + ":" + isDesktopRuntime());
+                return createElement("output", null, platform.kind + ":" + isDesktopRuntime());
               }
             `;
           }

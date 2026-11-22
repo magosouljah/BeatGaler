@@ -1,4 +1,4 @@
-import type { AppSettings, Beat, TelegramCloudStatus } from "../types";
+import type { AppSettings, Beat } from "../types";
 import type { PlatformCapabilities, PlatformKind } from "./capabilities";
 
 export type PlatformUnlisten = () => void;
@@ -6,10 +6,8 @@ export type PlatformEventHandler<T> = (payload: T) => void;
 
 export interface PlatformLibraryPort {
   load(): Promise<Beat[]>;
-  loadOffline(): Promise<Beat[]>;
   restoreAuthoritative(): Promise<void>;
   commitSnapshot(beats: Beat[]): Promise<PlatformLibrarySyncResult>;
-  flushOfflineTrashIntents(): Promise<number>;
 }
 
 export interface PlatformLibrarySyncResult {
@@ -73,17 +71,6 @@ export interface PlatformSystemPort {
   installUpdate(): Promise<void>;
 }
 
-export interface PlatformStartupSnapshot {
-  settings: AppSettings;
-  beats: Beat[];
-  connectionState: "online" | "offline" | "poor";
-  libraryVerified: boolean;
-}
-
-export interface PlatformStartupPort {
-  loadAuthenticatedShell(): Promise<PlatformStartupSnapshot | null>;
-}
-
 export interface PlatformMediaPort {
   resolveUrl(source: string): string;
   preparePlayback(beat: Beat): Promise<{ url: string; completed: Promise<void> }>;
@@ -103,10 +90,6 @@ export interface PlatformCloudAuthPort {
   syncSession(token: string | null, cloudApiBase: string): Promise<void>;
 }
 
-export interface PlatformCloudPort {
-  status(): Promise<TelegramCloudStatus>;
-}
-
 export interface PlatformCloudUploadProgress {
   uploadedBytes: number;
   totalBytes: number;
@@ -116,29 +99,7 @@ export interface PlatformCloudCommitProgress extends PlatformCloudUploadProgress
   stage: "preparing" | "master" | "wav" | "artwork" | "project" | "library";
 }
 
-export interface PlatformCloudUploadResult {
-  telegram_file_id: string;
-  telegram_message_id: number;
-  filename: string;
-  original_size: number;
-  parts: Array<{
-    telegram_file_id: string;
-    telegram_message_id: number;
-    index: number;
-    size: number;
-    filename: string;
-  }>;
-  transport: "direct-web";
-}
-
 export interface PlatformCloudDataPort {
-  upload(input: {
-    file: File;
-    filename: string;
-    beatId: string;
-    beatName: string;
-    kind: "MASTER" | "WAV" | "LOOP" | "PROJECT" | "STEMS" | "ARTWORK" | "OTHER";
-  }, onProgress?: (progress: PlatformCloudUploadProgress) => void): Promise<PlatformCloudUploadResult>;
   commitImportedBeat(beat: Beat, onProgress?: (progress: PlatformCloudCommitProgress) => void): Promise<Beat>;
   disconnect(): Promise<void>;
 }
@@ -159,7 +120,6 @@ export interface PlatformDownloadTask {
 
 export interface PlatformDownloadsPort {
   start(beat: Beat, kind: PlatformDownloadKind, onProgress?: (progress: PlatformDownloadProgress) => void): PlatformDownloadTask;
-  cancelAll(): void;
 }
 
 export type PlatformBeatEditSlotKind = "MASTER" | "WAV" | "PROJECT";
@@ -205,12 +165,10 @@ export interface PlatformAdapter {
   trash: PlatformTrashPort;
   playbackCache: PlatformPlaybackCachePort;
   system: PlatformSystemPort;
-  startup: PlatformStartupPort;
   media: PlatformMediaPort;
   events: PlatformEventPort;
   external: PlatformExternalPort;
   account: PlatformAccountPort;
-  cloud: PlatformCloudPort;
   cloudData: PlatformCloudDataPort;
   downloads: PlatformDownloadsPort;
   editor: PlatformBeatEditorPort;

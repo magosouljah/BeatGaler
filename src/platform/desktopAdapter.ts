@@ -1,4 +1,4 @@
-import { filePathToUrl, getCloudClientId, loadLibrary, loadOfflineLibrary } from "../lib/tauri";
+import { filePathToUrl, getCloudClientId, loadLibrary } from "../lib/tauri";
 import { DESKTOP_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 
@@ -8,7 +8,6 @@ export const desktopAdapter: PlatformAdapter = {
   clientId: getCloudClientId(),
   library: {
     load: loadLibrary,
-    loadOffline: loadOfflineLibrary,
     async restoreAuthoritative() {
       const { restoreLibraryFromTelegram } = await import("../lib/tauri");
       await restoreLibraryFromTelegram();
@@ -16,10 +15,6 @@ export const desktopAdapter: PlatformAdapter = {
     async commitSnapshot(beats) {
       const { syncCloudLibraryIndex } = await import("../lib/tauri");
       return syncCloudLibraryIndex(beats);
-    },
-    async flushOfflineTrashIntents() {
-      const { flushOfflineTrashIntents } = await import("../lib/tauri");
-      return flushOfflineTrashIntents();
     },
   },
   preferences: {
@@ -65,9 +60,6 @@ export const desktopAdapter: PlatformAdapter = {
     async checkForUpdate() { const { checkForAppUpdate } = await import("../lib/tauri"); return checkForAppUpdate(); },
     async installUpdate() { const { installAppUpdate } = await import("../lib/tauri"); await installAppUpdate(); },
   },
-  startup: {
-    async loadAuthenticatedShell() { return null; },
-  },
   media: {
     resolveUrl: filePathToUrl,
     async preparePlayback(beat) {
@@ -104,16 +96,7 @@ export const desktopAdapter: PlatformAdapter = {
       return String(settings.beatgaler_user_id);
     },
   },
-  cloud: {
-    async status() {
-      const { pollTelegramCloudStatus } = await import("../lib/tauri");
-      return pollTelegramCloudStatus();
-    },
-  },
   cloudData: {
-    async upload() {
-      throw new Error("Browser File upload is not available in BeatGaler Desktop.");
-    },
     async commitImportedBeat() {
       throw new Error("Browser Review commit is not available in BeatGaler Desktop.");
     },
@@ -121,7 +104,6 @@ export const desktopAdapter: PlatformAdapter = {
   },
   downloads: {
     start() { throw new Error("Browser downloads are not available in BeatGaler Desktop."); },
-    cancelAll() {},
   },
   editor: {
     async pickFile() { throw new Error("Browser Cloud editing is not available in BeatGaler Desktop."); },
