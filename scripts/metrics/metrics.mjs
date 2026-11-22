@@ -1,6 +1,7 @@
-// metrics.mjs <repo> [all|<section>]   sections: patches singletons tx jobs testbags exports hooks env counts sizes routes orphans
+// metrics.mjs <repo> [all|<section>]   sections: patches singletons tx jobs testbags exports hooks env counts sizes routes orphans traces
 // Deterministic, read-only structural metrics for BeatGaler. Counts are regex-based over TRACKED files only.
 import { repoArg, tracked, read, lines, head, stripComments } from './lib.mjs';
+import { measureTraces } from './trace-files.mjs';
 const repo = repoArg();
 const want = process.argv[3] || 'all';
 const on = s => want === 'all' || want === s;
@@ -44,6 +45,7 @@ if (on('singletons')) {
   out('S3 module-level mutable `let x = <empty>` (cloud prod JS)', c.n, 'files=' + c.files);
 }
 if (on('tx')) {
+  // Count definitions across the catalog. The shared transaction now lives in library-tx.js (X52).
   for (const name of ['sqlError', 'mutationTx', 'readTx']) {
     const a = count(catalog, new RegExp('(?:function\\s+' + name + '\\s*\\(|(?:const|let)\\s+' + name + '\\s*=)', 'g'));
     out('T  local definitions of ' + name + ' in cloud-server/catalog', a.n, a.per.map(p => p[0].replace('cloud-server/catalog/', '')).join(' '));
@@ -152,4 +154,10 @@ if (on('orphans')) {
   out('O1 test files selected by no runner/config', orphans.length, 'of ' + cand.length + ': ' + orphans.join(' '));
   const never = cand.filter(f => /postgres-live\.integration/.test(f));
   out('O2 test files explicitly forbidden', never.length, never.join(' '));
+}
+
+if (on('traces')) {
+  for (const { name, files, lineCount, web, cloud, stale } of measureTraces(repo, all)) {
+    out('T12 ' + name, files, `lines=${lineCount} web=${web} cloud=${cloud} stale=${stale.join(' | ') || '-'}`);
+  }
 }

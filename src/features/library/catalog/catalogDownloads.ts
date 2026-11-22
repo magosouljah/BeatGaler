@@ -1,3 +1,5 @@
+import type { Beat } from "../../../types";
+import type { CatalogMutations } from "./catalogMutations";
 // «Download» de una BeatCard de la Gallery POSTGRES (MP3 / WAV / PROJECT / todo): lista los archivos actuales del beat y los baja por el
 // cliente de medios del catálogo (concesión + partes + verificación de tamaño/hash) guardándolos con el navegador. Copias independientes.
 import type { CatalogBeatFile } from "./catalogCommandsApi";
@@ -52,4 +54,57 @@ export function saveBlobWithBrowser(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob); const a = document.createElement("a");
   a.href = url; a.download = filename; a.style.display = "none"; document.body.appendChild(a); a.click(); a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+
+export interface GalleryDownloadFiles {
+  beat: Beat;
+  files: CatalogBeatFile[];
+}
+
+export function createGalleryDownloads({
+  mutations, media, cloudFiles, downloadBusy, setCloudFiles, setDownloadBusy, setDownloaded,
+  rejectOfflineMutation, setNotice, save,
+}: {
+  mutations: Pick<CatalogMutations, "listBeatFiles">;
+  media: { downloadFile(fileId: string): Promise<{ blob: Blob }> };
+  cloudFiles: GalleryDownloadFiles | null;
+  downloadBusy: DownloadKind | null;
+  setCloudFiles(files: GalleryDownloadFiles): void;
+  setDownloadBusy(kind: DownloadKind | null): void;
+  setDownloaded(update: Set<string> | ((current: Set<string>) => Set<string>)): void;
+  rejectOfflineMutation(action: string): boolean;
+  setNotice(value: string | null): void;
+  save: typeof saveBlobWithBrowser;
+}) {
+  function openDownloads(beat: Beat) {
+    if (rejectOfflineMutation("Downloading")) return;
+    setDownloaded(new Set());
+    void mutations.listBeatFiles(beat.id).then((files) => setCloudFiles({ beat, files })).catch((error) =>
+      setNotice(`No se pudo leer los archivos del beat: ${String((error as { message?: unknown })?.message ?? error)}`));
+  }
+
+  function downloadKind(kind: DownloadKind) {
+    if (!cloudFiles || downloadBusy) return;
+    setDownloadBusy(kind);
+    const { beat, files } = cloudFiles;
+    const artFile = files.find((file) => file.role === "ARTWORK" && file.current && file.status !== "DELETED");
+    const { name, bpm, key, tags, rating } = beat;
+    const mp3Tags = {
+      metadata: { name, bpm, key, tags, rating },
+      artwork: artFile ? async () => {
+        const { blob } = await media.downloadFile(artFile.fileId);
+        return { mimeType: blob.type || artFile.mime || "image/png", bytes: await readBlobAsArrayBuffer(blob) };
+      } : undefined,
+    };
+    void downloadBeatFiles({ files, kind, beatName: name, download: (id) => media.downloadFile(id), save, mp3Tags }).then((result) => {
+      if (result.status === "done") {
+        setDownloaded((current) => new Set(current).add(kind));
+        setNotice(result.saved.length > 1 ? `${result.saved.length} archivos descargados.` : `«${result.saved[0]}» descargado.`);
+      } else if (result.status === "empty") setNotice("Ese archivo no está disponible para este beat.");
+      else setNotice(`No se pudo descargar: ${result.message}`);
+    }).finally(() => setDownloadBusy(null));
+  }
+
+  return { openDownloads, downloadKind };
 }

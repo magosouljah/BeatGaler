@@ -1,3 +1,4 @@
+import type { CatalogStoreSnapshot } from "./catalogQueryStore";
 import type { Beat } from "../../../types";
 import type { appAlert } from "../../../lib/dialog";
 import { cleanTags } from "../../../lib/metadataValidation";
@@ -258,4 +259,20 @@ export function createImportSession(ports: ImportSessionPorts): ImportSession {
       return () => { listeners.delete(listener); };
     },
   };
+}
+
+
+export function importLandsAtTop({ filters, firstOrdinal }: Pick<CatalogStoreSnapshot, "filters" | "firstOrdinal">, scrollTop?: number | null): boolean {
+  return filters.state === "ACTIVE" && !filters.q.trim() && filters.includeTags.length === 0
+    && filters.excludeTags.length === 0 && firstOrdinal === 0 && (scrollTop == null || scrollTop < 24);
+}
+
+export function projectPendingCards(cards: PendingCard[], blocks: CatalogStoreSnapshot["blocks"]) {
+  const residentIds = new Set<string>();
+  if (cards.some((card) => card.realId)) {
+    for (const block of blocks) for (const item of block.items) residentIds.add(item.id);
+  }
+  // La provisional sale de la rejilla en el mismo render en que llega la real.
+  const pendingCards = cards.filter((card) => !(card.realId && residentIds.has(card.realId))).map(({ id, beat }) => ({ id, beat }));
+  return { residentIds, pendingCards };
 }
