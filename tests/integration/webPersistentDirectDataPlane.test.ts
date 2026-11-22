@@ -4,7 +4,7 @@ vi.mock("../../src/components/AccountGate", () => ({
   getBeatGalerAuthToken: () => "test-token",
   getResolvedCloudApiBase: () => "https://cloud.test",
 }));
-vi.mock("../../src/platform/webClientId", () => ({ getWebClientId: () => "persistent-browser" }));
+vi.mock("../../src/lib/webClientId", () => ({ getWebClientId: () => "persistent-browser" }));
 
 import { reconcileWebTransportRouting } from "../../src/features/cloud/webTransportSession";
 import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";

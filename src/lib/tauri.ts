@@ -4,7 +4,7 @@ import type {
   UploadTemplate, YouTubeChannel, YouTubeUploadPayload, YouTubeUploadResult,
   TelegramCloudStatus
 } from "../types";
-import { getWebClientId } from "../platform/webClientId";
+import { getWebClientId } from "./webClientId";
 
 type InvokeFn = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 type OpenFn = (options?: Record<string, unknown>) => Promise<string | string[] | null>;

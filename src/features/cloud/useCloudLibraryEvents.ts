@@ -3,7 +3,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { AppSettings, Beat } from "../../types";
 import { getBeatGalerAuthToken, resolveBeatGalerCloudApi } from "../../components/AccountGate";
 import { flushOfflineTrashIntents, getCloudClientId, isTauriAvailable, pollTelegramCloudStatus } from "../../lib/tauri";
-import { getWebClientId } from "../../platform/webClientId";
+import { getWebClientId } from "../../lib/webClientId";
 import { cloudBeatFingerprint, libraryViewFingerprint } from "../library/libraryFingerprints";
 import { mergeActiveUploads, reloadStableLibrary } from "../library/mergeActiveUploads";
 import type { ConnectionState } from "../session/useSessionState";
