@@ -23,7 +23,6 @@ try {
   const result = await browser.executeAsync(async done => {
     try {
       const { createWebImportCandidate, webImportPort } = await import("/src/platform/webImport.ts");
-      window.jsmediatags = { read(_file, callbacks) { callbacks.onSuccess({ tags: {} }); } };
       const results = [];
       for (const [channels, bits, sampleRate] of [[1, 16, 44100], [2, 24, 48000], [2, 32, 96000]]) {
         const frames = sampleRate / 4;

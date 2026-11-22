@@ -3,8 +3,6 @@ import ReactDOM from "react-dom/client";
 import { lazy, Suspense } from "react";
 import { platform } from "./platform";
 import WebExperience from "./app/WebExperience";
-const DesktopApp = lazy(() => import("./app/DesktopExperience"));
-import { browserId3Reader } from "./lib/id3BrowserParser";
 import { installStartupTrace } from "./features/perf/startupTrace";
 import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
 import { playTrace } from "./features/playback/playTrace";
@@ -13,7 +11,15 @@ import "./styles/design-foundations.css";
 import "./styles/auth-ui.css";
 import "./styles/library-ux.css";
 
-(window as any).jsmediatags = browserId3Reader;
+const DesktopApp = lazy(async () => {
+  const [app, { browserId3Reader }] = await Promise.all([
+    import("./app/DesktopExperience"),
+    import("./lib/id3BrowserParser"),
+  ]);
+  // Keep the local reader available to the legacy Desktop folder picker fallback.
+  (window as any).jsmediatags = browserId3Reader;
+  return app;
+});
 
 playTrace("APP_ENTRY_EXECUTE");
 installStartupTrace();
