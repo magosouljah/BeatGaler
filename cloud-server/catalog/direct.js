@@ -130,7 +130,7 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
     checkIds(operationId, partKey);
     await assertProjectAllowed(requireUserId(userId), operationId, partKey);
     const hash = ticketHash(randomBytes(32));
-    const planned = await libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
+    const planned = await libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => {
       const part = await loadPart(client, uid, operationId, partKey, { forUpdate: true });
       if (!INFLIGHT.includes(part.op_status)) throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${part.op_status}`, { status: part.op_status });
       if (!['PENDING', 'DISPATCHED'].includes(part.dispatch_state)) throw new CatalogQueryError('PART_STATE_CONFLICT', 409, 'part already has a receipt or verification', { dispatch_state: part.dispatch_state });
@@ -138,7 +138,7 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
       const open = await client.query(`SELECT attempt, status, outcome FROM catalog_transfer_capabilities WHERE user_id = $1 AND operation_id = $2 AND part_key = $3
         AND ((status = 'CONSUMED' AND outcome = 'UNCERTAIN') OR (status = 'REDEEMED' AND $4 = 'DISPATCHED'))`, [uid, operationId, partKey, part.dispatch_state]);
       if (open.rows.length) {
-        await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'TRANSFER_RECONCILE', $3, $4) ON CONFLICT (job_id) DO NOTHING`, [partJobId('reconcile', operationId, partKey), uid, operationId, canonicalJson({ partKey })]);
+        await enqueue({ jobId: partJobId('reconcile', operationId, partKey), kind: 'TRANSFER_RECONCILE', operationId, payload: { partKey } });
         throw Object.assign(new CatalogQueryError('PART_UNCERTAIN', 409, 'a previous dispatch of this part has no reported outcome or is uncertain; reconciliation is pending and no resend is allowed', { partKey, reconcile: true, attempts: open.rows.length }), { commit: true });
       }
       await client.query(`UPDATE catalog_transfer_capabilities SET status = 'REVOKED', resolved_at = now(), last_error = 'SUPERSEDED' WHERE user_id = $1 AND operation_id = $2 AND part_key = $3 AND status = 'ISSUED'`, [uid, operationId, partKey]);

@@ -255,7 +255,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     if (bytesSha256 !== null && !SHA_RE.test(bytesSha256)) throw inputInvalid('RECEIPT_BYTES_SHA256');
     const canonical = canonicalJson({ messageId, documentId, size, senderId: receipt.senderId == null ? null : String(receipt.senderId), chatId: receipt.chatId == null ? null : String(receipt.chatId), bytesSha256 });
     const hash = sha256Hex(canonical);
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid, enqueue }) => {
       // Fencing atómico (T10): un worker con lease perdido/reasignado no persiste recibos; la fila del job queda bloqueada hasta el COMMIT.
       if (lease) {
         const j = (await client.query('SELECT state, lease_owner, lease_generation::text AS g FROM catalog_jobs WHERE job_id = $1 FOR UPDATE', [lease.jobId])).rows[0];
@@ -280,7 +280,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
         WHERE user_id = $1 AND operation_id = $2 AND part_key = $3`, [uid, operationId, partKey, canonical, hash, messageId, documentId]);
       if (o.status !== 'VERIFYING') await client.query("UPDATE catalog_transfer_operations SET status = 'VERIFYING' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
       // T10: el worker verifica con el proveedor fuera de SQL; el job nace en la misma transacción que el recibo.
-      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [partJobId('verify', operationId, partKey), uid, 'TRANSFER_VERIFY', operationId, canonicalJson({ partKey })]);
+      await enqueue({ jobId: partJobId('verify', operationId, partKey), kind: 'TRANSFER_VERIFY', operationId, payload: { partKey } });
       return opDto(client, uid, operationId, { replay: false, partKey });
     });
   }
@@ -322,7 +322,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   // ---------- POST /operations/:id/commit (idempotente; 202 | 200 | 409) ----------
   async function commitOperation({ userId, era, epoch, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (o.status === 'COMMITTED') return { status: 200, operation: await opDto(client, uid, operationId, { replay: true }) };
@@ -330,7 +330,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
       const parts = (await client.query(PARTS_SQL, [uid, operationId])).rows;
       if (parts.some((p) => p.dispatch_state !== 'VERIFIED')) {
         // T10: el commit solicitado se completa por el worker cuando todas las partes estén verificadas (202 ahora).
-        await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-commit-${operationId}`, uid, 'TRANSFER_COMMIT', operationId, canonicalJson({ reason: 'CLIENT_COMMIT' })]);
+        await enqueue({ jobId: `job-commit-${operationId}`, kind: 'TRANSFER_COMMIT', operationId, payload: { reason: 'CLIENT_COMMIT' } });
         return { status: 202, operation: await opDto(client, uid, operationId, { pending: parts.filter((p) => p.dispatch_state !== 'VERIFIED').map((p) => p.part_key) }) };
       }
       if (o.status !== 'READY') await client.query("UPDATE catalog_transfer_operations SET status = 'READY' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
@@ -425,7 +425,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   // ---------- POST /operations/:id/cancel ----------
   async function cancelOperation({ userId, era, epoch, operationId } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid }) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, uid, enqueue }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (o.status === 'COMMITTED') throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, 'a committed operation cannot be cancelled', { status: o.status });
@@ -436,7 +436,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
         await client.query("UPDATE catalog_transfer_operations SET status = 'RECONCILE', last_error = 'CANCEL_AFTER_DISPATCH' WHERE user_id = $1 AND operation_id = $2", [uid, operationId]);
         // T10: reconciliación por parte con envío incierto (nunca reenvío automático).
         const uncertain = (await client.query("SELECT part_key FROM catalog_operation_parts WHERE user_id = $1 AND operation_id = $2 AND dispatch_state IN ('DISPATCHED', 'RECEIPT')", [uid, operationId])).rows;
-        for (const p of uncertain) await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [partJobId('reconcile', operationId, p.part_key), uid, 'TRANSFER_RECONCILE', operationId, canonicalJson({ partKey: p.part_key })]);
+        for (const p of uncertain) await enqueue({ jobId: partJobId('reconcile', operationId, p.part_key), kind: 'TRANSFER_RECONCILE', operationId, payload: { partKey: p.part_key } });
         return opDto(client, uid, operationId, { changed: true });
       }
       if (sent > 0 && o.status === 'RECONCILE') return opDto(client, uid, operationId, { changed: false });
@@ -502,7 +502,7 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     const uid = requireUserId(userId);
     if (!['TRANSFER_VERIFY', 'TRANSFER_COMMIT', 'TRANSFER_RECONCILE', 'QUERY_SET_BUILD', 'OPERATION_STEP', 'PURGE'].includes(kind)) throw inputInvalid('JOB_KIND');
     try {
-      await pool.query('INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1,$2,$3,$4,$5)', [jobId, uid, kind, operationId, canonicalJson(payload)]);
+      await libraryTx.enqueueAutocommit(uid, { jobId, kind, operationId, payload, onConflict: 'fail' });
       return { jobId };
     } catch (error) { throw sqlError(error); }
   }

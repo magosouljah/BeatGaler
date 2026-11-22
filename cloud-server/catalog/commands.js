@@ -421,7 +421,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     }
     const payload = { kind, selectionId, selectionVersion: selectionVersion == null ? null : String(selectionVersion), patch: validatedPatch, rename: renameSpec, tagsOp: validatedTagsOp };
     const hash = sha256Hex(canonicalJson(payload));
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => {
       const replay = await idempotency(client, uid, idempotencyKey, hash);
       if (replay) { const o = (await client.query(OP_SQL, [uid, replay.operationId])).rows[0]; return opDto(o, { replay: true }); }
       let extra = { expectedRevision: ctx.revision };
@@ -439,7 +439,7 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
       }
       const operationId = await recordOperation(client, uid, ctx, { kind, key: idempotencyKey, hash, payload, result: null, status: 'QUEUED', extra });
       // T10: los lotes los ejecuta el worker (job idempotente por operación).
-      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-op-${operationId}`, uid, 'OPERATION_STEP', operationId, canonicalJson({ operationId })]);
+      await enqueue({ jobId: `job-op-${operationId}`, kind: 'OPERATION_STEP', operationId, payload: { operationId } });
       const o = (await client.query(OP_SQL, [uid, operationId])).rows[0];
       return opDto(o, { replay: false, created: true });
     });
@@ -598,13 +598,13 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   async function resumeOperation({ userId, era, epoch, operationId, revision } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
     if (!/^[1-9][0-9]{0,17}$/.test(String(revision ?? ''))) throw inputInvalid('REVISION');
-    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid }) => {
+    return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (o.status !== 'CONFLICT') throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
       if (String(revision) !== ctx.revision) throw new CatalogQueryError('REVISION_MISMATCH', 409, 'revision provided is not the current one', { current_revision: ctx.revision });
       await client.query(`UPDATE catalog_operations SET status = 'RUNNING', expected_revision = $3::bigint, conflict_batch_seq = NULL WHERE user_id = $1 AND operation_id = $2`, [uid, operationId, ctx.revision]);
-      await client.query(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (job_id) DO NOTHING`, [`job-op-${operationId}-resume-${ctx.revision}`, uid, 'OPERATION_STEP', operationId, canonicalJson({ operationId, resumedAt: ctx.revision })]);
+      await enqueue({ jobId: `job-op-${operationId}-resume-${ctx.revision}`, kind: 'OPERATION_STEP', operationId, payload: { operationId, resumedAt: ctx.revision } });
       return opDto((await client.query(OP_SQL, [uid, operationId])).rows[0], { resumed: true });
     });
   }
