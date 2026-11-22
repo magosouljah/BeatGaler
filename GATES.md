@@ -1,5 +1,7 @@
 # Gates: Stage 1 real two-account stability
 
+**HISTÓRICO desde 2026-11-21: la guía vigente es [CLAUDE.md §8](CLAUDE.md#8-pruebas) y [el mapa del catálogo PostgreSQL](docs/plans/catalogo-postgresql/ARQUITECTURA.md).**
+
 Scope: Diagnose the real health delay, fix only demonstrated causes, preserve state, and prove three consecutive independent real runs.
 
 - [x] G1: Required branch and initial state recorded before edits.
@@ -49,12 +51,12 @@ Scope: Prove and fix the exact `CHANNEL_INVALID` cause for the existing patiodju
   EVIDENCE: PostgreSQL had stale ready since 2026-09-16 while Telegram said USER_NOT_PARTICIPANT. READY activation now requires same-bot Bot API getChat proof; authoritative absence performs same-bot READY→REPAIR→provision→bot-visible READY under the existing vault lock and 15 s membership budget. Transient probes fail closed without repair.
 
 - [x] P2G3: Focused regression tests cover the failing real-account property and the successful E2E property.
-  CHECK: npm test -- --runInBand tests/component-dom/webTransportWorker.test.ts
+  CHECK: node node_modules/vitest/vitest.mjs run tests/component-dom/webTransportWorker.test.ts --environment jsdom
   EXPECT: /pass|passed/i
   EVIDENCE: direct persistent membership, READY-no-MASTER, provisioning primitive, startup trace (3/3), focused Worker zero-hash test, and focused Controller singleflight all PASS. Full Worker suite retains the pre-existing missing-pinned-index failure also reproduced in its baseline copy.
 
 - [x] P2G4: Type checking and diff hygiene pass without changes to ping, watchdog, or budgets.
-  CHECK: npm run typecheck
+  CHECK: npm run test:typecheck
   EXPECT: /exit code 0|Done|success/i
   EVIDENCE: npm run test:typecheck, node --check for all changed Cloud JS, and git diff --check PASS. Ping, watchdog, heartbeat defaults, Worker 25 s peer deadline, and the existing 15 s Cloud membership budget were not increased or relaxed.
 
