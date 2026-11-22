@@ -14,6 +14,7 @@ import type { CatalogMetadataPatch } from "./catalogCommandsApi";
 import type { CatalogServices } from "./catalogLibraryProvider";
 import { useCatalogInteraction, type InteractionQuery } from "./catalogInteractionStore";
 import { useCatalogPlayback } from "./catalogPlaybackSession";
+import { linkPlayback } from "./catalogPlaybackLink";
 import { beatFromCatalogDetail } from "./catalogMutations";
 import { createBeatEditor, drawerEditError, type DrawerSaveInput, type EditResult } from "./catalogBeatEditor";
 import { appAlert } from "../../../lib/dialog";
@@ -236,16 +237,20 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   // Los fallos de Siguiente/Anterior se muestran (nunca se tragan): el aviso dice qué pasó y la sesión conserva el target para reintentar.
   const reportPlaybackFailure = useCallback((action: string, e: unknown) => { const code = (e as { code?: unknown })?.code; setNotice(`${action}: ${code ? `${String(code)} — ` : ""}${String((e as { message?: unknown })?.message ?? e)}`); }, [setNotice]);
   // ---- reproducción: la sesión decide, el motor aprobado suena ----
-  const lastEnded = useRef(audio.endedSeq);
-  useEffect(() => session.onEvent((e) => {
-    const snap = session.getSnapshot();
-    if (e.kind === "play" && e.beatId && snap.source) play(e.beatId, [snap.source.url]);
-    else if (e.kind === "seek0") seek(0);
-    else if (e.kind === "replay") { seek(0); const a = document.querySelector("audio"); if (a && a.paused) togglePause(); }
-  }), [session, play, seek, togglePause]);
-  useEffect(() => { if (audio.endedSeq !== lastEnded.current) { lastEnded.current = audio.endedSeq; void session.ended().catch((e) => reportPlaybackFailure("No se pudo continuar con el siguiente beat", e)); } }, [audio.endedSeq, session, reportPlaybackFailure]);
-  const lastProgress = useRef(0);
-  useEffect(() => { if (Math.abs(audio.progress - lastProgress.current) >= 0.01 || audio.progress === 0) { lastProgress.current = audio.progress; session.setProgress(audio.progress); } }, [audio.progress, session]);
+  const playbackLink = useRef<ReturnType<typeof linkPlayback> | null>(null);
+  const playbackEngine = useRef({ state: audio, play, seek, togglePause });
+  useEffect(() => () => {
+    playbackLink.current?.dispose();
+    playbackLink.current = null;
+  }, []);
+  useEffect(() => {
+    playbackEngine.current = { state: audio, play, seek, togglePause };
+    const link = playbackLink.current ??= linkPlayback(session, () => playbackEngine.current, {
+      audioPaused: () => document.querySelector("audio")?.paused ?? null,
+    });
+    link.setSession(session);
+    link.onEngineState(audio, (error) => reportPlaybackFailure("No se pudo continuar con el siguiente beat", error));
+  });
   const targetOf = useCallback((beat: Beat) => { const dto = dtoById.current.get(beat.id); return { beatId: beat.id, version: dto?.version ?? null, fileId: dto?.playback?.fileId ?? null }; }, []);
   const handlePlay = useCallback((beat: Beat) => {
     if (audio.playingId === beat.id) { togglePause(); return; }
