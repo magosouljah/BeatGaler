@@ -21,7 +21,7 @@ const PLAN_DEFINITIONS = Object.freeze({
     },
     quotas: {
       max_beats: 20,
-      // Free cannot write PROJECT content. Callers must still enforce upload_project.
+      // Free: cero es el techo fail-closed de PROJECT. Los llamadores deben respetar upload_project: false.
       max_project_zip_bytes: 0,
       youtube_uploads_per_day: 3,
       youtube_uploads_per_month: 31,
@@ -56,7 +56,7 @@ const PLAN_DEFINITIONS = Object.freeze({
       early_access: true,
     },
     quotas: {
-      // null means no commercial plan limit. Separate anti-abuse controls may exist.
+      // null significa sin límite comercial. Puede haber topes anti-abuso aparte.
       max_beats: null,
       max_project_zip_bytes: 1_900_000_000,
       youtube_uploads_per_day: null,

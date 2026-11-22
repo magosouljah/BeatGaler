@@ -21,7 +21,7 @@ Mapas: [ARQUITECTURA.md](docs/plans/catalogo-postgresql/ARQUITECTURA.md) (módul
 2. **El código en el SHA actual** (verdad técnica final; los informes son guía).
 3. Estado operativo: [CIERRE-LIVE-2026-11-20.md](docs/plans/catalogo-postgresql/CIERRE-LIVE-2026-11-20.md), [PENDIENTES-POST-LIVE-2026-11-20.md](docs/plans/catalogo-postgresql/PENDIENTES-POST-LIVE-2026-11-20.md), [DEPLOY-AWS.md](docs/operations/DEPLOY-AWS.md).
 4. UX aprobada: C12-r4 ([C12-DECISION-RECORD.md](docs/plans/catalogo-postgresql/C12-DECISION-RECORD.md), `C12-V00-CIERRE-20261107.md`). UI/diseño: [AGENTS.md](AGENTS.md) y `BLUEPRINT/DESIGN-SYSTEM/README.md`.
-5. Limpieza de arquitectura: `BeatGaler-arq` (`README.md` → `mapa-v1/`, `panorama-main-20261120/`).
+5. Limpieza de arquitectura: [mapa Web y Cloud](docs/plans/catalogo-postgresql/ARQUITECTURA.md), [glosario](docs/GLOSSARY.md) y [decisiones M3–M4](docs/adr/0001-interfaces-m3-m4.md). Plan, informes y mapas de referencia en `BeatGaler-arq` (`README.md` → `mapa-v1/`, `panorama-main-20261120/`).
 6. **Históricos** (consultar solo ante regresiones o dudas de diseño): NATIVO r2.1, TAREAS, matrices T/V, actas T00–T21, `ESTADO.md`/`EVIDENCIA.md` anteriores a E89. No reabrir fases ni reiniciar migraciones.
 
 Ante contradicción material: registrarla, no elegir por intuición, no asumir PASS.
@@ -38,7 +38,7 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 - Flujos con sesión en producción: **NOT_PROVEN** (no hay cuenta de prueba controlada en producción).
 - Eliminación física en Telegram **deshabilitada a propósito** (`BEATGALER_CATALOG_JOURNAL_DIR` sin configurar).
 - Borrado de cuentas: proceso autorizado, durable y auditable; **no habilitar** sin decisión.
-- **Limpieza de código:** plan en `BeatGaler-arq`. Piloto F1 (transporte HTTP único del catálogo Web) ejecutado y verificado con fakes en la rama de revisión `local/limpieza-preparacion-20261121`; **no fusionado a `main`** ni probado con proveedor real. Siguientes módulos solo con autorización.
+- **Limpieza de código:** M0–M5 ejecutadas en `local/limpieza-v1-int`, pendientes de integración a `main`. Evidencia con fakes y CI con PostgreSQL efímero. La limpieza sigue sin pruebas con proveedor real. G2 y G3 conservan el estado indicado arriba. Siguientes módulos solo con autorización.
 
 ## 5. Git y ramas
 

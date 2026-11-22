@@ -1,8 +1,8 @@
-# Arquitectura del catálogo PostgreSQL — mapa técnico (E84, 2026-11-19)
+# Arquitectura del catálogo PostgreSQL — mapa técnico (M8.5)
 
-Mapa breve para modificar el catálogo sin releer el historial. Decisiones de producto: [ESTADO](ESTADO.md); pruebas: [EVIDENCIA](EVIDENCIA.md).
+Mapa de la rama de integración de la limpieza V1. [Glosario](../../GLOSSARY.md) · [decisiones de interfaces M3–M4](../../adr/0001-interfaces-m3-m4.md) · [estado](ESTADO.md) · [evidencia](EVIDENCIA.md).
 
-> **Estado productivo actualizado al 20 nov 2026:** arquitectura PostgreSQL **LIVE**. [Cierre con evidencia AWS/SQL](CIERRE-LIVE-2026-11-20.md) · [deuda post-live](PENDIENTES-POST-LIVE-2026-11-20.md). Cloud `native-0e86aa42`, Web `native-1ceb9c39`, worker `beatgaler-catalog-worker.service` habilitado. La configuración legacy descrita al final ya **no es el flujo publicado**.
+> El cierre productivo del 20 de noviembre de 2026 registra PostgreSQL **LIVE**, Cloud `native-0e86aa42`, Web `native-1ceb9c39` y el worker `beatgaler-catalog-worker.service` habilitado. [Cierre con evidencia AWS/SQL](CIERRE-LIVE-2026-11-20.md) · [deuda post-live](PENDIENTES-POST-LIVE-2026-11-20.md).
 
 ## Principios (vigentes)
 
@@ -19,10 +19,11 @@ Mapa breve para modificar el catálogo sin releer el historial. Decisiones de pr
 | `contract.js` | Constantes y validadores compartidos (estados, roles, ids). Sin dependencias. |
 | `authority.js` | Autoridad nativa: provisión explícita, era/época/revisión, `requireLibraryForMutation` (lock de biblioteca), guardas fail-closed. |
 | `cursor.js`, `queries.js` | Lecturas: listado por keyset firmado, facetas, búsqueda (`search_text`, 0037–0039), conjuntos, navegación legacy de enlaces. Solo lectura. |
-| `metadata-rules.js`, `name-uniqueness.js`, `beat-projection.js` | Reglas de metadatos, nombre único bajo lock y proyección del documento de beat a columnas SQL derivadas. Puros (salvo la consulta de nombre). |
+| `metadata-rules.js`, `name-uniqueness.js` | Reglas de metadatos y nombre único bajo lock. |
+| `beat-projection.js` | Proyecta el documento a columnas SQL y arma DTO de lectura. Escribe filas, tags y deltas de facetas con el cliente SQL del llamador (M4.2). |
 | `commands.js` | Mutaciones de metadatos: PATCH, trash/restore, bulk, rename de tag, eventos. |
 | `facets.js` | Proyecciones derivadas: grupos por tag y facetas por delta; reconstrucción completa (`rebuildDerivedProjections`) solo para cargas masivas/reparación. |
-| `operations.js` | Transferencias C7 (IMPORT/REPLACE): intención, reservas de cuota, partes, recibos, commit; cola de jobs. |
+| `operations.js` | Transferencias C7 (IMPORT/REPLACE): intención, reservas de cuota, partes, recibos y commit. Dueño del ciclo de vida de la cola. |
 | `direct.js` | Direct B: sesión del navegador, tickets/recibos de envío, lectura directa; nunca transporta bytes. |
 | `prefix-packs.js` | Coordinación del MAIN (tickets de construcción, manifiesto); los bytes los sube el navegador. |
 | `media.js`, `playback.js` | Acceso a medios por concesión; rondas Shuffle y vecinos de orden. |
@@ -30,11 +31,34 @@ Mapa breve para modificar el catálogo sin releer el historial. Decisiones de pr
 | `worker.js` | Ejecutor de jobs con lease y fencing (verificación, commit, reconciliación, conjuntos, purga). Transporte inyectado. |
 | `transport-gateway.js` | Adaptador MTProto del Cloud (verificación, búsqueda, borrado y prueba de ausencia). SDK inyectado; sin bytes de archivos. |
 | `backup.js` | Backup/restore SQL cifrado (G4); los medios no se copian aquí. |
-| `session-guard.js`, `legacy-fence.js`, `flush-quarantine.js` | Cercos: capa 2 de sesión `catalog-v1`, error 410 para rutas INDEX sobre bibliotecas nativas, cuarentena del control-plane. |
+| `legacy-fence.js`, `flush-quarantine.js` | Cerco de rutas legacy para bibliotecas nativas y cuarentena del control-plane. |
 | `native-cli.js` | CLI de operador (`inspect`/`activate`/`rebind-chat`/`reset`), dry-run por defecto. |
 | `routes.js`, `api-manifest.json` | Router HTTP `/catalog/v1` (único módulo con express) y su contrato publicado. |
 
-Dependencias: `routes` → módulos de dominio → `authority`/`contract`. Ningún módulo de `catalog/` importa red ni SDK (prueba de contrato «catalog/ no importa transporte ni red»).
+El router delega en los módulos de dominio, que usan `authority` y `contract`. La prueba `catalog-contract.test.cjs` inspecciona las importaciones de transporte y red.
+
+### Ensamblado y gates (M4.1)
+
+`cloud-server/catalog-assembly.js` concentra el ensamblado HTTP y del worker. HTTP configura autoridad con pool y control-plane PostgreSQL, y ensambla antes de que `server-core.js` monte el router. Direct y el gateway exigen en producción G2 aprobado o la excepción de riesgo aceptado. El ensamblado HTTP valida esa excepción con autoridad nativa habilitada y activación SQL `REUSED_UNROTATED`. El worker prepara el cutover, rechaza autoridad distinta de PostgreSQL o catálogo nativo apagado y comprueba disponibilidad antes de arrancar. Si falta el gateway, el worker reintenta verificación y reconciliación y MAIN devuelve 503 en operaciones que requieren verificador.
+
+Los pares `configure*/current*` siguen en uso (X53/X54). `server-core.js` toma las instancias al montar el router y la guarda de revinculación sigue consultando la autoridad configurada.
+
+### Transacción de biblioteca y cola (M4.3–M4.4)
+
+`library-tx.js` concentra la política en `VARIANTS` por módulo e intención (`mutate`, `read`, `deriveWrite`, `continuePurge`). Aplica según el perfil disponibilidad, cuarentena, lock de biblioteca y era/época, congelación, aislamiento y plazos. El callback contiene el SQL de dominio.
+
+| Variante | Entradas en `VARIANTS` |
+| --- | --- |
+| `commands`, `operations`, `playback` | `mutate`, `read` |
+| `purge` | `mutate`, `continuePurge`, `read` |
+| `direct` | `mutate` |
+| `prefixPacks` (MAIN) | `mutate`, `read` |
+| `media` | `read` |
+| `queries` | `read`, `deriveWrite` |
+
+D13.1/2 unifican las reglas SQL nativas en 409. D13.5 y D13.6 aplican cuarentena al manifiesto MAIN y a la escritura de conjuntos de consulta. D13.7 registra el mensaje interno de PostgreSQL en el servidor y lo omite del 503. D13.3 conserva Shuffle sin bloqueo por congelación, D13.4 conserva las lecturas de estado de transferencias, purgas y rondas durante cuarentena, y D13.8 conserva los presupuestos (MAIN 5 s por sentencia, 1 s por defecto y 2 s totales para la lectura de Gallery).
+
+`tx.enqueue` inserta en `catalog_jobs` con el cliente de la transacción. La identidad `job_id` sostiene la deduplicación. `operations.js` reclama, renueva, completa y reprograma trabajos con lease y fencing. `worker.js` ejecuta los handlers y conserva la consulta SQL cruda de métricas. El worker también encola continuaciones por `operations.enqueueJob` en autocommit mediante `library-tx.js`. El INSERT de reconciliación en autocommit de `direct.js:57` queda fuera del envoltorio de encolado.
 
 ## Cliente — `src/features/library/catalog/`
 
@@ -44,21 +68,28 @@ Dependencias: `routes` → módulos de dominio → `authority`/`contract`. Ning�
 | Datos | `catalogApi`/`catalogCommandsApi` (HTTP), `catalogQueryStore` (bloques residentes, sin cargar la biblioteca entera), `catalogFirstBlockCache`, `catalogInteractionStore` (selección, edición, bulk). |
 | Sesiones de Gallery | `catalogQuerySession` (navegación, búsqueda diferida, facetas e invalidación tras mutaciones), `catalogImportSession` (revisión, progreso, provisionales y operaciones pendientes), `catalogPlaybackLink` (enlace entre la sesión de reproducción y `useAudio`, comandos de Playbar y cola). |
 | Gallery | `CatalogAppShell` (pantalla), `useCatalogGalleryScope` (composición, suscripciones y estado de vista), `catalogGalleryCards` (DTO conocidos acotados, ordinales y portadas perezosas), `CatalogVirtualGallery` + `useCatalogVirtualRows` + `catalogRowGeometry` (rejilla virtual; `leadCards` = tarjetas de subida en curso). |
-| Mutaciones y archivos | `catalogMutations` (PATCH/import/replace/purga), `catalogTransfer` (C7 por partes), `catalogFilePrep`, `catalogImportPlan`, `catalogBeatEditor` (guardado, reemplazo y papelera), `catalogProjectMerge`, `catalogDropKinds`/`catalogDropRouting`/`useCatalogFileDrop`, `catalogUploadProgress`, `catalogDownloads` (ID3 al descargar). |
+| Mutaciones y archivos | `catalogMutations` (PATCH/import/replace/purga), `catalogTransfer` (C7 por partes), `catalogFilePrep`, `catalogImportPlan`, `catalogBeatEditor` (guardado, reemplazo, papelera y lectura del resultado), `catalogProjectMerge`, `catalogDropKinds`/`catalogDropRouting`/`useCatalogFileDrop`, `catalogUploadProgress`, `catalogDownloads` (ID3 al descargar). |
 | Direct B y medios | `catalogDirectCore`/`catalogDirectPort`/`catalogDirectTypes` (Worker MTProto; reanudable), `catalogLabDirectPort` (doble del LAB), `catalogMediaClient`, `catalogPrefixCache`, `catalogArtworkCache`, `catalogMainPack`, `catalogStreamSource` (MSE), `catalogLocalCaches` (Settings). |
 | Reproducción y papelera | `catalogPlaybackSession`, `catalogPlaybackSets`, `catalogTrashSource`. |
 
 ### Editar un beat
 
-`Drawer` → `CatalogAppShell` → `useCatalogGalleryScope` → `catalogBeatEditor`. El editor decide entre PATCH de metadatos y REPLACE de archivos según la intención. Al quitar la portada, confirma primero el PATCH y usa la versión confirmada para guardar los archivos pendientes. Para fusionar un archivo DAW, lee el PROJECT vigente por el cliente de medios. `catalogMutations` ejecuta el comando versionado. `catalogQuerySession` refresca Gallery y facetas según el resultado de la edición.
+`Drawer` → `CatalogAppShell` → `useCatalogGalleryScope` → `catalogBeatEditor`. El editor decide entre PATCH de metadatos y REPLACE de archivos. Al quitar la portada con archivos pendientes, confirma primero el PATCH y relee la versión para el reemplazo. Para fusionar un archivo DAW, lee el PROJECT vigente por el cliente de medios.
+
+**PATCH:** `catalogMutations` → `catalogCommandsApi` → `PATCH /catalog/v1/beats/:id` → `commands.patchBeat`. La transacción comprueba idempotencia y versión esperada. Si cambia el documento, escribe con `beat-projection.js`. Si cambia el documento o se desvincula la portada, actualiza la revisión y emite un evento. **REPLACE:** `catalogMutations.replaceBeat` usa el flujo de transferencia de abajo con beat y versión esperada. El commit actualiza los archivos y aplica los metadatos con el mismo escritor cuando procede. `catalogBeatEditor` interpreta el resultado y `catalogQuerySession` invalida la consulta y las facetas cuando corresponde.
 
 ### Subir un beat
 
-`AddBeatModal` → `CatalogAppShell` → `catalogImportSession`. La sesión administra revisión, resolución de archivos, progreso y tarjetas provisionales. Tras confirmar la revisión llama a `catalogMutations.importBeat` → `catalogTransfer`. Direct B envía los archivos del navegador a Telegram. Cloud recibe los recibos y registra la operación. El worker verifica y confirma el catálogo en PostgreSQL. La sesión refresca Gallery y retira la provisional cuando el beat real está en el bloque residente.
+`AddBeatModal` → `CatalogAppShell` → `catalogImportSession`. La sesión administra revisión, resolución de archivos, progreso y tarjetas provisionales. Al confirmar llama a `catalogMutations.importBeat` → `catalogTransfer`.
 
-## Legacy que permanece (temporal)
+1. `POST /catalog/v1/operations` → `operations.createOperation` registra intención IMPORT, reserva y partes.
+2. Por parte, `catalogTransfer` pide `send-ticket`. `direct.js` persiste la identidad del envío antes de devolver el ticket. Direct B envía los bytes a Telegram y la Web entrega `direct-receipt` al Cloud. `operations.putReceipt` registra el candidato y encola `TRANSFER_VERIFY`.
+3. La Web pide `commit` y consulta la operación si sigue en curso. Si quedan partes por verificar, Cloud encola `TRANSFER_COMMIT` y devuelve 202. El worker verifica con el gateway y también puede encolar el commit cuando todas las partes están listas. `operations.commitOperation` confirma en PostgreSQL y usa `beat-projection.js` para insertar el beat de una IMPORT.
+4. La sesión refresca Gallery. Si mostró una tarjeta provisional, la retira cuando el beat confirmado llega al bloque residente.
 
-El build público de producción tiene **`VITE_CATALOG_API_ENABLED=true`** y usa Gallery PostgreSQL; la composición antigua (`src/app/WebLegacyWorkspace.tsx`, `src/features/cloud/*`) y las rutas Cloud de INDEX/transporte (`POST /transport/project/upload`, `POST /transport/index/publish`) **siguen en el repositorio, pero no son el flujo nativo publicado**. Eran necesarias para la fase anterior al corte; **ahora se pueden planificar para retirada en T25**, después de inventariar dependencias y probar compatibilidad. No ejecutar retirada a ciegas ni volver a INDEX.
+## Compatibilidad tras T25
+
+La composición Web requiere el catálogo PostgreSQL. `LibraryCompositionGate` muestra el estado `legacy-retired` cuando la composición queda deshabilitada. El Cloud conserva cercos HTTP para rutas retiradas, incluidos literales de INDEX y PROJECT en `http-containment.js`.
 
 ### Conexión del transporte en la instalación LIVE
 

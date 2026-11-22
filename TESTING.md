@@ -1,5 +1,7 @@
 # BeatGaler Automated Testing
 
+**HISTÓRICO desde 2026-11-21: la guía vigente es [CLAUDE.md §8](CLAUDE.md#8-pruebas) y [el mapa del catálogo PostgreSQL](docs/plans/catalogo-postgresql/ARQUITECTURA.md).**
+
 ## Current automated layers
 
 ### Unit tests
@@ -31,11 +33,11 @@ These guards are intentionally kept separate from unit tests. They protect archi
 ### Fast test gate
 
 ```powershell
-# Run unit tests first, then all existing regression guards
+# Run unit tests, integration tests, and regression guards
 npm run test:fast
 ```
 
-`npm test` currently aliases this fast gate.
+`npm test` ejecuta `npm run test:web` y `npm run test:cloud`.
 
 ### Full local check
 
