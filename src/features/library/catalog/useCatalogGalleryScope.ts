@@ -16,10 +16,7 @@ import { useCatalogInteraction, type InteractionQuery } from "./catalogInteracti
 import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { beatFromCatalogDetail } from "./catalogMutations";
 import { createBeatEditor, drawerEditError, type DrawerSaveInput, type EditResult } from "./catalogBeatEditor";
-import { enqueueReview, nextReview, pendingTransferNotice, summarizePendingTransfers, type ReviewEntry } from "./catalogDrawerSave";
-import { resolveImportPlan } from "./catalogImportPlan";
 import { appAlert } from "../../../lib/dialog";
-import { cleanTags } from "../../../lib/metadataValidation";
 import { readBlobAsArrayBuffer } from "../../audio/mp3Metadata";
 import { downloadBeatFiles, saveBlobWithBrowser, type DownloadKind } from "./catalogDownloads";
 import type { CatalogBeatFile } from "./catalogCommandsApi";
@@ -29,24 +26,14 @@ import { appConfirm } from "../../../lib/dialog";
 import type { CatalogStoreSnapshot } from "./catalogQueryStore";
 import { LEGACY_UNRESOLVABLE_COPY, createHistoryWriter, parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
 import { useAppShortcuts } from "../../../app/useAppShortcuts";
-import { noticeTone } from "../../../components/FloatingNotice";
-import { aggregateUploadPercent, uploadPercent } from "./catalogUploadProgress";
+
+import { createImportSession, importFailureMessage } from "./catalogImportSession";
+
+export { IMPORT_NO_FILE_NOTICE, importFailureMessage } from "./catalogImportSession";
 
 export const SEARCH_DEBOUNCE_MS = 250;
 export const KNOWN_BEATS_MAX = 512; // tarjetas conocidas fuera de ventana (Playbar/cola): acotado, nunca la biblioteca entera
 export const BULK_TAGS_MODE_NOTICE = "En el catálogo, «añadir» o «quitar» tags en lote aún no está disponible: usa «reemplazar».";
-export const IMPORT_NO_FILE_NOTICE = "No se encontró el archivo del beat a importar.";
-/** Mensaje al usuario cuando una importación falla: sin transporte configurado se dice claramente, no con texto técnico del servidor. */
-/** Mensaje claro de un fallo de importación (cuota del plan, transporte no disponible, tamaño de PROJECT…); el resto conserva su texto. */
-export function importFailureMessage(error: unknown): string {
-  const e = error as { code?: unknown; detail?: { max?: unknown; used?: unknown; max_bytes?: unknown; name?: unknown }; message?: unknown } | null;
-  if (e?.code === "NAME_TAKEN") return `Ya existe un beat llamado «${String(e.detail?.name ?? "")}». Cambia el nombre para continuar.`;
-  if (e?.code === "QUOTA_EXCEEDED") return `Tu plan alcanzó el límite de beats${e.detail?.max != null ? ` (${String(e.detail.used ?? "?")} de ${String(e.detail.max)})` : ""}. Revisa Settings → Plan para ampliarlo.`;
-  if (e?.code === "TRANSFER_UNAVAILABLE") return "El servicio de almacenamiento de archivos no está disponible en este entorno. El beat no se guardó.";
-  if (e?.code === "PROJECT_TOO_LARGE") return "El PROJECT supera el tamaño máximo de tu plan.";
-  return String(e?.message ?? error);
-}
-
 export interface CatalogGalleryScopeOptions {
   services: CatalogServices;
   accountId: string;
@@ -116,14 +103,34 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     const m = dtoById.current; m.delete(dto.id); m.set(dto.id, dto);
     while (m.size > KNOWN_BEATS_MAX) { const first = m.keys().next().value as string; if (first === audio.playingId) { const second = [...m.keys()][1]; if (second) m.delete(second); else break; } else m.delete(first); }
   }, [audio.playingId]);
-  const seededArtwork = useRef(new Map<string, string>());
   const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot;
+  const refreshAfterMutation = useCallback(() => { store.notifyLibraryChanged(); interactionStore.invalidateFacets(); }, [store, interactionStore]);
+  const importPorts = useRef({ mutations, refreshLibrary: refreshAfterMutation });
+  importPorts.current = { mutations, refreshLibrary: refreshAfterMutation };
+  const [importSession] = useState(() => createImportSession({
+    get mutations() { return importPorts.current.mutations; },
+    get refreshLibrary() { return importPorts.current.refreshLibrary; },
+    importer: platform.importer,
+    clock: { setTimeout: (callback, ms) => { window.setTimeout(callback, ms); } },
+    landsProbe: () => {
+      const snap = snapshotRef.current;
+      const scroller = typeof document !== "undefined" ? document.querySelector<HTMLElement>('[data-library-scroll="true"]') : null;
+      return snap.filters.state === "ACTIVE" && !snap.filters.q.trim() && snap.filters.includeTags.length === 0
+        && snap.filters.excludeTags.length === 0 && snap.firstOrdinal === 0 && (!scroller || scroller.scrollTop < 24);
+    },
+    setBusy: setBeatCloudUpdateBusy,
+    alert: appAlert,
+  }));
+  const { setNotice } = importSession;
+  const { notice, uploadNotice, review, uploads, pendingCards: pendingImports, batchOpen } =
+    useSyncExternalStore(importSession.subscribe, importSession.getSnapshot, importSession.getSnapshot);
+
   const toBeat = useCallback((dto: CatalogBeatDto): Beat => {
     remember(dto);
     // E83: la tarjeta real que sustituye a la provisional nace con la portada de esta (sin fotograma negro hasta que cargue la de Telegram).
-    const url = dto.artwork ? artworkUrls[dto.artwork.fileId] ?? seededArtwork.current.get(dto.id) ?? null : null;
+    const url = dto.artwork ? artworkUrls[dto.artwork.fileId] ?? importSession.getSeededArtwork(dto.id) ?? null : null;
     return beatFromCatalogDetail(dto, url || null, url === "");
-  }, [artworkUrls, remember]);
+  }, [artworkUrls, remember, importSession]);
   const beatById = useCallback((id: string): Beat => { const dto = dtoById.current.get(id); return dto ? toBeat(dto) : placeholderBeat(id); }, [toBeat]);
   const noteOrdinal = useCallback((id: string, ordinal: number) => { ordinalById.current.set(id, ordinal); }, []);
   // Artwork perezoso al montar la tarjeta: memoria → caché persistente de este dispositivo (E79) → Telegram. Solo las tarjetas montadas piden portada.
@@ -245,9 +252,8 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   }, [residentKey, interactionStore]); // eslint-disable-line react-hooks/exhaustive-deps
   const isSelected = useCallback((id: string) => interactionStore.isSelected(id), [interactionStore, interaction.selection]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [notice, setNotice] = useState<string | null>(null);
   // Los fallos de Siguiente/Anterior se muestran (nunca se tragan): el aviso dice qué pasó y la sesión conserva el target para reintentar.
-  const reportPlaybackFailure = useCallback((action: string, e: unknown) => { const code = (e as { code?: unknown })?.code; setNotice(`${action}: ${code ? `${String(code)} — ` : ""}${String((e as { message?: unknown })?.message ?? e)}`); }, []);
+  const reportPlaybackFailure = useCallback((action: string, e: unknown) => { const code = (e as { code?: unknown })?.code; setNotice(`${action}: ${code ? `${String(code)} — ` : ""}${String((e as { message?: unknown })?.message ?? e)}`); }, [setNotice]);
   // ---- reproducción: la sesión decide, el motor aprobado suena ----
   const lastEnded = useRef(audio.endedSeq);
   useEffect(() => session.onEvent((e) => {
@@ -280,7 +286,6 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
 
   // ---- Drawer, edición, papelera, lote ----
   const [drawer, setDrawer] = useState<{ beat: Beat; mode: "detail" | "edit" } | null>(null);
-  const refreshAfterMutation = useCallback(() => { store.notifyLibraryChanged(); interactionStore.invalidateFacets(); }, [store, interactionStore]);
   // PROJECT vigente del beat (para fusionar un archivo de DAW con su ZIP, como el flujo anterior).
   const loadProject = useCallback(async (beatId: string): Promise<File | null> => {
     const files = await mutations.listBeatFiles(beatId);
@@ -390,142 +395,21 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
 
   // ---- importación (T12) desde «Add beat» del navegador ----
   const [showAdd, setShowAdd] = useState(false);
-  // «Add beat» → pantalla de revisión (el Drawer en modo edición con `reviewInfo`, como el flujo anterior): nombre, BPM, key, tags, rating, portada y
-  // archivos (MASTER/WAV/PROJECT) se editan ANTES de importar. Cancelar/omitir libera el archivo y no importa ni modifica nada.
-  const [review, setReview] = useState<{ beat: Beat; hydrated: Promise<Beat> | null } | null>(null);
-  // §6.1-6: una sola revisión visible; las demás (otra importación o un fallo en segundo plano) esperan en cola y se abren al cerrar la actual.
-  // Antes un fallo en segundo plano sustituía la revisión abierta: sus ediciones se perdían y su archivo quedaba retenido sin interfaz.
-  const reviewQueue = useRef<ReviewEntry[]>([]);
-  const showReview = useCallback((entry: ReviewEntry) => {
-    setReview((r) => { const q = enqueueReview(r, reviewQueue.current, entry); reviewQueue.current = q.queue; return q.current; });
-    // Metadatos ID3 / WAV→MP3 se hidratan en segundo plano (como antes): la revisión se abre al instante y se completa al terminar.
-    void entry.hydrated?.then((hb) => {
-      const next = { ...hb, tags: cleanTags(hb.tags || []).tags };
-      reviewQueue.current = reviewQueue.current.map((x) => (x.beat.id === entry.beat.id ? { beat: next, hydrated: null } : x));
-      setReview((r) => (r && r.beat.id === entry.beat.id ? { ...r, beat: next } : r));
-    }).catch((error) => {
-      if (platform.importer.fileForBeat(entry.beat.id)) void appAlert({ title: "Import failed", message: String(error), danger: true });
-    });
-  }, []);
-  useEffect(() => {
-    if (review || !reviewQueue.current.length) return;
-    const q = nextReview(reviewQueue.current, (id) => Boolean(platform.importer.fileForBeat(id)));
-    reviewQueue.current = q.queue; if (q.next) setReview(q.next);
-  }, [review]);
-  const addBeatsAndReview = useCallback((beats: Beat[], hydrated?: Array<Promise<Beat>>) => {
-    const beat = beats[0]; if (!beat) return;
-    if (!platform.importer.fileForBeat(beat.id)) { setNotice(IMPORT_NO_FILE_NOTICE); return; }
-    showReview({ beat, hydrated: hydrated?.[0] ?? null });
-  }, [showReview]);
-  const cancelReview = useCallback(() => { setReview((r) => { if (r) platform.importer.releaseBeat(r.beat.id); return null; }); }, []);
-  // «Save and finish» (comportamiento del BeatGaler anterior: «Save/next stays immediate; the extracted cloud queue owns upload work»):
-  // la revisión se cierra en cuanto el servidor aceptó la operación (nombre libre, cuota, tamaño) y la subida a Telegram continúa en segundo plano.
-  // E83 — una única tarjeta estable: el beat que se sube ocupa el primer hueco de la rejilla (BeatCard original con el logo girando, sin reproducción)
-  // y la sustituye la real cuando PostgreSQL la confirma (ver `pendingImports`); además un aviso flotante con el avance. Fallo definitivo → la
-  // revisión se reabre con lo editado y el archivo intacto;
-  // incierto → aviso persistente y NUNCA reenvío (E5).
-  // E80: el avance es el de los BYTES enviados por Direct B (no por archivo terminado); con varias subidas, el total es bytes enviados / bytes
-  // totales de todas (una subida grande pesa lo que pesa, no lo mismo que una pequeña). El estado solo cambia cuando cambia el % entero.
-  const [uploads, setUploads] = useState<Array<{ id: string; name: string; percent: number; uploadedBytes: number; totalBytes: number }>>([]);
-  // E83: tarjeta ÚNICA y estable del beat que se sube (la BeatCard original con el logo giratorio): ocupa el primer hueco de la MISMA rejilla virtual
-  // (no un bloque aparte) y se retira en el mismo render en que llega la tarjeta real de PostgreSQL, que hereda la portada y el overlay (completado
-  // incluido). Como en el original, aparece arriba sea cual sea el orden (la real ocupa luego su sitio ordenado: manual → el mismo hueco);
-  // solo con la lista al inicio y sin búsqueda ni etiquetas (un beat que no encajaría en esa vista no se dibuja: queda el aviso de progreso).
-  const [pendingImports, setPendingImports] = useState<Array<{ id: string; beat: Beat; realId: string | null }>>([]);
-  const residentIds = useMemo(() => { const s = new Set<string>(); if (pendingImports.some((p) => p.realId)) for (const b of snapshot.blocks) for (const it of b.items) s.add(it.id); return s; }, [snapshot.blocks, pendingImports]);
-  const pendingCards = useMemo(() => pendingImports.filter((p) => !(p.realId && residentIds.has(p.realId))).map(({ id, beat }) => ({ id, beat })), [pendingImports, residentIds]);
-  // E85: el traspaso provisional → real (y su animación de «completado») ocurre UNA sola vez por subida, llegue la real por el camino normal o por la
-  // red de seguridad: antes la red de seguridad (5 s) volvía a emitir «completado» sobre la tarjeta real y la animación verde reaparecía.
-  const handedOff = useRef(new Set<string>());
-  const completeHandoff = useCallback((uploadId: string, realId: string) => {
-    if (handedOff.current.has(uploadId)) return;
-    handedOff.current.add(uploadId);
-    setPendingImports((list) => list.filter((p) => p.id !== uploadId));
-    setBeatCloudUpdateBusy(realId, false, true); setBeatCloudUpdateBusy(uploadId, false); // la real ya está montada: completa su overlay (una vez)
-    window.setTimeout(() => seededArtwork.current.delete(realId), 4000); // handedOff conserva el id de la subida (único): la red de seguridad posterior no repite el traspaso
-  }, []);
-  useEffect(() => { for (const p of pendingImports) if (p.realId && residentIds.has(p.realId)) completeHandoff(p.id, p.realId); }, [pendingImports, residentIds, completeHandoff]);
-  const uploadNotice = uploads.length === 0 ? null
-    : uploads.length === 1 ? `Subiendo «${uploads[0].name}»… ${uploads[0].percent} %`
-    : `Subiendo ${uploads.length} beats… ${aggregateUploadPercent(uploads)} %`;
-  // E75: mientras haya una revisión abierta o beats subiendo, el lote sigue en curso: el MAIN de prefijos se reconstruye UNA vez al terminar.
-  useEffect(() => { services.mainPack?.setBatchOpen(Boolean(review) || uploads.length > 0); }, [services.mainPack, review, uploads.length]);
-  const saveReview = useCallback(async (updated: Beat, onProgress?: (p: { stage: "preparing" | "master" | "wav" | "artwork" | "project" | "library"; uploadedBytes: number; totalBytes: number }) => void) => {
-    const r = review; if (!r) return;
-    const original = platform.importer.fileForBeat(r.beat.id);
-    // Espera la conversión WAV→MP3 y la hidratación; `updated` es la versión editada por el usuario (no se re-añaden tags quitados).
-    const plan = await resolveImportPlan({ beat: updated, hydrated: r.hydrated ? r.hydrated.then(() => updated) : null, slotFiles: () => platform.importer.slotFilesForBeat(r.beat.id), originalFile: original });
-    let begun: () => void = () => {};
-    const begunP = new Promise<"started">((res) => { begun = () => res("started"); });
-    const uploadId = updated.id; let percent = 0; let bytes = { uploadedBytes: 0, totalBytes: 0 };
-    const job = mutations.importBeat({ beat: plan.beat, files: plan.files, onProgress: (p) => {
-      onProgress?.(p); if (p.stage === "preparing") { bytes = { uploadedBytes: 0, totalBytes: p.totalBytes }; return; }
-      begun();
-      bytes = { uploadedBytes: Math.min(p.uploadedBytes, p.totalBytes), totalBytes: p.totalBytes };
-      const next = uploadPercent(bytes.uploadedBytes, bytes.totalBytes);
-      if (next !== percent) { percent = next; const b = bytes; setUploads((list) => list.map((x) => (x.id === uploadId ? { ...x, percent: next, ...b } : x))); }
-    } })
-      .then((outcome) => ({ outcome, error: null as unknown }), (error: unknown) => ({ outcome: null, error }));
-    const first = await Promise.race([begunP, job.then(() => "settled" as const)]);
-    const uncertainNotice = (name: string) => `La subida de «${name}» no se pudo confirmar. No se reenvía ni se borra nada: el servidor lo revisará y el beat aparecerá si Telegram lo recibió.`;
-    if (first === "settled") { // rechazado ANTES de subir (nombre repetido, cuota, tamaño…) o terminado sin fase de subida: el error se muestra en la revisión abierta
-      const res = await job;
-      if (res.error) throw new Error(importFailureMessage(res.error));
-      const outcome = res.outcome!;
-      if (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout") { // retenida: puede confirmarse más tarde → nunca se reenvía
-        platform.importer.releaseBeat(r.beat.id); setReview(null); setNotice(outcome.status === "uncertain" ? uncertainNotice(updated.name) : pendingTransferNotice(updated.name)); refreshAfterMutation();
-        return;
-      }
-      if (outcome.status !== "committed") throw new Error((outcome as { error?: unknown }).error ? importFailureMessage((outcome as { error?: unknown }).error) : `La importación de «${updated.name}» quedó en estado ${outcome.status}; no se guardó el beat.`);
-      platform.importer.releaseBeat(r.beat.id); setReview(null);
-      setNotice(`«${updated.name}» importado.`); refreshAfterMutation();
-      return;
-    }
-    setUploads((list) => [...list.filter((x) => x.id !== uploadId), { id: uploadId, name: updated.name, percent, ...bytes }]);
-    const snap = snapshotRef.current; const scroller = typeof document !== "undefined" ? document.querySelector<HTMLElement>('[data-library-scroll="true"]') : null;
-    const lands = snap.filters.state === "ACTIVE" && !snap.filters.q.trim() && snap.filters.includeTags.length === 0 && snap.filters.excludeTags.length === 0 && snap.firstOrdinal === 0 && (!scroller || scroller.scrollTop < 24);
-    if (lands) { setPendingImports((list) => [{ id: uploadId, beat: updated, realId: null }, ...list.filter((x) => x.id !== uploadId)]); setBeatCloudUpdateBusy(uploadId, true); }
-    const dropPending = () => { setPendingImports((list) => list.filter((x) => x.id !== uploadId)); setBeatCloudUpdateBusy(uploadId, false); };
-    setNotice((n) => (n && noticeTone(n) === "success" ? null : n)); // un «importado» anterior no tapa el avance de esta subida; errores e inciertos sí permanecen
-    setReview(null); // cierra la revisión ya: el archivo sigue retenido hasta que termine la subida
-    void job.then(({ outcome, error }) => {
-      setUploads((list) => list.filter((x) => x.id !== uploadId));
-      if (outcome && outcome.status === "committed") {
-        platform.importer.releaseBeat(r.beat.id);
-        // Traspaso: la tarjeta real nace ya «ocupada» y con la portada de la provisional; la provisional se retira cuando la real está residente.
-        const realId = (outcome as { beatId?: string }).beatId;
-        if (lands && realId) {
-          setBeatCloudUpdateBusy(realId, true); if (updated.image_base64 && String(updated.image_base64).startsWith("data:")) seededArtwork.current.set(realId, String(updated.image_base64));
-          setPendingImports((list) => list.map((x) => (x.id === uploadId ? { ...x, realId } : x)));
-          window.setTimeout(() => completeHandoff(uploadId, realId), 5000); // red de seguridad si la real no llega a esta vista (no repite un traspaso ya hecho)
-        }
-        refreshAfterMutation(); // PostgreSQL ya lo tiene: la Gallery se actualiza en el sitio con la tarjeta real
-        setNotice((n) => (n && noticeTone(n) === "error" ? n : `«${updated.name}» importado.`));
-        return;
-      }
-      dropPending(); // fallo o incierto: ninguna tarjeta falsa permanente
-      // §6.1-7: RECONCILE («blocked») y tiempo agotado también pueden confirmarse después: como «uncertain», sin reabrir para reenviar.
-      if (outcome && (outcome.status === "uncertain" || outcome.status === "blocked" || outcome.status === "timeout")) { platform.importer.releaseBeat(r.beat.id); setNotice(outcome.status === "uncertain" ? uncertainNotice(updated.name) : pendingTransferNotice(updated.name)); refreshAfterMutation(); return; }
-      const reason = error ? importFailureMessage(error) : (outcome as { error?: unknown } | null)?.error ? importFailureMessage((outcome as { error?: unknown }).error) : `quedó en estado ${outcome ? outcome.status : "desconocido"}`;
-      setNotice(`No se pudo importar «${updated.name}»: ${reason.replace(/[.s]+$/, "")}. Tus cambios siguen en la revisión.`);
-      if (platform.importer.fileForBeat(r.beat.id)) showReview({ beat: updated, hydrated: null }); // reabre con lo editado (o en cola si hay otra revisión abierta)
-    });
-  }, [review, mutations, refreshAfterMutation, showReview, completeHandoff]);
+  const { open: addBeatsAndReview, cancelReview, save: saveReview } = importSession;
+  useEffect(() => { importSession.advanceReview(); }, [importSession, review]);
+  const residentIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (pendingImports.some((card) => card.realId)) for (const block of snapshot.blocks) for (const item of block.items) ids.add(item.id);
+    return ids;
+  }, [snapshot.blocks, pendingImports]);
+  // La provisional sale de la rejilla en el mismo render en que llega la real.
+  const pendingCards = useMemo(() => pendingImports
+    .filter((card) => !(card.realId && residentIds.has(card.realId)))
+    .map(({ id, beat }) => ({ id, beat })), [pendingImports, residentIds]);
+  useEffect(() => { importSession.noteResident(residentIds); }, [importSession, residentIds]);
+  useEffect(() => { services.mainPack?.setBatchOpen(batchOpen); }, [services.mainPack, batchOpen, review, uploads.length]);
+  useEffect(() => { if (!snapshot.provisional) void importSession.resumePending(); }, [importSession, snapshot.provisional]);
 
-  // §6.1-5: al arrancar se consulta el resultado de las subidas que quedaron a medias (p. ej. al recargar la página). Las confirmadas aparecen
-  // en la Gallery; las terminadas sin efecto se informan una vez; las que siguen abiertas se informan sin reenviar nada (los archivos no se
-  // conservan tras recargar). Solo lectura: no cancela ni reintenta.
-  const pendingChecked = useRef(false);
-  useEffect(() => {
-    if (pendingChecked.current || snapshot.provisional) return;
-    pendingChecked.current = true;
-    void mutations.resolvePendingTransfers().then((list) => {
-      const r = summarizePendingTransfers(list);
-      for (const id of r.forget) mutations.forgetOperation(id);
-      if (r.notice) setNotice(r.notice);
-      if (r.refresh) refreshAfterMutation();
-    }).catch(() => {});
-  }, [snapshot.provisional, mutations, refreshAfterMutation]);
 
   // ---- sesión / ajustes ----
   const [showSettings, setShowSettings] = useState(false);
