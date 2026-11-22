@@ -106,3 +106,7 @@ node scripts/catalog-lab/run-smoke-v1.mjs first-play; echo $?                 # 
 FP_PLAY_SELECTOR='[data-no-existe]' FP_COLD=1 FP_HOT=1 node scripts/catalog-lab/run-smoke-v1.mjs first-play; echo $?   # mutación: FAIL, código 1
 node scripts/catalog-lab/lab.cjs down
 ```
+
+## Repetir casos: estado limpio
+
+`lab.cjs down` NO borra los perfiles de Chrome del LAB (`<LAB_STATE_DIR>\*-profile`, con IndexedDB de portadas) y cada caso reutiliza el suyo. Para repetir un caso (sobre todo `e79`, `section61`, `first-block-cases`): `down`, borrar `<LAB_STATE_DIR>\*-profile`, `up` con siembra nueva y una copia fresca de `lab.env.json` por caso. Verificado en M8.2 (2026-11-22): con estado contaminado fallan `COVERS-COLD`, `COVER-REPLACE`, `COVER-REMOVE` y `STALE/ERROR`; con estado limpio pasan. Requiere `TEMP`/`TMP` bajo `E:\777\tmp` para encontrar ChromeDriver.
