@@ -9,7 +9,7 @@ import { useAudio } from "../../../hooks/useAudio";
 import { useTagColors } from "../../../lib/tagColors";
 import { platform } from "../../../platform";
 import { logoutBeatGalerAccount } from "../../../components/AccountGate";
-import type { CatalogBeatDto, CatalogQueryFilters, CatalogSort } from "./catalogApi";
+import type { CatalogBeatDto } from "./catalogApi";
 import type { CatalogMetadataPatch } from "./catalogCommandsApi";
 import type { CatalogServices } from "./catalogLibraryProvider";
 import { useCatalogInteraction, type InteractionQuery } from "./catalogInteractionStore";
@@ -24,14 +24,15 @@ import type { ArtworkDropSource } from "../../dragdrop/browserArtwork";
 import { setBeatCloudUpdateBusy } from "../../cloud/beatCloudUpdateBusy";
 import { appConfirm } from "../../../lib/dialog";
 import type { CatalogStoreSnapshot } from "./catalogQueryStore";
-import { LEGACY_UNRESOLVABLE_COPY, createHistoryWriter, parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
+import { createHistoryWriter } from "./catalogNavigation";
+import { createCatalogQuerySession, playbackFiltersKey } from "./catalogQuerySession";
 import { useAppShortcuts } from "../../../app/useAppShortcuts";
 
 import { createImportSession, importFailureMessage } from "./catalogImportSession";
 
 export { IMPORT_NO_FILE_NOTICE, importFailureMessage } from "./catalogImportSession";
 
-export const SEARCH_DEBOUNCE_MS = 250;
+export { SEARCH_DEBOUNCE_MS } from "./catalogQuerySession";
 export const KNOWN_BEATS_MAX = 512; // tarjetas conocidas fuera de ventana (Playbar/cola): acotado, nunca la biblioteca entera
 export const BULK_TAGS_MODE_NOTICE = "En el catálogo, «añadir» o «quitar» tags en lote aún no está disponible: usa «reemplazar».";
 export interface CatalogGalleryScopeOptions {
@@ -104,7 +105,18 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     while (m.size > KNOWN_BEATS_MAX) { const first = m.keys().next().value as string; if (first === audio.playingId) { const second = [...m.keys()][1]; if (second) m.delete(second); else break; } else m.delete(first); }
   }, [audio.playingId]);
   const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot;
-  const refreshAfterMutation = useCallback(() => { store.notifyLibraryChanged(); interactionStore.invalidateFacets(); }, [store, interactionStore]);
+  const history = useMemo(() => createHistoryWriter(), []);
+  const querySession = useMemo(() => createCatalogQuerySession({
+    store,
+    interaction: interactionStore,
+    playback: session,
+    history,
+    schedule(callback, ms) {
+      const timer = setTimeout(callback, ms);
+      return () => clearTimeout(timer);
+    },
+  }), [store, interactionStore, session, history]);
+  const { refreshAfterMutation, reloadLibrary } = querySession;
   const importPorts = useRef({ mutations, refreshLibrary: refreshAfterMutation });
   importPorts.current = { mutations, refreshLibrary: refreshAfterMutation };
   const [importSession] = useState(() => createImportSession({
@@ -160,58 +172,37 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const sortBy = snapshot.sort;
   const revision = snapshot.revision ?? context.revision;
   const query = useMemo<InteractionQuery>(() => ({ filters: snapshot.filters, sort: snapshot.sort, revision }), [snapshot.filters, snapshot.sort, revision]);
-  const filtersKey = `${snapshot.filters.q}|${[...snapshot.filters.includeTags].join(",")}|${[...snapshot.filters.excludeTags].join(",")}|${snapshot.filters.state}`;
-  // Arranque por URL (plan B §5.2, r4 §2 B-legacy): `bgPage` legacy → resolver del servidor (ancla + copy B-legacy); `bgAnchor` → reapertura por
-  // cursor; filtros/orden de la URL → query inicial. Sin parámetros → primer bloque. El historial se escribe acotado (replace con debounce).
-  const history = useMemo(() => createHistoryWriter(), []);
+  const filtersKey = playbackFiltersKey(snapshot.filters);
   const navInit = useRef(false);
   useEffect(() => {
-    if (navInit.current) return; navInit.current = true;
-    // Bloque sembrado desde la copia local (misma consulta que la URL): se revalida sin vaciar la Gallery.
-    if (store.startedFromSeed()) { void store.revalidate(); return; }
-    const search = typeof window !== "undefined" ? window.location.search : "";
-    const legacy = parseLegacyBgPage(search);
-    if (legacy.kind === "offset") { void store.loadLegacy(legacy.offset); return; }
-    if (legacy.kind === "invalid") { setNotice(LEGACY_UNRESOLVABLE_COPY); void store.loadFirst(); return; }
-    const nav = readNavigationState(search, typeof window !== "undefined" ? window.history.state : null);
-    if (nav.filters.q || nav.filters.includeTags.length || nav.filters.excludeTags.length || nav.sort !== snapshot.sort || nav.filters.state !== snapshot.filters.state) {
-      setSearchState(nav.filters.q); setIncluded(new Set(nav.filters.includeTags)); setExcluded(new Set(nav.filters.excludeTags));
-      void store.setQuery(nav.filters, nav.sort);
-      return;
-    }
-    if (nav.anchor) { void store.loadResume(nav.anchor); return; }
-    void store.loadFirst();
+    if (navInit.current) return;
+    navInit.current = true;
+    querySession.start({
+      snapshot,
+      readSearch: () => typeof window !== "undefined" ? window.location.search : "",
+      readHistoryState: () => typeof window !== "undefined" ? window.history.state : null,
+      setDraft(filters) {
+        setSearchState(filters.q);
+        setIncluded(new Set(filters.includeTags));
+        setExcluded(new Set(filters.excludeTags));
+      },
+      setNotice,
+    });
   }, [store]); // eslint-disable-line react-hooks/exhaustive-deps
   const lastQueryKey = useRef<string | null>(null);
   useEffect(() => {
-    if (snapshot.status === "idle" || snapshot.status === "resolving") return;
-    const key = snapshot.queryKey;
-    if (lastQueryKey.current !== null && lastQueryKey.current !== key) history.pushQuery({ filters: snapshot.filters, sort: snapshot.sort, anchor: null });
-    lastQueryKey.current = key;
+    lastQueryKey.current = querySession.syncQueryHistory(snapshot, lastQueryKey.current);
   }, [snapshot.queryKey, snapshot.status]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!snapshot.resumeCursor || snapshot.status !== "ready" || snapshot.legacy) return;
-    // Al inicio de la lista no se guarda ancla: una recarga arranca limpia y puede usar la copia local de arranque rápido (E66).
-    history.replaceAnchor({ filters: snapshot.filters, sort: snapshot.sort, anchor: snapshot.firstOrdinal > 0 ? snapshot.resumeCursor : null });
+    querySession.syncAnchor(snapshot);
   }, [snapshot.resumeCursor, snapshot.status]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => history.cancelPending(), [history]);
-  useEffect(() => {
-    const q = search.trim();
-    const t = setTimeout(() => {
-      // El orden puede haber cambiado mientras el filtro estaba pendiente.
-      const current = store.getSnapshot();
-      const filters: CatalogQueryFilters = { ...current.filters, q, includeTags: [...includedTags].sort(), excludeTags: [...excludedTags].sort() };
-      const same = filters.q === current.filters.q && filters.includeTags.join(",") === current.filters.includeTags.join(",") && filters.excludeTags.join(",") === current.filters.excludeTags.join(",");
-      if (same) return;
-      void interactionStore.onFiltersChanged({ filters, sort: current.sort, revision: current.revision ?? context.revision });
-      void store.setQuery(filters, current.sort);
-    }, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [search, includedTags, excludedTags, store, interactionStore, context.revision]);
-  useEffect(() => { void session.setQuery(query); }, [filtersKey, snapshot.sort, revision]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (snapshot.revision) interactionStore.onRevisionChanged(snapshot.revision); }, [snapshot.revision, interactionStore]);
+  useEffect(() => querySession.deferFilters({ search, includedTags, excludedTags }, context.revision),
+    [search, includedTags, excludedTags, querySession, context.revision]);
+  useEffect(() => { querySession.syncPlayback(query); }, [filtersKey, snapshot.sort, revision]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { querySession.syncRevision(snapshot.revision); }, [snapshot.revision, querySession]);
   const setSearch = useCallback((value: string) => setSearchState(value), []);
-  const setSortBy = useCallback((sort: CatalogSort) => { interactionStore.onSortChanged(sort); void store.setSort(sort); }, [interactionStore, store]);
+  const setSortBy = querySession.setSort;
   const handleTagClick = useCallback((tag: string, e: { altKey?: boolean }) => {
     if (e?.altKey) { setExcluded((s) => { const n = new Set(s); if (n.has(tag)) n.delete(tag); else n.add(tag); return n; }); setIncluded((s) => { if (!s.has(tag)) return s; const n = new Set(s); n.delete(tag); return n; }); }
     else { setIncluded((s) => { const n = new Set(s); if (n.has(tag)) n.delete(tag); else n.add(tag); return n; }); setExcluded((s) => { if (!s.has(tag)) return s; const n = new Set(s); n.delete(tag); return n; }); }
@@ -220,15 +211,8 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
 
   // ---- facetas globales (T06) → Tag Bar ----
   const [facets, setFacets] = useState<{ revision: string; tags: string[]; freq: Map<string, number> }>({ revision: "", tags: [], freq: new Map() });
-  useEffect(() => {
-    if (!snapshot.revision || snapshot.provisional || !["ready", "empty", "no-results"].includes(snapshot.status)) return;
-    let cancelled = false;
-    void interactionStore.loadFacets({ scope: "ACTIVE", q: "", revision: snapshot.revision, limit: 240 }).then((page) => {
-      if (cancelled) return;
-      setFacets({ revision: snapshot.revision!, tags: page.items.map((f) => f.label || f.key), freq: new Map(page.items.map((f) => [f.label || f.key, f.count])) });
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [snapshot.revision, snapshot.status, snapshot.provisional, interactionStore]);
+  useEffect(() => querySession.loadFacets(snapshot, setFacets),
+    [snapshot.revision, snapshot.status, snapshot.provisional, querySession]);
 
   // ---- selección global (servidor) ----
   const [selectMode, setSelectMode] = useState(false);
@@ -245,11 +229,8 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const finishSelection = useCallback(() => { setSelectMode(false); void interactionStore.clearSelection(); }, [interactionStore]);
   const residentKey = `${snapshot.firstOrdinal}:${snapshot.endOrdinal}:${snapshot.queryGeneration}`;
   useEffect(() => {
-    const s = interactionStore.getSnapshot().selection;
-    if (s.status !== "active" && s.status !== "conflict") return;
-    const ids: string[] = []; for (const b of snapshot.blocks) for (const it of b.items) ids.push(it.id);
-    void interactionStore.refreshFlags(ids).catch(() => {});
-  }, [residentKey, interactionStore]); // eslint-disable-line react-hooks/exhaustive-deps
+    querySession.syncResidentFlags(snapshot.blocks);
+  }, [residentKey, querySession]); // eslint-disable-line react-hooks/exhaustive-deps
   const isSelected = useCallback((id: string) => interactionStore.isSelected(id), [interactionStore, interaction.selection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Los fallos de Siguiente/Anterior se muestran (nunca se tragan): el aviso dice qué pasó y la sesión conserva el target para reintentar.
@@ -418,7 +399,6 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   useEffect(() => { togglePauseRef.current = togglePause; }, [togglePause]);
   useAppShortcuts({ togglePauseRef, clearSelection: () => { void interactionStore.clearSelection(); setSelectMode(false); }, setDrawer: () => setDrawer(null), setShowAdd: (v) => setShowAdd(v), setShowSettings: (v) => setShowSettings(v), closeQueue, setShowUpload: () => {} });
   const handleDisconnectTelegramAccount = useCallback(async () => { releaseFile(); await services.teardown(); await logoutBeatGalerAccount(); }, [releaseFile, services]);
-  const reloadLibrary = useCallback(async () => { await store.loadFirst(); interactionStore.invalidateFacets(); }, [store, interactionStore]);
   const connectionState: "online" | "offline" | "poor" = snapshot.status === "offline" ? "offline" : "online";
   const cloudSessionVerified = !["idle", "resolving", "loading", "unauthenticated", "unavailable"].includes(snapshot.status);
   const loading = snapshot.status === "loading" || snapshot.status === "resolving";
