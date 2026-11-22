@@ -336,8 +336,8 @@ if (!rust.includes('"op": "replace_index"') || !rust.includes('"op": "get_index"
 if (!rust.includes('fn direct_move_beats_to_trash')) fail('Offline Trash no longer mutates the current index through the transport bot.');
 if (!rust.includes('fn direct_permanently_delete_beats')) fail('Permanent Trash delete no longer mutates the current index through the transport bot.');
 // T25 (b52649f): server-core ya no registra la biblioteca INDEX de MASTER ni las rutas de sesión/operación del transporte legacy
-// (antes se exigía que autenticaran; ahora no existen). Que nadie las vuelva a registrar. La sesión Direct B nativa y su autenticación
-// viven en /catalog/v1/direct/* y las prueban las suites del catálogo; la retirada completa, catalog-contract.test.cjs («T25»).
+// (antes se exigía que autenticaran; ahora no existen). Que nadie las vuelva a registrar.
+// La retirada completa se prueba en catalog-contract.test.cjs («T25»).
 const registeredCoreRoutes = ['get', 'post', 'put', 'patch', 'delete']
   .flatMap(method => calls(coreAst, `app.${method}`))
   .map(call => call.arguments[0])
@@ -346,6 +346,14 @@ const registeredCoreRoutes = ['get', 'post', 'put', 'patch', 'delete']
 if (registeredCoreRoutes.length < 10) fail('server-core route inventory is unexpectedly small; the AST guard no longer sees route registrations.');
 for (const route of ['/library/upsert', '/library/get', '/transport/session/start', '/transport/session/activate', '/transport/session/heartbeat', '/transport/session/stop', '/transport/operation/begin', '/transport/operation/end', '/transport/operation/renew', '/transport/index/commit']) {
   if (registeredCoreRoutes.includes(route)) fail(`Retired legacy route ${route} was registered again in server-core.`);
+}
+
+// Native Direct routes share the catalog handler's authentication boundary.
+const catalogRoutes = parse('catalog/routes.js', read('cloud-server', 'catalog', 'routes.js'));
+const catalogHandle = block(block(catalogRoutes, 'createCatalogRouter'), 'handle');
+const authenticate = requireCall(catalogHandle, 'authenticate');
+if (!ts.isVariableDeclaration(authenticate.parent) || authenticate.parent.name.getText() !== 'user' || compact(authenticate) !== 'authenticate(req,res)') {
+  fail('The catalog handler must use authenticate(req, res) for its user.');
 }
 
 // The control module keeps credentials internally; the installed HTTP boundary
