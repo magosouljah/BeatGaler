@@ -38,6 +38,10 @@ describe("routeDrop: tipo ⇒ acción, tarjeta ⇒ destino", () => {
     expect(routeDrop(ev([f("a.flac")], null))).toMatchObject({ type: "alert", title: "Unsupported file" });
     expect(routeDrop(ev([f("a.mp3"), f("b.png")], "b-1"))).toMatchObject({ type: "alert", title: "Drop one file at a time" });
   });
+  it.each(["audio/wave", "audio/mp3"])("rechaza %s sin extensión antes de intentar reemplazar el audio", (mime) => {
+    const action = routeDrop(ev([f("sin-extension", mime)], "b-1"));
+    expect(action).toEqual({ type: "alert", title: "Unsupported file", message: "Drop an MP3 or WAV to replace this beat's audio, a PROJECT ZIP or DAW project file, or an image (PNG, JPG, WEBP, BMP, GIF, AVIF) to change its cover." });
+  });
   it("imagen arrastrada desde una página (sin File, solo fuentes): portada si hay tarjeta; sin nada utilizable → «Nothing to import»", async () => {
     const sources = Promise.resolve([]);
     expect(routeDrop(ev([], "b-1", sources as never))).toMatchObject({ type: "artwork-sources", beatId: "b-1" });

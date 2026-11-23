@@ -14,13 +14,13 @@ function gate() {
   return { wait, release };
 }
 
-function setup(result: "committed" | "uncertain" | "blocked" | "timeout" | "rejected" | "failed" = "committed") {
+function setup(result: "committed" | "uncertain" | "blocked" | "timeout" | "rejected" | "failed" = "committed", failureCode = "BOOM") {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const server = createCatalogFakeCommands({ transferVerifyAfterPolls: result === "timeout" || result === "blocked" ? 99 : undefined });
   if (result === "uncertain") server.directState.faults.push("uncertain");
   if (result === "rejected") server.setFailure({ route: /\/operations$/, status: 503, code: "OFFLINE" });
   if (result === "blocked") server.setFailure({ route: /\/commit$/, status: 409, code: "VERSION_CONFLICT" });
-  if (result === "failed") server.setFailure({ route: /\/commit$/, status: 500, code: "BOOM" });
+  if (result === "failed") server.setFailure({ route: /\/commit$/, status: 500, code: failureCode });
   const sendGate = gate();
   const sendEntered = gate();
   const requests: string[] = [];
@@ -155,6 +155,13 @@ it("reabre la revisión con lo editado al fallar en segundo plano", async () => 
   expect(h.trace.at(-1)).toEqual(["Editado", [], [], "No se pudo importar «Editado»: fake BOOM. Tus cambios siguen en la revisión.", true]);
   expect(h.importer.released).toEqual([]);
   expect(h.refreshLibrary).not.toHaveBeenCalled();
+});
+
+it.each(["varios intentos", "varios intentos.", "varios intentos. \t"])("conserva el final del mensaje de fallo %j y deja un solo punto", async (reason) => {
+  const h = setup("failed", reason);
+  await h.session.save(h.beat);
+  await expect(h.settle()).rejects.toThrow("fake varios intentos");
+  expect(h.session.getSnapshot().notice).toBe("No se pudo importar «Beat»: fake varios intentos. Tus cambios siguen en la revisión.");
 });
 
 it("retira la provisional a los 5000 ms si la real todavía no reside", async () => {

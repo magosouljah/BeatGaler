@@ -4,7 +4,6 @@
 import { looksLikeArtworkDrop } from "../../dragdrop/browserArtwork";
 import { isProjectDawFileName } from "../../projects/projectFileTypes";
 
-// El reemplazo y el enrutamiento conservan sus reglas MIME propias (B9).
 export type DroppedAudioKind = "MP3" | "WAV" | "PROJECT";
 export const classifyDroppedAudio = (file: Pick<File, "name" | "type">): DroppedAudioKind | null =>
   /\.wav$/i.test(file.name) || file.type === "audio/wav" || file.type === "audio/x-wav" ? "WAV"
@@ -16,14 +15,13 @@ export type DroppedFileKind = "image" | "mp3" | "wav" | "project" | "unsupported
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|avif)$/i;
 export const SUPPORTED_ARTWORK_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/bmp", "image/gif", "image/avif"]);
+const DROP_KIND_BY_AUDIO = { MP3: "mp3", WAV: "wav", PROJECT: "project" } as const;
 
 export function classifyDroppedFile(file: Pick<File, "name" | "type">): DroppedFileKind {
   const type = (file.type || "").toLowerCase();
   if (IMAGE_EXT.test(file.name) || SUPPORTED_ARTWORK_MIME.has(type)) return "image";
-  if (/\.wav$/i.test(file.name) || type === "audio/wav" || type === "audio/x-wav" || type === "audio/wave") return "wav";
-  if (/\.mp3$/i.test(file.name) || type === "audio/mpeg" || type === "audio/mp3") return "mp3";
-  if (/\.zip$/i.test(file.name) || isProjectDawFileName(file.name.toLowerCase())) return "project"; // PROJECT ZIP o archivo de DAW (.flp, .als, …)
-  return "unsupported";
+  const audioKind = classifyDroppedAudio(file);
+  return audioKind ? DROP_KIND_BY_AUDIO[audioKind] : "unsupported";
 }
 
 /** Tipo de carga durante el arrastre (solo tipos MIME/kinds). Un archivo sin tipo reconocible es `file`: se resuelve al soltar. */
