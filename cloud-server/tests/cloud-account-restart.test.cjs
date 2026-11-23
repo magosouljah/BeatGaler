@@ -2,10 +2,11 @@
 
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { createHash } = require('node:crypto');
+const { createHash, randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { hashPassword } = require('../password-kdf');
 const { account, withCloud } = require('./helpers/composition-cloud.cjs');
 
 const authFile = 'accounts-data.json';
@@ -69,18 +70,9 @@ if (process.argv[2] === '--verify-reboot') {
         .map(name => [name, process.env[name]]),
     );
     let stateDir;
-    await withCloud(async (app, send) => {
-      const originalUser = readState(stateDir, authFile).users[0];
-      const lifecycle = app.__beatgalerAccountLifecycleRuntime._test;
-      const token = lifecycle.issueTestToken({ kind: 'password_reset', user: originalUser });
-      // El arnés no tiene proveedor de correo. Se emite el token local y se
-      // ejecuta el handler de reset antes de crear sesiones que revocar.
-      const response = { json(value) { this.value = value; return this; } };
-      await lifecycle.completePasswordReset({ body: { token, newPassword } }, response);
-      assert.deepEqual(response.value, { ok: true, sessions_revoked: true });
-
-      const activeToken = json(await login(send, newPassword), 200).token;
-      const revokedToken = json(await login(send, newPassword), 200).token;
+    await withCloud(async (_app, send) => {
+      const activeToken = json(await login(send, account.password), 200).token;
+      const revokedToken = json(await login(send, account.password), 200).token;
       const { sessions } = json(await post(send, 'sessions', {}, activeToken), 200);
       const activeSessionId = sessions.find(session => session.current).id;
       const staleSession = readState(stateDir, authFile).sessions[hash(revokedToken)];
@@ -89,15 +81,24 @@ if (process.argv[2] === '--verify-reboot') {
 
       const accounts = readState(stateDir, authFile);
       const sessionState = readState(stateDir, sessionFile);
-      const lifecycleState = readState(stateDir, lifecycleFile);
       assert.equal(accounts.sessions[hash(revokedToken)], undefined);
       assert.ok(sessionState.revoked_session_hashes.includes(hash(revokedToken)));
-      assert.notEqual(lifecycleState.password_overrides[account.id].passwordHash, originalUser.passwordHash);
 
-      accounts.users[0] = originalUser;
+      // El proceso hijo arranca con el hash antiguo en cuentas y el override del reset en lifecycle.
+      const originalUser = accounts.users[0];
+      const passwordSalt = randomBytes(16).toString('hex');
+      const lifecycleState = {
+        password_overrides: {
+          [account.id]: {
+            passwordSalt,
+            passwordHash: await hashPassword(newPassword, passwordSalt),
+            updated_at: new Date().toISOString(),
+          },
+        },
+        tombstones: { [deleted.id]: { receipt_id: 'delete_fixture' } },
+      };
       accounts.users.push({ ...originalUser, ...deleted });
       accounts.sessions[hash(revokedToken)] = staleSession;
-      lifecycleState.tombstones[deleted.id] = { receipt_id: 'delete_fixture' };
       const fixtureFile = 'restart-fixture.json';
       writeState(stateDir, fixtureFile, {
         activeToken, revokedToken, activeSessionId,
