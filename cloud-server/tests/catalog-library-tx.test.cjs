@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { setImmediate: nextTurn } = require('node:timers/promises');
 const { test } = require('node:test');
 const { createLibraryTx, decide } = require('../catalog/library-tx');
 const { CatalogAuthorityError } = require('../catalog/authority');
@@ -15,7 +16,7 @@ const headers = { era: '1', epoch: '2' };
 const lib = { authority: 'POSTGRES', active_generation_id: 'gen', bot_id: 'bot', chat_id: 'chat' };
 const errorBody = ({ code, status, message, detail }) => ({ code, status, message, detail });
 
-function fake({ state = 'IDLE', quarantined = false, missing = false, queryError } = {}) {
+function fake({ state = 'IDLE', quarantined = false, missing = false, queryError, releaseArgs = [] } = {}) {
   const events = [];
   const ctx = { migration_state: state };
   const client = {
@@ -27,7 +28,7 @@ function fake({ state = 'IDLE', quarantined = false, missing = false, queryError
       if (sql.includes('FROM catalog_file_parts')) return { rows: [{ size_bytes: '1', status: 'VERIFIED' }] };
       return { rows: [] };
     },
-    release(...args) { events.push('release'); assert.deepEqual(args, []); },
+    release(...args) { events.push('release'); assert.deepEqual(args, releaseArgs); },
   };
   const pool = { async connect() { events.push('connect'); return client; } };
   const authority = {
@@ -246,19 +247,41 @@ test('queries sin biblioteca conserva el orden de resolveContext y el segundo ro
   }
 });
 
-test('plazo total de queries libera la conexión aunque el callback siga pendiente', { timeout: 4000 }, async () => {
-  const db = fake();
-  let complete;
-  const pending = new Promise((resolve) => { complete = resolve; });
-  const tx = createLibraryTx({ ...db, variant: 'queries' });
-  try {
-    await assert.rejects(tx.read('u', () => pending), {
+test('plazo total de queries destruye la conexión e impide consultas tardías', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const lateFailure of [false, true]) {
+    const { promise: started, resolve: start } = Promise.withResolvers();
+    const { promise: pending, resolve: complete, reject: fail } = Promise.withResolvers();
+    const db = fake({
+      releaseArgs: [true],
+      queryError(sql) {
+        if (sql === 'SELECT first') {
+          start();
+          return pending;
+        }
+      },
+    });
+    const tx = createLibraryTx({ ...db, variant: 'queries' });
+    let continued = false;
+    const read = tx.read('u', async ({ client }) => {
+      await client.query('SELECT first');
+      continued = true;
+      await client.query('SELECT second');
+    });
+    const timedOut = assert.rejects(read, {
       code: 'CATALOG_QUERY_TIMEOUT', status: 503, message: 'CATALOG_QUERY_TIMEOUT: catalog request exceeded the total time budget', detail: { budget_ms: 2000 },
     });
-    assert.equal(db.events.at(-1), 'release');
-    assert.ok(!db.events.includes('COMMIT'));
-  } finally {
-    complete();
+    await started;
+    t.mock.timers.tick(2000);
+    await timedOut;
+    assert.deepEqual(db.events.slice(-2), ['SELECT first', 'release']);
+
+    if (lateFailure) fail(new Error('connection closed'));
+    else complete();
+    // node:test falla ante un rechazo no gestionado cuando termina este turno.
+    await nextTurn();
+    assert.equal(continued, !lateFailure);
+    assert.deepEqual(db.events.slice(-2), ['SELECT first', 'release']);
   }
 });
 
