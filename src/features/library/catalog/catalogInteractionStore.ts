@@ -48,11 +48,12 @@ export interface InteractionStoreOptions {
 }
 
 export const SELECTION_CLEARED_NOTICE = "Selección borrada al cambiar los filtros";
-const TERMINAL: ReadonlySet<CatalogBulkStatus> = new Set(["COMPLETED", "PARTIAL", "CONFLICT", "CANCELLED", "FAILED"]);
+const TERMINAL: ReadonlySet<CatalogBulkStatus> = new Set(["COMPLETED", "PARTIAL", "CONFLICT", "CANCELLED", "FAILED", "BLOCKED"]);
+const BLOCKED_NOTICE = "La operación quedó bloqueada y no se completó. Revisa tu conexión o inténtalo de nuevo.";
 const defaultKey = (): string => (globalThis.crypto && "randomUUID" in globalThis.crypto ? globalThis.crypto.randomUUID() : `k-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 const emptySelection = (): SelectionState => ({ status: "none", selectionId: null, selectionVersion: null, setId: null, sort: null, defaultSelected: false, count: 0, baseRevision: null, flags: {}, anchor: null, notice: null, error: null });
 const reportOf = (op: CatalogBulkOperation): BulkReport => ({ total: op.progress.total, confirmed: op.progress.confirmed, notExecuted: op.progress.notExecuted, cancelled: op.progress.cancelled, conflictBatchSeq: op.progress.conflictBatchSeq, completed: op.status === "COMPLETED" && op.progress.confirmed === op.progress.total });
-const bulkOf = (op: CatalogBulkOperation, error: string | null = null): BulkState => ({ operationId: op.operationId, kind: op.kind, status: op.status, report: reportOf(op), expectedRevision: op.expectedRevision, error });
+const bulkOf = (op: CatalogBulkOperation): BulkState => ({ operationId: op.operationId, kind: op.kind, status: op.status, report: reportOf(op), expectedRevision: op.expectedRevision, error: op.status === "BLOCKED" ? BLOCKED_NOTICE : null });
 const messageOf = (error: unknown): string => (error instanceof CatalogApiError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : String(error));
 
 export function createCatalogInteractionStore(options: InteractionStoreOptions) {
@@ -235,7 +236,7 @@ export function createCatalogInteractionStore(options: InteractionStoreOptions) 
       const op = await commands.renameTag(r.from, r.to, newKey()); assertAccount(gen);
       set({ rename: { ...snapshot.rename!, stage: "running", operation: bulkOf(op) } });
       const final = await pollBulk(op.operationId, gen);
-      set({ rename: { ...snapshot.rename!, operation: final, stage: final.report.completed ? "done" : final.status === "FAILED" ? "error" : "partial", error: final.report.completed ? null : `Renombrado ${final.status === "CONFLICT" ? "detenido por un cambio externo" : final.status.toLowerCase()}: ${final.report.confirmed}/${final.report.total} confirmados.` } });
+      set({ rename: { ...snapshot.rename!, operation: final, stage: final.report.completed ? "done" : final.status === "FAILED" ? "error" : "partial", error: final.status === "BLOCKED" ? final.error : final.report.completed ? null : `Renombrado ${final.status === "CONFLICT" ? "detenido por un cambio externo" : final.status.toLowerCase()}: ${final.report.confirmed}/${final.report.total} confirmados.` } });
       invalidateFacets();
       return final;
     } catch (error) { if ((error as { code?: string }).code === "STORE_TORN_DOWN") return null; set({ rename: { ...snapshot.rename!, stage: "error", error: messageOf(error) } }); return null; }
@@ -301,14 +302,14 @@ export function createGallerySelection({ store: interactionStore, query, ordinal
     if (updates.tags && tagsMode === "replace") patch.tags = [...updates.tags];
     const tagsOp = updates.tags && (tagsMode === "add" || tagsMode === "remove") ? { op: tagsMode, tags: [...updates.tags] } : undefined;
     void interactionStore.startBulk("BULK_PATCH", patch, tagsOp).then((r) => {
-      setNotice(`Edición en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`);
+      setNotice(r.status === "BLOCKED" ? r.error : `Edición en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`);
       setSelectMode(false);
       refreshAfterMutation();
     }).catch((e) => setNotice(String(e?.message ?? e)));
   }
   function handleRemoveBulk() {
     void interactionStore.startBulk("BULK_TRASH").then((r) => {
-      setNotice(`Papelera en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`);
+      setNotice(r.status === "BLOCKED" ? r.error : `Papelera en lote: ${r.report.confirmed}/${r.report.total} confirmados${r.report.completed ? "" : ` (${r.status.toLowerCase()})`}.`);
       setSelectMode(false);
       refreshAfterMutation();
     }).catch((e) => setNotice(String(e?.message ?? e)));
