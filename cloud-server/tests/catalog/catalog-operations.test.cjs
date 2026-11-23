@@ -105,3 +105,100 @@ test('IMPORT/REPLACE: metadata.name de más de 50 caracteres → INPUT_INVALID (
   const ok = ops.validateIntent({ kind: 'IMPORT', parts: [master], metadata: { name: 'ñ'.repeat(50) } });
   assert.equal(ok.metadata.name, 'ñ'.repeat(50));
 });
+
+function fakeJobFailure({ attempts = 8, status = 'RUNNING', kind = 'OPERATION_STEP', rejectOperation = false } = {}) {
+  const lease = { owner: 'worker', generation: '1' };
+  const initialJob = { attempts, user_id: 'u1', kind, operation_id: 'op1', state: 'LEASED' };
+  let stored = {
+    jobs: { job1: { ...initialJob }, job2: { ...initialJob } },
+    operations: { 'u1/op1': status, 'u2/op1': 'RUNNING', 'u1/op2': 'RUNNING' },
+    operationUpdates: 0,
+  };
+  let pending;
+  const client = {
+    async query(sql, params) {
+      if (sql === 'BEGIN') { pending = structuredClone(stored); return { rows: [] }; }
+      assert.ok(pending, 'las consultas de fallo se ejecutan dentro de la misma transacción');
+      if (sql === 'COMMIT') { stored = pending; pending = null; return { rows: [] }; }
+      if (sql === 'ROLLBACK') { pending = null; return { rows: [] }; }
+      if (sql.startsWith('SELECT') && sql.includes('FROM catalog_jobs')) {
+        const [jobId, owner, generation] = params;
+        const job = pending.jobs[jobId];
+        return { rows: job.state === 'LEASED' && owner === lease.owner && generation === lease.generation ? [job] : [] };
+      }
+      if (sql.startsWith('UPDATE catalog_jobs')) {
+        const [jobId, state, , , owner, generation] = params;
+        const job = pending.jobs[jobId];
+        if (job.state !== 'LEASED' || owner !== lease.owner || generation !== lease.generation) return { rows: [] };
+        job.state = state;
+        return { rows: [{ state, next_attempt_at: 'next' }] };
+      }
+      if (sql.startsWith('UPDATE catalog_operations')) {
+        if (rejectOperation) throw new Error('fake operation write failure');
+        const [userId, operationId] = params;
+        const key = `${userId}/${operationId}`;
+        const assigned = /SET status = '(\w+)'/.exec(sql)[1];
+        const allowed = /status IN \(([^)]+)\)/.exec(sql)?.[1].match(/\w+/g);
+        if (Object.hasOwn(pending.operations, key) && (!allowed || allowed.includes(pending.operations[key]))) {
+          pending.operations[key] = assigned;
+          pending.operationUpdates++;
+        }
+        return { rows: [] };
+      }
+      assert.fail(`consulta inesperada: ${sql}`);
+    },
+    release() { assert.equal(pending, null, 'la transacción terminó antes de liberar el cliente'); },
+  };
+  const authority = { availability: async () => ({}), requireLibraryForMutation: async () => ({}) };
+  const service = ops.createCatalogOperations({ pool: { connect: async () => client }, authority, resolveAccess: async () => ({ maxBeats: null }) });
+  return {
+    fail: (jobId = 'job1', transient = true) => service.failJob({ jobId, lease, transient, error: 'worker failure' }),
+    stored: () => stored,
+  };
+}
+
+test('failJob: el octavo fallo bloquea job y operación del mismo usuario, una sola vez', async () => {
+  const fake = fakeJobFailure();
+  assert.equal((await fake.fail()).state, 'BLOCKED');
+  assert.equal(fake.stored().jobs.job1.state, 'BLOCKED');
+  assert.deepEqual(fake.stored().operations, { 'u1/op1': 'BLOCKED', 'u2/op1': 'RUNNING', 'u1/op2': 'RUNNING' });
+  assert.equal((await fake.fail('job2')).state, 'BLOCKED');
+  assert.equal(fake.stored().operations['u1/op1'], 'BLOCKED');
+  assert.equal(fake.stored().operationUpdates, 1);
+  await assert.rejects(fake.fail(), { code: 'LEASE_FENCED', status: 409 });
+});
+
+test('failJob: un fallo permanente bloquea inmediatamente una operación QUEUED', async () => {
+  const fake = fakeJobFailure({ attempts: 1, status: 'QUEUED' });
+  assert.equal((await fake.fail('job1', false)).state, 'BLOCKED');
+  assert.equal(fake.stored().operations['u1/op1'], 'BLOCKED');
+});
+
+test('failJob: los estados que no admiten BLOCKED se conservan', async () => {
+  for (const status of ['COMPLETED', 'PARTIAL', 'CANCELLED', 'CONFLICT', 'CANCELLING']) {
+    const fake = fakeJobFailure({ status });
+    assert.equal((await fake.fail()).state, 'BLOCKED');
+    assert.equal(fake.stored().operations['u1/op1'], status);
+    assert.equal(fake.stored().operationUpdates, 0);
+  }
+});
+
+test('failJob: el séptimo fallo transitorio reencola el job y conserva la operación', async () => {
+  const fake = fakeJobFailure({ attempts: 7 });
+  assert.equal((await fake.fail()).state, 'QUEUED');
+  assert.equal(fake.stored().jobs.job1.state, 'QUEUED');
+  assert.equal(fake.stored().operations['u1/op1'], 'RUNNING');
+});
+
+test('failJob: otros tipos de job no bloquean operaciones masivas aunque coincida el ID', async () => {
+  const fake = fakeJobFailure({ kind: 'TRANSFER_COMMIT' });
+  assert.equal((await fake.fail()).state, 'BLOCKED');
+  assert.equal(fake.stored().operations['u1/op1'], 'RUNNING');
+});
+
+test('failJob: un fallo al marcar la operación revierte también la escritura del job', async () => {
+  const fake = fakeJobFailure({ rejectOperation: true });
+  await assert.rejects(fake.fail(), { code: 'CATALOG_UNAVAILABLE' });
+  assert.equal(fake.stored().jobs.job1.state, 'LEASED');
+  assert.equal(fake.stored().operations['u1/op1'], 'RUNNING');
+});
