@@ -36,16 +36,16 @@ function catalogBeat(over: Partial<Beat> = {}): Beat {
   } as Beat;
 }
 type CatalogSave = (input: { original: Beat; updated: Beat; files: Partial<Record<"MASTER" | "WAV" | "PROJECT", File>>; artworkRemoved: boolean }) => Promise<void>;
-async function mountDrawer(beat: Beat, handlers: { catalogSave?: CatalogSave } = {}) {
+async function mountDrawer(beat: Beat, { catalogSave }: { catalogSave: CatalogSave }) {
   const onSaved = vi.fn(); const onClose = vi.fn();
-  const onCloudMutationCommit = vi.fn(async () => {});
   const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host);
   cleanup = async () => act(async () => root.unmount());
   // mismas props que pasa CatalogAppShell
-  await act(async () => { root.render(<Drawer beat={beat} mode="edit" onClose={onClose} onSaved={onSaved} onReleaseAudio={() => {}} mutationAllowed onCloudMutationCommit={onCloudMutationCommit} {...({ onCatalogSave: handlers.catalogSave } as object)} />); });
+  await act(async () => { root.render(<Drawer beat={beat} mode="edit" onClose={onClose} onSaved={onSaved} onReleaseAudio={() => {}} mutationAllowed
+    onWebSave={(request) => { if (request.kind === "edit") return catalogSave(request); }} />); });
   const button = (text: string) => Array.from(host.querySelectorAll("button")).filter((b) => b.textContent?.trim() === text);
   const save = async () => { await act(async () => { Array.from(host.querySelectorAll("button")).find((b) => b.textContent?.trim().startsWith("Save changes"))!.click(); }); await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); };
-  return { host, onSaved, onClose, onCloudMutationCommit, button, save };
+  return { host, onSaved, onClose, button, save };
 }
 
 describe("§6.1-1 Drawer: reemplazo de MASTER / WAV / PROJECT", () => {

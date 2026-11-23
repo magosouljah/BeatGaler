@@ -10,12 +10,20 @@ import type { PlatformCloudCommitProgress, PlatformBeatEditFiles, PlatformBeatEd
 import { cleanTags, validateBpm, validateMusicKey } from "../lib/metadataValidation";
 import { getReviewFooterState, reviewHeaderLabel } from "../features/components/componentLogic";
 
+type TagsMode = "add" | "replace" | "remove";
+type SaveProgress = (progress: PlatformCloudCommitProgress) => void;
+export type WebDrawerSave = (request:
+  | { kind: "edit"; original: Beat; updated: Beat; files: PlatformBeatEditFiles; artworkRemoved: boolean; onProgress: SaveProgress }
+  | { kind: "bulk"; updates: Partial<Beat>; options?: { tagsMode: TagsMode } }
+  | { kind: "review"; updated: Beat; onProgress: SaveProgress }
+) => Promise<void> | void;
+
 interface Props {
   beat: Beat;
   mode: "detail" | "edit";
   tagSuggestions?: string[];
   onClose: () => void;
-  onSaved: (updated: Beat, onProgress?: (progress: PlatformCloudCommitProgress) => void) => Promise<void> | void;
+  onSaved?: (updated: Beat, onProgress?: SaveProgress) => Promise<void> | void;
   onReleaseAudio: () => void;
   selectedBeats?: Beat[];
   onBulkSaved?: (updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => void;
@@ -32,11 +40,7 @@ interface Props {
     updated: Beat,
     options: { syncMetadata: boolean; reason: string },
   ) => Promise<void>;
-  /**
-   * Catálogo PostgreSQL (Gallery POSTGRES): guarda metadatos, portada y archivos pendientes (MASTER/WAV/PROJECT) en UNA mutación del catálogo.
-   * Si se pasa, sustituye a la ruta heredada (INDEX/Desktop). Si falla, el Drawer sigue abierto con los cambios y archivos pendientes.
-   */
-  onCatalogSave?: (input: { original: Beat; updated: Beat; files: PlatformBeatEditFiles; artworkRemoved: boolean; onProgress?: (progress: PlatformCloudCommitProgress) => void }) => Promise<void>;
+  onWebSave?: WebDrawerSave;
 }
 
 type PendingFiles = {
@@ -71,7 +75,7 @@ const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] 
   OTHER: { name: "Any file", extensions: ["mp3", "wav", "zip", "flp", "als", "mid", "midi", "txt", "pdf", "png", "jpg", "jpeg"] },
 };
 
-export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, onCatalogSave, maxNameChars }: Props) {
+export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, onWebSave, maxNameChars }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
@@ -316,17 +320,16 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         const updated = { ...validatedData, cloud_status: "PENDING_UPLOAD" };
         if (reviewAction === "all" && onSaveAll) await onSaveAll(updated);
         else {
-          await onSaved(updated, progress => setSaveProgress(progress));
+          if (onWebSave) await onWebSave({ kind: "review", updated, onProgress: setSaveProgress });
+          else await onSaved?.(updated, setSaveProgress);
           if (closeAfterSave) onClose();
         }
         return;
       }
-      // §6.1-1/2/3: en el catálogo todo cambio (metadatos, archivos elegidos, portada nueva o quitada) va a una sola mutación SQL; antes los
-      // archivos de esta sección se ignoraban y un beat sin MASTER se «guardaba» sin enviar nada.
-      if (onCatalogSave && !reviewInfo && !isBulk) {
-        await onCatalogSave({ original: beat, updated: validatedData, files: pendingWebEdit, artworkRemoved: Boolean(beat.image_base64) && !validatedData.image_base64, onProgress: progress => setSaveProgress(progress) });
+      if (onWebSave && !reviewInfo && !isBulk) {
+        await onWebSave({ kind: "edit", original: beat, updated: validatedData, files: pendingWebEdit, artworkRemoved: Boolean(beat.image_base64) && !validatedData.image_base64, onProgress: setSaveProgress });
         setPendingWebEdit({});
-        await onSaved(validatedData);
+        await onSaved?.(validatedData);
         if (closeAfterSave) onClose();
         return;
       }
@@ -338,17 +341,23 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           progress => setSaveProgress(progress),
         );
         setPendingWebEdit({});
-        await onSaved(committed);
+        await onSaved?.(committed);
         if (closeAfterSave) onClose();
         return;
       }
-      if (isBulk && onBulkSaved) {
+      if (isBulk && (onWebSave || onBulkSaved)) {
         const updates: Partial<Beat> = {};
         const tagsInput = Array.from(new Set(validatedData.tags.map(t => t.trim().toLowerCase()).filter(Boolean)));
         if (bulkFields.has("tags")) updates.tags = tagsInput;
         if (bulkFields.has("rating")) updates.rating = validatedData.rating;
         if (bulkFields.has("bpm")) updates.bpm = validatedData.bpm;
         if (bulkFields.has("key")) updates.key = validatedData.key;
+        const options = bulkFields.has("tags") ? { tagsMode: bulkTagsMode } : undefined;
+        if (onWebSave) {
+          await onWebSave({ kind: "bulk", updates, options });
+          onClose();
+          return;
+        }
         for (const b of selectedBeats!) {
           const nextTags = bulkFields.has("tags")
             ? bulkTagsMode === "replace"
@@ -367,7 +376,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
             update_filename: bulkFields.has("bpm") || bulkFields.has("key"),
           });
         }
-        onBulkSaved(updates, bulkFields.has("tags") ? { tagsMode: bulkTagsMode } : undefined);
+        onBulkSaved?.(updates, options);
         onClose();
         return;
       }
@@ -515,7 +524,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       if (reviewAction === "all" && reviewInfo && onSaveAll) {
         await onSaveAll(finalUpdated);
       } else {
-        await onSaved(finalUpdated);
+        await onSaved?.(finalUpdated);
         if (closeAfterSave) onClose();
       }
     } catch (e: any) {
@@ -524,7 +533,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
       setSaving(false);
       setSaveProgress(null);
     }
-  }, [beat, data, pending, pendingCloud, pendingWebEdit, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit, onCatalogSave]);
+  }, [beat, data, pending, pendingCloud, pendingWebEdit, cloudFiles, isBulk, selectedBeats, bulkFields, bulkTagsMode, onBulkSaved, onSaved, onClose, onReleaseAudio, closeAfterSave, refreshCloudFiles, reviewInfo, onSaveAll, isReviewNameTaken, mutationAllowed, onCloudMutationCommit, onWebSave]);
 
   useEffect(() => {
     if (!isEdit && !isBulk) return;

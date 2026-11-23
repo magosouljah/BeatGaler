@@ -170,7 +170,7 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
       {scope.review && !drawer && (
         <Drawer beat={scope.review.beat} mode="edit" tagSuggestions={scope.tagSuggestions} reviewInfo={{ current: 1, total: 1 }} closeAfterSave={false}
           onClose={scope.cancelReview} onSkipCurrent={scope.cancelReview} onSkipAll={scope.cancelReview} isReviewNameTaken={() => false}
-          mutationAllowed={scope.connectionState === "online"} maxNameChars={BEAT_NAME_MAX} onSaved={scope.saveReview} onReleaseAudio={() => {}} />
+          mutationAllowed={scope.connectionState === "online"} maxNameChars={BEAT_NAME_MAX} onWebSave={scope.saveWebDrawer} onReleaseAudio={() => {}} />
       )}
       {scope.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={incompleteWarnings} onIncompleteWarningsChanged={setIncompleteWarnings} customCursorEnabled onCustomCursorChanged={() => {}}
@@ -178,10 +178,10 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} hideCustomCursor trashSource={trashSource} localCaches={services.localCaches} onBeatRestored={() => { void scope.reloadLibrary(); }} />
       )}
       {drawer && (
-        <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }} onSaved={scope.updateBeat}
+        <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }}
           onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) scope.releaseFile(); }}
-          selectedBeats={scope.selectedBeats.length > 1 ? scope.selectedBeats : undefined} onBulkSaved={scope.applyBulkUpdate}
-          mutationAllowed={scope.connectionState === "online"} onCloudMutationCommit={scope.commitDrawerCloudMutation} onCatalogSave={scope.saveDrawerToCatalog} />
+          selectedBeats={scope.selectedBeats.length > 1 ? scope.selectedBeats : undefined}
+          mutationAllowed={scope.connectionState === "online"} onWebSave={scope.saveWebDrawer} />
       )}
       {currentBeat && (
         <Player beat={currentBeat} playing={audio.isPlaying} progress={audio.progress} duration={audio.duration} volume={audio.volume} queue={scope.queuedBeats} currentIndex={-1}

@@ -1,6 +1,7 @@
 // Composición del AppShell PostgreSQL. La sesión del catálogo decide qué suena y useAudio reproduce la URL arrendada.
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Beat } from "../../../types";
+import type { WebDrawerSave } from "../../../components/Drawer";
 import { useAudio } from "../../../hooks/useAudio";
 import { useTagColors } from "../../../lib/tagColors";
 import { platform } from "../../../platform";
@@ -34,7 +35,6 @@ export interface CatalogGalleryScopeOptions {
 export interface CatalogTagRename { oldTag: string; newTag: string; stage: "name" | "confirm" }
 
 const handleWarm = () => {};
-const updateBeat = async () => {}; // El guardado ya ocurrió en commitDrawerCloudMutation.
 
 export function useCatalogGalleryScope({ services, accountId, context }: CatalogGalleryScopeOptions) {
   const { store, interaction: interactionStore, playback: session, media, mutations } = services;
@@ -198,6 +198,13 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   // ---- importación (T12) desde «Add beat» del navegador ----
   const [showAdd, setShowAdd] = useState(false);
   const { open: addBeatsAndReview, cancelReview, save: saveReview } = importSession;
+  const saveWebDrawer: WebDrawerSave = (request) => {
+    switch (request.kind) {
+      case "review": return saveReview(request.updated, request.onProgress);
+      case "edit": return saveDrawerToCatalog(request);
+      case "bulk": return applyBulkUpdate(request.updates, request.options);
+    }
+  };
   useEffect(() => { importSession.advanceReview(); }, [importSession, review]);
   const { residentIds, pendingCards } = useMemo(() => projectPendingCards(pendingImports, snapshot.blocks),
     [pendingImports, snapshot.blocks]);
@@ -235,7 +242,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     selectMode, selectedCount: interaction.selection.count, selectionStatus: interaction.selection.status, selectedBeats, toggleSelection, toggleSelectAll, finishSelection, clearSelection,
     handlePlay, handleWarm, addToQueue, handleNext, handlePrev, toggleShuffle, cycleRepeat, showQueue, toggleQueue, closeQueue, playQueueIndex, queuedBeats, currentBeat,
     shuffleEnabled: playback.shuffle, repeatMode: playback.repeat, togglePause, seek, setVolume, releaseFile,
-    drawer, setDrawer, updateBeat, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
+    drawer, setDrawer, saveWebDrawer, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
     showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, uploads, pendingCards, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
