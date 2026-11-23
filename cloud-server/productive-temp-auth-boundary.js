@@ -5,6 +5,7 @@ const { readFile, readdir } = require("node:fs/promises");
 const path = require("node:path");
 const { createRequire } = require("node:module");
 const { pathToFileURL } = require("node:url");
+const { stripDirectPublicJson } = require("./catalog/authority");
 
 const TARGET_ROUTES = new Set([
   "/transport/session/start",
@@ -334,7 +335,7 @@ function stripPermanentSecrets(session) {
     credential_envelope: _legacyEnvelope,
     ...safe
   } = session;
-  return safe;
+  return stripDirectPublicJson(safe, ["telegram_api_id", "credential_envelope"]);
 }
 
 async function transformSession(session, metadata) {
