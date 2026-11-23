@@ -38,10 +38,10 @@ describe("comandos de edición de Gallery", () => {
       patchBeat, replaceBeat, trashBeats, getBeat: vi.fn().mockResolvedValue(dto),
       listBeatFiles: vi.fn().mockResolvedValue([listFile("old", "PROJECT", false), listFile("current", "PROJECT")]),
     };
-    const effects = { refreshAfterMutation: vi.fn(), setNotice: vi.fn(), setBusy: vi.fn(), releaseFile: vi.fn(), forgetArtworkOf: vi.fn() };
+    const effects = { refreshAfterMutation: vi.fn(), setNotice: vi.fn(), setBusy: vi.fn(), onTrashConfirmed: vi.fn(), forgetArtworkOf: vi.fn() };
     const editor = createGalleryBeatEditor({
       mutations, media: { downloadFile }, knownDto: () => dto, errorMessage: String,
-      playingId: dto.id, confirm: async () => true, ...effects,
+      confirm: async () => true, ...effects,
     });
     return { editor, mutations, downloadFile, ...effects };
   }
@@ -85,12 +85,12 @@ describe("comandos de edición de Gallery", () => {
     expect(refreshAfterMutation).not.toHaveBeenCalled();
   });
 
-  it("libera el beat que suena antes de enviarlo a papelera y conserva el aviso de error", async () => {
-    const { editor, mutations, releaseFile, setNotice, refreshAfterMutation } = setup();
+  it("conserva el aviso y no notifica un borrado fallido como confirmado", async () => {
+    const { editor, mutations, onTrashConfirmed, setNotice, refreshAfterMutation } = setup();
     editor.deleteBeat(beat);
-    expect(releaseFile).toHaveBeenCalledBefore(mutations.trashBeats);
     expect(mutations.trashBeats).toHaveBeenCalledExactlyOnceWith([{ beatId: dto.id, expectedVersion: dto.version }]);
     await vi.waitFor(() => expect(setNotice).toHaveBeenCalledExactlyOnceWith("papelera no disponible"));
+    expect(onTrashConfirmed).not.toHaveBeenCalled();
     expect(refreshAfterMutation).not.toHaveBeenCalled();
   });
 });

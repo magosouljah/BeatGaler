@@ -35,13 +35,13 @@ export interface CatalogGalleryScopeOptions {
 export interface CatalogTagRename { oldTag: string; newTag: string; stage: "name" | "confirm" }
 
 const handleWarm = () => {};
+const PLAYBACK_UNAVAILABLE_NOTICE = "No se pudo reproducir este beat.";
 
 export function useCatalogGalleryScope({ services, accountId, context }: CatalogGalleryScopeOptions) {
   const { store, interaction: interactionStore, playback: session, media, mutations } = services;
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot) as CatalogStoreSnapshot;
   const interaction = useCatalogInteraction(interactionStore);
   const playback = useCatalogPlayback(session);
-  const { state: audio, play, togglePause, seek, setVolume, releaseFile } = useAudio();
   const tagColors = useTagColors();
 
   const [knownCards] = useState(createKnownGalleryCards);
@@ -74,6 +74,12 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const { setNotice } = importSession;
   const { notice, uploadNotice, review, uploads, pendingCards: pendingImports, batchOpen } =
     useSyncExternalStore(importSession.subscribe, importSession.getSnapshot, importSession.getSnapshot);
+  const { state: audio, play, togglePause: toggleEnginePause, seek, setVolume, releaseFile, isAudioPaused } =
+    useAudio(() => setNotice(PLAYBACK_UNAVAILABLE_NOTICE));
+  const togglePause = useCallback(() => {
+    session.cancelPendingPlay(!isAudioPaused());
+    toggleEnginePause();
+  }, [session, isAudioPaused, toggleEnginePause]);
 
   const { knownDto, ordinalOf, noteOrdinal, onUnmountCard } = knownCards;
   const { firstBlockCache } = services;
@@ -150,19 +156,23 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
 
   // ---- reproducción: la sesión decide, el motor aprobado suena ----
   const playbackLink = useRef<ReturnType<typeof linkPlayback> | null>(null);
-  const playbackEngine = useRef({ state: audio, play, seek, togglePause });
+  const playbackEngine = useRef({ state: audio, play, seek, togglePause: toggleEnginePause });
   useEffect(() => () => {
     playbackLink.current?.dispose();
     playbackLink.current = null;
   }, []);
   useEffect(() => {
-    playbackEngine.current = { state: audio, play, seek, togglePause };
+    playbackEngine.current = { state: audio, play, seek, togglePause: toggleEnginePause };
     const link = playbackLink.current ??= linkPlayback(session, () => playbackEngine.current, {
-      audioPaused: () => document.querySelector("audio")?.paused ?? null,
+      audioPaused: isAudioPaused,
     });
     link.setSession(session);
     link.onEngineState(audio, (error) => reportPlaybackFailure(setNotice, "No se pudo continuar con el siguiente beat", error));
   });
+  useEffect(() => session.onEvent(({ kind }) => {
+    if (kind === "release") releaseFile();
+    if (kind === "unavailable") setNotice(PLAYBACK_UNAVAILABLE_NOTICE);
+  }), [session, releaseFile, setNotice]);
   const { handlePlay, addToQueue, handleNext, handlePrev, toggleShuffle, cycleRepeat, playQueueIndex } = useMemo(() => createGalleryPlaybackCommands({
     session, knownDto, playingId: audio.playingId, togglePause, setNotice,
   }), [session, knownDto, audio.playingId, togglePause, setNotice]);
@@ -179,9 +189,9 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     useMemo(() => createGalleryBeatEditor({
       mutations, media, knownDto, errorMessage: importFailureMessage,
       refreshAfterMutation, setNotice, confirm: appConfirm, setBusy: setBeatCloudUpdateBusy,
-      playingId: audio.playingId, releaseFile,
+      onTrashConfirmed: session.confirmTrash,
       forgetArtworkOf: (id) => knownCards.forgetArtworkOf(id, media, firstBlockCache, accountId, setArtworkUrls),
-    }), [mutations, media, knownDto, refreshAfterMutation, setNotice, audio.playingId, releaseFile, knownCards, firstBlockCache, accountId]);
+    }), [mutations, media, knownDto, refreshAfterMutation, setNotice, session, knownCards, firstBlockCache, accountId]);
 
   const residentSelectedBeats = useCallback((): Beat[] => { const out: Beat[] = []; for (const b of snapshot.blocks) for (const it of b.items) if (interactionStore.isSelected(it.id)) out.push(toBeat(it)); return out; }, [snapshot.blocks, interactionStore, toBeat]);
   const selectedBeats = useMemo(() => (interaction.selection.count > 0 ? residentSelectedBeats() : []), [interaction.selection, residentSelectedBeats]);
@@ -240,7 +250,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
     showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, uploads, pendingCards, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
     connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
-    notice: notice ?? uploadNotice ?? interaction.selection.notice ?? playback.error ?? null, dismissNotice,
+    notice: notice ?? uploadNotice ?? interaction.selection.notice ?? null, dismissNotice,
     accountId, context,
   };
 }

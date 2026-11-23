@@ -66,26 +66,39 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
   const set = (patch: Partial<PlaybackSnapshot>) => { snapshot = { ...snapshot, ...patch }; emit(); };
   let lease: MediaLease | null = null;
   let generation = 0;
+  let pendingBeatId: string | null = null;
   let pendingNext: { key: string; roundId: string; sequence: string } | null = null; // mismo comando en el retry
   const assertGen = (g: number) => { if (g !== generation) throw Object.assign(new Error("playback session was torn down"), { code: "SESSION_TORN_DOWN" }); };
   const events: Array<(e: { kind: string; beatId: string | null }) => void> = [];
+  const publish = (kind: string, beatId: string) => { for (const fn of events) fn({ kind, beatId }); };
+  function invalidatePlay(): number {
+    pendingBeatId = null;
+    return ++generation;
+  }
 
   // ---- fuente de audio: arrendada al media manager; un fallo de medios conserva el target ----
   async function loadSource(target: PlaybackTarget, g: number): Promise<void> {
+    pendingBeatId = target.beatId;
     set({ status: "loading", error: null });
+    let file;
+    let next: MediaLease;
     try {
-      const file = target.fileId ? { fileId: target.fileId, version: target.version ?? "" } : await options.resolveFile(target.beatId);
+      file = target.fileId ? { fileId: target.fileId, version: target.version ?? "" } : await options.resolveFile(target.beatId);
       assertGen(g);
-      if (!file) { set({ status: "error", error: "Este beat no tiene audio disponible." }); return; }
-      const next = await options.acquireSource(file.fileId); assertGen(g);
-      const prev = lease; lease = next; prev?.release(); // la fuente anterior se libera solo tras tener la nueva (sin huecos ni revocación por evicción)
-      set({ current: { ...target, fileId: file.fileId, version: target.version ?? file.version }, source: { url: next.url, cacheKey: next.cacheKey }, status: "playing", progress: 0 });
-      for (const fn of events) fn({ kind: "play", beatId: target.beatId });
+      if (!file) throw new Error("Este beat no tiene audio disponible.");
+      next = await options.acquireSource(file.fileId);
     } catch (error) {
-      if ((error as { code?: string }).code === "SESSION_TORN_DOWN") return;
-      // target reintentable: el estado conserva `current` para reintentar la misma fuente
-      set({ current: target, status: "error", error: error instanceof CatalogApiError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : String(error) });
+      if (g !== generation) return;
+      pendingBeatId = null;
+      set({ current: lease ? snapshot.current : target, status: "error", error: error instanceof CatalogApiError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : String(error) });
+      publish("unavailable", target.beatId);
+      return;
     }
+    if (g !== generation) { next.release(); return; }
+    pendingBeatId = null;
+    const prev = lease; lease = next; prev?.release(); // la fuente anterior se libera solo tras tener la nueva (sin huecos ni revocación por evicción)
+    set({ current: { ...target, fileId: file.fileId, version: target.version ?? file.version }, source: { url: next.url, cacheKey: next.cacheKey }, status: "playing", progress: 0 });
+    publish("play", target.beatId);
   }
   // El conjunto de resultados está ligado a una revisión del catálogo: si otra sesión/dispositivo la sube, el servidor responde CURSOR_STALE (409).
   // Se descarta el conjunto en caché y se repite UNA vez con uno nuevo sobre la revisión vigente; cualquier otro error (o un segundo CURSOR_STALE) se propaga.
@@ -112,11 +125,12 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
     });
   }
   async function drawFromRound(g: number): Promise<PlaybackTarget | null | "complete"> {
-    const round = await ensureRound(g); if (!round) return null;
+    const round = await ensureRound(g); assertGen(g); if (!round) return null;
     const cmd = pendingNext && pendingNext.roundId === round.roundId ? pendingNext : { key: newKey(), roundId: round.roundId, sequence: round.sequence };
     pendingNext = cmd; set({ lastCommand: { kind: "next", key: cmd.key, retryable: true } });
     let r;
     try { r = await api.nextInRound({ roundId: cmd.roundId, sequence: cmd.sequence, idempotencyKey: cmd.key }); } catch (error) {
+      assertGen(g);
       if (error instanceof CatalogApiError && ["ROUND_STALE", "ROUND_RELEASED", "ROUND_BUILDING"].includes(error.code)) { set({ round: { ...round, stale: error.code === "ROUND_STALE" } }); pendingNext = null; if (error.code === "ROUND_STALE") return drawFromRound(g); }
       if (error instanceof CatalogApiError && error.code === "SEQUENCE_MISMATCH") { set({ round: { ...round, sequence: String(error.detail.current_sequence ?? round.sequence) } }); pendingNext = null; return drawFromRound(g); }
       throw error; // transporte: el comando pendiente se conserva para repetir el MISMO sorteo
@@ -129,6 +143,7 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
   async function consumeInRound(beatId: string, g: number): Promise<void> {
     const round = snapshot.round; if (!snapshot.shuffle || !round || round.stale || round.complete) return;
     try { const r = await api.consumeInRound({ roundId: round.roundId, beatId, sequence: round.sequence, idempotencyKey: newKey() }); assertGen(g); set({ round: { ...round, remaining: r.remaining, sequence: r.sequence, complete: r.roundComplete } }); } catch (error) {
+      if (g !== generation) return;
       if (error instanceof CatalogApiError && error.code === "SEQUENCE_MISMATCH") set({ round: { ...round, sequence: String(error.detail.current_sequence ?? round.sequence) } });
       else if (error instanceof CatalogApiError && error.code === "ROUND_STALE") set({ round: { ...round, stale: true } });
       else if ((error as { code?: string }).code !== "SESSION_TORN_DOWN") throw error;
@@ -150,12 +165,33 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
 
   // ---- comandos ----
   async function play(target: PlaybackTarget): Promise<void> {
-    const g = generation;
+    const g = invalidatePlay();
     await loadSource(target, g); if (g !== generation) return;
     await consumeInRound(target.beatId, g); // intención explícita: puede repetir un ID ya escuchado; se retira de los candidatos
   }
   function enqueue(target: PlaybackTarget): void { set({ queue: [...snapshot.queue, target] }); }
   function dequeue(beatId: string): void { set({ queue: snapshot.queue.filter((t) => t.beatId !== beatId) }); }
+  function cancelPendingPlay(isPaused: boolean): void {
+    if (!pendingBeatId) return;
+    invalidatePlay();
+    set({ status: lease ? (isPaused ? "paused" : "playing") : "idle" });
+  }
+  function confirmTrash(beatId: string): void {
+    const queue = snapshot.queue.filter((target) => target.beatId !== beatId);
+    const cancelled = pendingBeatId === beatId;
+    if (cancelled) invalidatePlay();
+    if (snapshot.current?.beatId === beatId) {
+      const discarded = lease;
+      lease = null;
+      set({ current: null, source: null, queue, progress: 0, status: pendingBeatId ? "loading" : "idle", error: null });
+      if (discarded) {
+        publish("release", beatId);
+        discarded.release();
+      }
+    } else {
+      set({ queue, ...(cancelled ? { status: lease ? "playing" : "idle" } : {}) });
+    }
+  }
   async function next({ reason = "manual" }: { reason?: "manual" | "ended" } = {}): Promise<PlaybackTarget | null> {
     const g = generation;
     if (snapshot.queue.length) { const [head, ...rest] = snapshot.queue; set({ queue: rest }); await play(head); return head; }
@@ -183,6 +219,7 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
     await loadSource(n, g); return n;
   }
   async function ended(): Promise<PlaybackTarget | null> {
+    if (pendingBeatId) return null;
     if (snapshot.queue.length) return next({ reason: "ended" }); // la cola tiene prioridad incluso sobre repeat-one
     if (snapshot.repeat === "one" && snapshot.current) { set({ progress: 0 }); for (const fn of events) fn({ kind: "replay", beatId: snapshot.current.beatId }); return snapshot.current; } // explícito: no reinicia ronda
     return next({ reason: "ended" });
@@ -204,7 +241,7 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
     else if (revisionChanged && snapshot.round) set({ round: { ...snapshot.round, stale: true } });
   }
   async function teardown(): Promise<void> {
-    generation++;
+    invalidatePlay();
     const r = snapshot.round; const l = lease; lease = null; pendingNext = null;
     snapshot = { accountId: options.accountId(), current: null, source: null, queue: [], repeat: "off", shuffle: false, round: null, query: null, progress: 0, status: "idle", lastCommand: null, error: null };
     emit(); l?.release();
@@ -215,7 +252,7 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getSnapshot: () => snapshot,
     onEvent(fn: (e: { kind: string; beatId: string | null }) => void) { events.push(fn); return () => { const i = events.indexOf(fn); if (i >= 0) events.splice(i, 1); }; },
-    play, enqueue, dequeue, next, previous, ended, setProgress, setRepeat, setShuffle, setQuery, teardown, consumerId,
+    play, enqueue, dequeue, cancelPendingPlay, confirmTrash, next, previous, ended, setProgress, setRepeat, setShuffle, setQuery, teardown, consumerId,
   });
 }
 export type CatalogPlaybackSession = ReturnType<typeof createCatalogPlaybackSession>;
