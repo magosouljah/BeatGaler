@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { WEB_DIRECT_MAX_FILE_BYTES } from "../../src/features/cloud/webTransportWorkerProtocol";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebTransportWorkerClient } from "../../src/features/cloud/webTransportWorkerClient";
+import { WEB_DIRECT_MAX_FILE_BYTES, type WebTransportWorkerCommand } from "../../src/features/cloud/webTransportWorkerProtocol";
 
 const transport = vi.hoisted(() => {
   const indexMedia = { type: "document", mimeType: "application/json" };
@@ -15,6 +16,10 @@ const transport = vi.hoisted(() => {
   const importSession = vi.fn(async () => undefined);
   class FakeLong {
     constructor(public low: number, public high: number, public unsigned = false) {}
+    static fromString(decimal: string, unsigned: boolean) {
+      const value = BigInt(decimal);
+      return new FakeLong(Number(BigInt.asIntN(32, value)), Number(BigInt.asIntN(32, value >> 32n)), unsigned);
+    }
   }
   class MtPeerNotFoundError extends Error {}
   const boundSession: any = {
@@ -70,7 +75,7 @@ const transport = vi.hoisted(() => {
   const sendMedia = vi.fn(async (_vault: unknown, media: any, options: any) => {
     options.progressCallback?.(2, 5);
     options.progressCallback?.(5, 5);
-    return { id: media.caption === "BEATGALER_LIBRARY_INDEX_V1" ? 901 : 91 };
+    return { id: media.caption === "BEATGALER_LIBRARY_INDEX_V1" ? 901 : 91, media: undefined as { fileSize: number; raw: { id: number } } | undefined };
   });
   const pinMessage = vi.fn(async ({ message }: { message: number }) => { pinnedId = message; });
   const deleteMessagesById = vi.fn(async () => undefined);
@@ -138,6 +143,10 @@ const transport = vi.hoisted(() => {
     downloadAsIterable = vi.fn(async function* (_media: unknown, options: { offset?: number }) {
       if ((options?.offset || 0) < 5) yield new Uint8Array([3, 4, 5]);
     });
+    uploadFile = vi.fn(async (input: { file: Blob; progressCallback?: (bytes: number, total: number) => void }) => {
+      input.progressCallback?.(input.file.size, input.file.size);
+      return { _: "inputFile" };
+    });
     sendMedia = sendMedia;
     pinMessage = pinMessage;
     deleteMessagesById = deleteMessagesById;
@@ -183,11 +192,29 @@ vi.mock("@mtcute/web", () => ({
 }));
 
 const originalOnMessage = globalThis.onmessage;
+const originalWorker = globalThis.Worker;
 const posted: any[] = [];
+let catalogBridge: CatalogWorkerBridge | undefined;
+
+class CatalogWorkerBridge {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  postMessage = vi.fn((data: WebTransportWorkerCommand) => {
+    queueMicrotask(() => dispatch(data));
+  });
+
+  constructor() {
+    catalogBridge = this;
+  }
+}
+
+function dispatch(data: WebTransportWorkerCommand): void {
+  globalThis.onmessage?.(new MessageEvent("message", { data }));
+}
 
 beforeAll(async () => {
   vi.stubGlobal("postMessage", (message: any) => {
     posted.push(message);
+    catalogBridge?.onmessage?.(new MessageEvent("message", { data: message }));
     if (message?.event === "download-chunk") {
       queueMicrotask(() => {
         (globalThis.onmessage as any)?.({
@@ -229,12 +256,140 @@ afterAll(() => {
 
 async function send(data: any, timeout = 1000): Promise<any[]> {
   const start = posted.length;
-  (globalThis.onmessage as any)?.({ data });
+  dispatch(data);
   await vi.waitFor(() => {
     expect(posted.slice(start).some(message => message.requestId === data.requestId && "ok" in message)).toBe(true);
   }, { timeout });
   return posted.slice(start);
 }
+
+describe("catalog transfers through the Web Worker", () => {
+  const chatId = -1001234567890;
+  const messageId = 801;
+  const media = { type: "audio", mimeType: "audio/mpeg", fileSize: 8195 };
+  let client: WebTransportWorkerClient;
+
+  function sendInput() {
+    const file = new Blob(["beat"], { type: "audio/mpeg" });
+    return { file, filename: "beat.mp3", mime: file.type, caption: "catalog:v1 op=op1 part=master", randomId: "-4294967297", size: file.size };
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("Worker", CatalogWorkerBridge);
+    client = new WebTransportWorkerClient();
+    transport.sendMedia.mockClear();
+    transport.getLastClient().uploadFile.mockClear();
+    transport.getLastClient().getMessages.mockClear();
+    transport.getLastClient().downloadAsIterable.mockClear();
+  });
+
+  afterEach(() => {
+    catalogBridge = undefined;
+    vi.stubGlobal("Worker", originalWorker);
+  });
+
+  it("passes the ticket identity and original file through to Telegram and returns progress and a receipt", async () => {
+    const input = sendInput();
+    const progress = vi.fn();
+    transport.sendMedia.mockResolvedValueOnce({ id: 93, media: { fileSize: 4, raw: { id: 193 } } });
+
+    await expect(client.catalogSend(input, progress)).resolves.toEqual({
+      messageId: 93, documentId: "193", size: 4, senderId: "4242", chatId: String(chatId),
+    });
+    expect(catalogBridge?.postMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ op: "catalog_send", input }));
+    expect(transport.getLastClient().uploadFile).toHaveBeenCalledExactlyOnceWith({
+      file: input.file, fileName: "beat.mp3", fileSize: 4, fileMime: "audio/mpeg", progressCallback: expect.any(Function),
+    });
+    expect(transport.sendMedia).toHaveBeenCalledExactlyOnceWith(chatId, {
+      type: "document", file: { _: "inputFile" }, fileName: "beat.mp3", fileSize: 4,
+      fileMime: "audio/mpeg", caption: input.caption,
+    }, { silent: true, randomId: new transport.FakeLong(-1, -2, false) });
+    expect(progress).toHaveBeenCalledExactlyOnceWith({ uploadedBytes: 4, totalBytes: 4 });
+  });
+
+  it("surfaces an uncertain send failure without resending", async () => {
+    transport.sendMedia.mockRejectedValueOnce(new Error("connection closed after send"));
+    await expect(client.catalogSend(sendInput())).rejects.toMatchObject({
+      message: "send: connection closed after send",
+      failure: { kind: "UNCERTAIN", code: "UNKNOWN", retryAfterMs: 60_000 },
+    });
+    expect(transport.sendMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads an aligned range, clips EOF and shares media resolution with playback", async () => {
+    const { getMessages, downloadAsIterable } = transport.getLastClient();
+    getMessages.mockResolvedValueOnce([{ id: messageId, media }]);
+    downloadAsIterable.mockImplementationOnce(async function* () { yield new Uint8Array([6, 7, 8]); });
+
+    const input = { messageId, offset: 8192, length: 4096 };
+    const result = await client.catalogRead(input);
+    expect(catalogBridge?.postMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ op: "catalog_read", input }));
+    expect(result.totalBytes).toBe(8195);
+    expect([...new Uint8Array(result.buffer)]).toEqual([6, 7, 8]);
+    expect(downloadAsIterable).toHaveBeenCalledExactlyOnceWith(media, expect.objectContaining({
+      offset: 8192, fileSize: 8195, partSize: 4,
+    }));
+    const playback = await send({ requestId: "catalog-shared-stream", op: "stream", input: { messageId } });
+    expect(playback).toContainEqual(expect.objectContaining({ requestId: "catalog-shared-stream", ok: true }));
+    expect(getMessages).toHaveBeenCalledExactlyOnceWith(chatId, [messageId]);
+  });
+
+  it("rejects invalid ranges, missing messages and short reads with their distinct errors", async () => {
+    const { getMessages, downloadAsIterable } = transport.getLastClient();
+    await expect(client.catalogRead({ messageId: 802, offset: 1, length: 4096 })).rejects.toMatchObject({
+      code: "TRANSFER_FAILED", message: "Galer Cloud catalog read range is invalid.",
+    });
+    expect(getMessages).not.toHaveBeenCalled();
+    await expect(client.catalogRead({ messageId: 802, offset: 0, length: 4096 })).rejects.toMatchObject({
+      code: "ROUTE_MISSING", message: "Galer Cloud object no longer exists.",
+    });
+    expect(downloadAsIterable).not.toHaveBeenCalled();
+    getMessages.mockResolvedValueOnce([{ id: 803, media }]);
+    await expect(client.catalogRead({ messageId: 803, offset: 0, length: 4096 })).rejects.toMatchObject({
+      code: "MEDIA_UNAVAILABLE", message: "Galer Cloud returned a short object (3 of 4096 bytes).",
+    });
+  });
+
+  it("cancels the targeted in-flight catalog read with the shared cancel command", async () => {
+    const { getMessages, downloadAsIterable } = transport.getLastClient();
+    getMessages.mockResolvedValueOnce([{ id: 804, media }]);
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    downloadAsIterable.mockImplementationOnce(async function* (_media: unknown, { abortSignal }: { abortSignal: AbortSignal }) {
+      const abort = () => release();
+      abortSignal.addEventListener("abort", abort, { once: true });
+      try {
+        await released;
+        abortSignal.throwIfAborted();
+      } finally {
+        abortSignal.removeEventListener("abort", abort);
+      }
+    });
+
+    const requestId = crypto.randomUUID();
+    const reading = client.catalogRead({ messageId: 804, offset: 0, length: 4096 }, requestId);
+    const outcome = reading.catch((error: Error) => error);
+    try {
+      await vi.waitFor(() => expect(downloadAsIterable).toHaveBeenCalledTimes(1));
+      const signal = downloadAsIterable.mock.calls[0][1].abortSignal as AbortSignal;
+      expect(await send({ requestId: "cancel-unknown", op: "cancel", targetRequestId: "unknown" })).toContainEqual({
+        requestId: "cancel-unknown", ok: true, result: { cancelled: false },
+      });
+      expect(signal.aborted).toBe(false);
+      client.cancelCatalogRead(requestId);
+      expect(catalogBridge?.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+        op: "cancel", targetRequestId: requestId,
+      }));
+      await vi.waitFor(() => expect(signal.aborted).toBe(true));
+      await expect(outcome).resolves.toMatchObject({ message: expect.stringMatching(/abort/i) });
+      expect(await send({ requestId: "cancel-finished", op: "cancel", targetRequestId: requestId })).toContainEqual({
+        requestId: "cancel-finished", ok: true, result: { cancelled: false },
+      });
+    } finally {
+      release();
+    }
+  });
+});
 
 describe("Galer Cloud single-file Web Worker", () => {
   beforeEach(() => {
