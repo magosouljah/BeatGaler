@@ -10,7 +10,7 @@ const { CustomFile } = require('telegram/client/uploads');
 const { ProjectAccessError } = require('./project-access');
 const { withTelegramFloodWait } = require('./telegram-retry');
 
-const { createCatalogTelegramTransport } = require('./catalog-telegram-transport');
+const { configureCatalogTelegramTransport } = require('./catalog-telegram-transport');
 const { noDirectStartupTrace } = require('./direct-startup-trace');
 const { CATALOG_SESSION_PROTOCOL, stripDirectCredentials } = require('./catalog/authority');
 
@@ -384,7 +384,7 @@ function stateSnapshot(pool) {
   return withPoolLock(() => normalizeState(pool));
 }
 
-const { catalogBotCredential, catalogDirectSession, ensureCatalogBotMembership } = createCatalogTelegramTransport({
+const { catalogBotCredential, catalogDirectSession, ensureCatalogBotMembership } = configureCatalogTelegramTransport({
   loadPool,
   stateSnapshot,
   tokenForCredentialVersion,

@@ -85,9 +85,9 @@ catalogDirect.configureCatalogDirect = (options) => {
 // E72 Direct B real (solo LAB): la sesión directa del catálogo usa el token del Bot20 del descriptor (mismo origen que el gateway); sin pool legacy ni INDEX.
 // La frontera temporal (productive-temp-auth-boundary) quita token/hash antes de responder al navegador: éste solo recibe el bloque de vinculación.
 if (String(process.env.BEATGALER_CATALOG_DIRECT_ENABLED || '').toLowerCase() === 'true') {
-  const dtc = require(R + 'direct-transport-control');
+  const catalogTransport = require(R + 'catalog-telegram-transport').getCatalogTelegramTransport();
   const crypto = require('node:crypto');
-  dtc.catalogDirectSession = async ({ botId, chatId, sessionId = null }) => {
+  catalogTransport.catalogDirectSession = async ({ botId, chatId, sessionId = null }) => {
     if (botId !== d.bot.id) throw Object.assign(new Error('bot fuera del descriptor'), { code: 'BOT_UNKNOWN', transient: false });
     chatGuard(chatId);
     return { ok: true, mode: 'catalog-v1-direct', session_id: sessionId || `cdirect-${crypto.createHash('sha256').update(`${botId}|${chatId}`).digest('hex').slice(0, 24)}`,
