@@ -9,6 +9,7 @@ const catalogOperations = require('./catalog/operations');
 const catalogPurge = require('./catalog/purge');
 const { createFileDeletionJournal } = require('./catalog-deletion-journal');
 const catalogGateway = require('./catalog-gateway-runtime');
+const { getCatalogTelegramTransport } = require('./catalog-telegram-transport');
 
 async function resolveCatalogAccess(userId) {
   const access = await accessRuntime.resolveUserAccess({ id: userId });
@@ -83,14 +84,14 @@ async function assembleServerCatalog({ pool, env, cutover, onGatewayConfigured }
   catalogDirect.configureCatalogDirect(directFlag && nativeAuthority && nativeOperations ? {
     pool, authority: nativeAuthority, operations: nativeOperations,
     resolveProjectAccess: catalogDirect.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }),
-    sessionSource: ({ botId, chatId }) => require('./direct-transport-control').catalogDirectSession({ botId, chatId }),
+    sessionSource: ({ botId, chatId }) => getCatalogTelegramTransport().catalogDirectSession({ botId, chatId }),
     bindBuilder: (session, metadata) => require('./productive-temp-auth-boundary').transformSession(session, metadata),
     log: console.warn,
   } : null);
   // La pertenencia al vault se verifica de forma perezosa con MASTER y el bot.
   catalogNativeTransport.configureNativeTransportProvisioner(
     nativeAuthority?.config.nativeEnabled && directFlag && mediaGateway
-      ? { pool, assignmentStore: require('./direct-vault-assignment').createDirectVaultAssignmentStore(pool), transport: require('./direct-transport-control'), log: console.warn }
+      ? { pool, assignmentStore: require('./direct-vault-assignment').createDirectVaultAssignmentStore(pool), transport: getCatalogTelegramTransport(), log: console.warn }
       : null);
 
   // E73: precalentamiento en segundo plano, sin bloquear el arranque ni /readyz.

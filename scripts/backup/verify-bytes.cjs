@@ -47,7 +47,7 @@ async function main() {
   if (!Number.isInteger(apiId) || apiId <= 0 || !apiHash) { console.error('STOP-ENV: TELEGRAM_API_ID / TELEGRAM_API_HASH requeridos'); process.exit(4); }
   const sdk = { Api: require(path.join(CLOUD, 'node_modules', 'telegram')).Api, bigInt: require(path.join(CLOUD, 'node_modules', 'big-integer')) };
   const pool = new Pool({ connectionString: url, max: 2 });
-  const clientProvider = createRealBotClientProvider({ credentialFor: (botId) => require(path.join(CLOUD, 'direct-transport-control')).catalogBotCredential(botId), apiCredentials: () => ({ apiId, apiHash }) });
+  const clientProvider = createRealBotClientProvider({ credentialFor: (botId) => require(path.join(CLOUD, 'catalog-telegram-transport')).getCatalogTelegramTransport().catalogBotCredential(botId), apiCredentials: () => ({ apiId, apiHash }) });
   try {
     const report = await createCatalogBackup({ pool, log: (e, d) => console.error('[verify-bytes]', e, JSON.stringify(d || {})) }).verifyBytes({ reader: createOperatorReader({ pool, clientProvider, sdk }), restoreId: arg('--restore-id'), userId: arg('--user') });
     console.log(JSON.stringify({ checked: report.checked, ok: report.ok, mismatches: report.mismatches.length, missing: report.missing.length }));

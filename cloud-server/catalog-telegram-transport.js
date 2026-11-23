@@ -97,4 +97,17 @@ function createCatalogTelegramTransport({
   return { catalogBotCredential, catalogDirectSession, ensureCatalogBotMembership };
 }
 
-module.exports = { createCatalogTelegramTransport };
+let sharedTransport;
+
+function configureCatalogTelegramTransport(dependencies) {
+  sharedTransport = createCatalogTelegramTransport(dependencies);
+  return sharedTransport;
+}
+
+// DTC still owns the shared pool, credential cache and maintenance lifecycle.
+function getCatalogTelegramTransport() {
+  require('./direct-transport-control');
+  return sharedTransport;
+}
+
+module.exports = { createCatalogTelegramTransport, configureCatalogTelegramTransport, getCatalogTelegramTransport };

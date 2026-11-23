@@ -146,13 +146,13 @@ function createRealBotClientProvider({ credentialFor, apiCredentials, telegram =
   };
 }
 
-// Montaje desde entorno. Devuelve null si está apagado. `credentialFor` por defecto = pool de transporte vigente (direct-transport-control).
+// Montaje desde entorno. Devuelve null si está apagado. `credentialFor` por defecto = pool de transporte vigente.
 function gatewayFromEnv({ pool, env = process.env, log = null, credentialFor = null, clientProvider = null, sdk = null } = {}) {
   if (!assertGatewayAllowed(env)) return null;
   if (!pool) throw new Error('STOP-ENV: the catalog gateway requires the PostgreSQL control plane');
   const sdkReal = sdk || (() => { const { Api } = require('telegram'); return { Api, bigInt: require('big-integer') }; })();
   const provider = clientProvider || createRealBotClientProvider({
-    credentialFor: credentialFor || ((botId) => require('./direct-transport-control').catalogBotCredential(botId)),
+    credentialFor: credentialFor || ((botId) => require('./catalog-telegram-transport').getCatalogTelegramTransport().catalogBotCredential(botId)),
     apiCredentials: () => { const apiId = Number(env.TELEGRAM_API_ID); const apiHash = String(env.TELEGRAM_API_HASH || ''); if (!Number.isInteger(apiId) || apiId <= 0 || !apiHash) throw Object.assign(new Error('Telegram API credentials are missing'), { code: 'API_CREDENTIALS_MISSING', transient: false }); return { apiId, apiHash }; },
   });
   return createGatewayRuntime({ pool, clientProvider: provider, sdk: sdkReal, log });
