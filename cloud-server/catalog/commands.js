@@ -597,14 +597,17 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   // CONFLICT → RUNNING solo con una revisión explícita igual a la actual (reanudar no es retry ciego).
   async function resumeOperation({ userId, era, epoch, operationId, revision } = {}) {
     if (typeof operationId !== 'string' || !ID_RE.test(operationId)) throw inputInvalid('OPERATION_ID');
-    if (!/^[1-9][0-9]{0,17}$/.test(String(revision ?? ''))) throw inputInvalid('REVISION');
+    const requestedRevision = String(revision ?? '');
+    if (!/^[1-9][0-9]{0,17}$/.test(requestedRevision)) throw inputInvalid('REVISION');
+    const jobId = `job-op-${operationId}-resume-${requestedRevision}`;
+    if (!ID_RE.test(jobId)) throw inputInvalid('OPERATION_ID');
     return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
       if (o.status !== 'CONFLICT') throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
-      if (String(revision) !== ctx.revision) throw new CatalogQueryError('REVISION_MISMATCH', 409, 'revision provided is not the current one', { current_revision: ctx.revision });
+      if (requestedRevision !== ctx.revision) throw new CatalogQueryError('REVISION_MISMATCH', 409, 'revision provided is not the current one', { current_revision: ctx.revision });
       await client.query(`UPDATE catalog_operations SET status = 'RUNNING', expected_revision = $3::bigint, conflict_batch_seq = NULL WHERE user_id = $1 AND operation_id = $2`, [uid, operationId, ctx.revision]);
-      await enqueue({ jobId: `job-op-${operationId}-resume-${ctx.revision}`, kind: 'OPERATION_STEP', operationId, payload: { operationId, resumedAt: ctx.revision } });
+      await enqueue({ jobId, kind: 'OPERATION_STEP', operationId, payload: { operationId, resumedAt: ctx.revision } });
       return opDto((await client.query(OP_SQL, [uid, operationId])).rows[0], { resumed: true });
     });
   }
