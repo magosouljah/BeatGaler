@@ -133,7 +133,7 @@
     ],
     "POST /auth/lifecycle/status": [
       [401,"auth",{"code":"string","error":"string","request_id":"string"}],
-      [500,"auth",{"code":"string","error":"string","request_id":"string"}]
+      [200,"auth",{"email_delivery_configured":"boolean","email_verified":"boolean","email_verified_at":"null","mfa_recovery_remaining":"number","ok":"boolean","retention_policy_configured":"boolean"}]
     ],
     "POST /auth/account/export": [
       [401,"auth",{"code":"string","error":"string"}],

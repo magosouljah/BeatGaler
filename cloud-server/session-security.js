@@ -623,7 +623,7 @@ function installSessionSecurity(express, options = {}) {
     if (app.__beatgalerSessionSecurityRoutesInstalled) return;
     app.__beatgalerSessionSecurityRoutesInstalled = true;
     originalPost.call(app, '/auth/sessions', runtime.listSessions);
-    originalPost.call(app, '/auth/sessions/revoke', (req, res) => { void runtime.revokeOne(req, res); });
+    originalPost.call(app, '/auth/sessions/revoke', express.json({ limit: '16kb' }), (req, res) => { void runtime.revokeOne(req, res); });
     originalPost.call(app, '/auth/sessions/revoke-all', (req, res) => { void runtime.revokeAll(req, res); });
   }
 

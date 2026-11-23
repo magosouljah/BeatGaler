@@ -182,7 +182,8 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
       {drawer && (
         <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }}
           onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) scope.releaseFile(); }}
-          selectedBeats={scope.selectedBeats.length > 1 ? scope.selectedBeats : undefined}
+          selectedBeats={scope.selectedCount > 1 ? scope.selectedBeats : undefined}
+          selectedCount={scope.selectedCount > 1 ? scope.selectedCount : undefined}
           mutationAllowed={scope.connectionState === "online"} onWebSave={scope.saveWebDrawer} />
       )}
       {currentBeat && (

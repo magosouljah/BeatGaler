@@ -186,9 +186,9 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const residentSelectedBeats = useCallback((): Beat[] => { const out: Beat[] = []; for (const b of snapshot.blocks) for (const it of b.items) if (interactionStore.isSelected(it.id)) out.push(toBeat(it)); return out; }, [snapshot.blocks, interactionStore, toBeat]);
   const selectedBeats = useMemo(() => (interaction.selection.count > 0 ? residentSelectedBeats() : []), [interaction.selection, residentSelectedBeats]);
   const handleEditBulk = useCallback(() => {
-    const first = residentSelectedBeats()[0]; if (!first) return;
+    const first = residentSelectedBeats()[0] ?? (() => { for (const b of snapshot.blocks) for (const it of b.items) return toBeat(it); return undefined; })(); if (!first) return;
     setDrawer({ beat: first, mode: "edit" });
-  }, [residentSelectedBeats]);
+  }, [residentSelectedBeats, snapshot.blocks, toBeat]);
   // ---- rename global de tag (T07 preview → confirmación → operación durable) ----
   const rename = interaction.rename;
   const tagRename: CatalogTagRename | null = rename ? { oldTag: rename.from, newTag: rename.to, stage: rename.stage === "name" ? "name" : "confirm" } : null;

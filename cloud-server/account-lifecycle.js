@@ -798,6 +798,7 @@ function createAccountLifecycleRuntime({
       regenerateRecovery,
       exportAccount,
       deleteAccount,
+      lifecycleStatus,
       loginRecoveryMiddleware,
       mfaDisableRecoveryMiddleware,
       responseDecorator,

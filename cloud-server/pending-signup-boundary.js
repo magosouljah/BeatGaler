@@ -317,7 +317,11 @@ function installPendingSignupBoundary(express, {
     if (pathName === '/auth/login' && lastHandler) legacyLoginHandler = lastHandler;
 
     if (pathName === '/auth/register' && shouldOwnRegister(env)) {
-      return previousPost.call(this, routePath, (req, res) => { void register(req, res); }, ...handlers);
+      // El alta pendiente ocupa el lugar del handler heredado (el último): los
+      // guardas externos (antiabuso, contención) deben ejecutarse antes.
+      const chain = handlers.slice();
+      chain[chain.lastIndexOf(lastHandler)] = (req, res) => { void register(req, res); };
+      return previousPost.call(this, routePath, ...chain);
     }
     if (pathName === '/auth/login' && service?.loginGate) {
       return previousPost.call(this, routePath, (req, res, next) => { void passwordLoginGate(req, res, next); }, ...handlers);

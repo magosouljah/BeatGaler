@@ -144,7 +144,7 @@ describe("CatalogGalleryWorkspace (shell aprobado sobre servicios del catálogo)
     }
   });
 
-  it("X62: Edit all abre los seleccionados de los bloques residentes, incluso fuera del área montada", async () => {
+  it("X62: Edit all usa la selección global (241), no solo los bloques residentes", async () => {
     const { el, services, server } = await mountCatalog(241, 400);
     try {
       const cards = el.querySelectorAll("[data-card]");
@@ -158,7 +158,7 @@ describe("CatalogGalleryWorkspace (shell aprobado sobre servicios del catálogo)
       await flush();
       expect(el.querySelector(".bg-gallery-selection-actions")?.textContent).toContain("241 selected");
       clickButton(el, "Edit all");
-      expect(el.textContent).toContain("Edit 240 beats");
+      expect(el.textContent).toContain("Edit 241 beats");
     } finally {
       await act(async () => { await services.teardown(); });
     }

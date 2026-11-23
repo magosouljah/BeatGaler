@@ -26,6 +26,8 @@ interface Props {
   onSaved?: (updated: Beat, onProgress?: SaveProgress) => Promise<void> | void;
   onReleaseAudio: () => void;
   selectedBeats?: Beat[];
+  /** Tamaño de la selección global (puede superar a los beats residentes de selectedBeats). */
+  selectedCount?: number;
   onBulkSaved?: (updates: Partial<Beat>, options?: { tagsMode?: "add" | "replace" | "remove" }) => void;
   reviewInfo?: { current: number; total: number | null };
   closeAfterSave?: boolean;
@@ -75,7 +77,7 @@ const CLOUD_PICKERS: Record<CloudFileType, { name: string; extensions: string[] 
   OTHER: { name: "Any file", extensions: ["mp3", "wav", "zip", "flp", "als", "mid", "midi", "txt", "pdf", "png", "jpg", "jpeg"] },
 };
 
-export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, onWebSave, maxNameChars }: Props) {
+export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSaved, onReleaseAudio, selectedBeats, selectedCount, onBulkSaved, reviewInfo, closeAfterSave = true, onSkipCurrent, onSkipAll, onSaveAll, isReviewNameTaken, mutationAllowed = true, onCloudMutationCommit, onWebSave, maxNameChars }: Props) {
   const [data, setData] = useState<Beat>({ ...beat });
   const [pending, setPending] = useState<PendingFiles>({});
   const [saving, setSaving] = useState(false);
@@ -91,7 +93,8 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const isEdit = mode === "edit";
-  const isBulk = !!selectedBeats && selectedBeats.length > 1;
+  const bulkCount = selectedCount ?? selectedBeats?.length ?? 0;
+  const isBulk = bulkCount > 1;
   const imgRef = useRef<HTMLInputElement>(null);
   const displayedBeatIdRef = useRef(beat.id);
   const ratingEditedRef = useRef(false); // E86: el usuario ya eligió estrellas a mano (la hidratación del ID3 no las pisa)
@@ -215,12 +218,13 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
   }, [cloudBusy, beat, data, refreshCloudFiles, onCloudMutationCommit]);
 
   const commonTags = useMemo(() => {
-    if (!isBulk || !selectedBeats?.length) return [];
+    // Con selección parcialmente residente no se conocen las etiquetas comunes del total.
+    if (!isBulk || !selectedBeats?.length || selectedBeats.length < bulkCount) return [];
     const first = Array.from(new Set(selectedBeats[0].tags.map(t => t.trim().toLowerCase()).filter(Boolean)));
     return first.filter(tag => selectedBeats.slice(1).every(b =>
       b.tags.some(t => t.trim().toLowerCase() === tag)
     ));
-  }, [isBulk, selectedBeats]);
+  }, [isBulk, selectedBeats, bulkCount]);
 
   useEffect(() => {
     if (isBulk) {
@@ -760,7 +764,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
         <div style={{ padding: "18px 22px", borderBottom: "1px solid #1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <span style={{ fontWeight: 500, fontSize: 14, color: "#e0e0e0" }}>
-              {reviewHeaderLabel({ reviewCurrent: reviewInfo?.current, reviewTotal: reviewInfo?.total, isBulk, selectedBeatsCount: selectedBeats?.length ?? 0, isEdit })}
+              {reviewHeaderLabel({ reviewCurrent: reviewInfo?.current, reviewTotal: reviewInfo?.total, isBulk, selectedBeatsCount: bulkCount, isEdit })}
             </span>
             {isBulk && <div style={{ fontSize: 11, color: "#777", marginTop: 2 }}>Check fields to apply to all</div>}
           </div>
@@ -914,7 +918,7 @@ export default function Drawer({ beat, mode, tagSuggestions = [], onClose, onSav
           {(() => {
             const footerState = getReviewFooterState({
               mutationAllowed, saving, isBulk, bulkFieldCount: bulkFields.size, bulkTagsMode, tagsCount: data.tags.length,
-              selectedBeatsCount: selectedBeats?.length ?? 0, bpmValid: bpmValidation.valid, keyValid: keyValidation.valid,
+              selectedBeatsCount: bulkCount, bpmValid: bpmValidation.valid, keyValid: keyValidation.valid,
               bulkHasBpm: bulkFields.has("bpm"), bulkHasKey: bulkFields.has("key"), bulkHasTags: bulkFields.has("tags"),
               reviewCurrent: reviewInfo?.current, reviewTotal: reviewInfo?.total, hasOnSaveAll: !!onSaveAll,
               pendingFileCount: Object.keys(pending).length + Object.keys(pendingCloud).length + Object.keys(pendingWebEdit).length,

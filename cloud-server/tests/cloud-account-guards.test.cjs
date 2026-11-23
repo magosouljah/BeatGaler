@@ -165,9 +165,10 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
         errorCode(await post('email/change', browser), 409, 'EMAIL_CHANGE_STAGED_REQUIRED');
         errorCode(await post('email/change', credentials), 409, 'EMAIL_CHANGE_STAGED_REQUIRED');
         errorCode(await post('lifecycle/status', browser), 401, 'AUTH_SERVICE_UNAVAILABLE');
-        const lifecycle = json(await post('lifecycle/status', credentials), 500);
-        assert.equal(lifecycle.code, 'AUTH_SERVICE_UNAVAILABLE');
-        assert.match(lifecycle.request_id, /^[0-9a-f]{8}$/);
+        // X66: antes respondía 500 (lifecycleStatus no estaba expuesto al registrar la ruta).
+        const lifecycle = json(await post('lifecycle/status', credentials), 200);
+        assert.equal(lifecycle.ok, true);
+        assert.equal(lifecycle.email_verified, false);
       });
 
       await t.test('Logout y revocación de la sesión actual borran ambas cookies', async () => {
@@ -180,20 +181,22 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
         const credentials = { ...browser, ...webSession(await login()) };
         const { sessions } = json(await post('sessions', credentials), 200);
         const { id } = sessions.find(session => session.current);
-        // Esta ruta se monta antes del parser global y no lee session_id del JSON.
+        // X67: la ruta lleva su propio parser JSON y revoca la sesión indicada.
         const revoked = await post('sessions/revoke', credentials, { session_id: id });
-        errorCode(revoked, 404, 'AUTH_SERVICE_UNAVAILABLE');
-        assert.equal(revoked.headers['set-cookie'], undefined);
-        const current = json(await post('sessions', credentials), 200).sessions.find(session => session.current);
-        assert.equal(current.id, id);
+        assert.equal(json(revoked, 200).ok, true);
+        clearsCookies(revoked);
+        errorCode(await post('sessions', credentials), 401, 'SESSION_REVOKED');
+        const other = { ...browser, ...webSession(await login()) };
+        assert.equal((await post('sessions/revoke', other, { session_id: 'no-existe' })).status, 404);
+        assert.ok(json(await post('sessions', other), 200).sessions.find(session => session.current));
 
-        const all = await post('sessions/revoke-all', credentials);
+        const all = await post('sessions/revoke-all', other);
         const allBody = json(all, 200);
         assert.equal(allBody.ok, true);
         assert.equal(allBody.current_revoked, true);
         assert.ok(allBody.revoked_count >= 1);
         clearsCookies(all);
-        const replay = await post('sessions', credentials);
+        const replay = await post('sessions', other);
         errorCode(replay, 401, 'SESSION_REVOKED');
         clearsCookies(replay);
       });
@@ -231,7 +234,7 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
         errorCode(await post('password/change', credentials, { email: rateEmail }), 503, 'AUTH_SERVICE_UNAVAILABLE');
       });
 
-      await t.test('DISCREPANCIA: el alta pendiente responde antes de contención, antiabuso y decoración', async () => {
+      await t.test('X65: el alta pendiente pasa por contención y antiabuso antes de responder', async () => {
         const runtime = app.__beatgalerSessionSecurityRuntime;
         const decorateResponse = runtime.decorateResponse;
         const decoratedRoutes = [];
@@ -244,29 +247,42 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
         const registrationIds = [account.beatgalerUserId, ...Array(13).fill(freeInstallation)];
         try {
           webSession(await login());
-          // La instalación vinculada activa el conflicto de contención si la
-          // guarda se adelanta. La libre aísla el cupo de cuenta en memoria.
+          // La instalación vinculada activa el conflicto de contención (403); la
+          // libre agota el cupo de antiabuso (429 con Retry-After).
+          const pendingBody = {
+            ok: true,
+            signup_pending: true,
+            signup_id: signup.signup_id,
+            status: signup.status,
+            expires_at: signup.expires_at,
+            challenge_expires_at: signup.challenge_expires_at,
+          };
+          const statuses = [];
           for (const beatgalerUserId of registrationIds) {
             const response = await post('register', {
               ...browser,
               cookie: `${sessionName}=expired-fixture`,
             }, { email, username: 'pending', password: account.password, beatgalerUserId });
-            assert.deepEqual(json(response, 202), {
-              ok: true,
-              signup_pending: true,
-              signup_id: signup.signup_id,
-              status: signup.status,
-              expires_at: signup.expires_at,
-              challenge_expires_at: signup.challenge_expires_at,
-            });
-            assert.deepEqual(response.headers['set-cookie'], [
-              cookie('__Host-beatgaler_signup', 'signup-fixture.continuation-fixture',
-                { httpOnly: true, sameSite: 'Lax', age: 86400 }),
-            ]);
-            assert.equal(response.headers['retry-after'], undefined);
+            statuses.push(response.status);
+            if (response.status === 202) {
+              assert.deepEqual(json(response, 202), pendingBody);
+              assert.deepEqual(response.headers['set-cookie'], [
+                cookie('__Host-beatgaler_signup', 'signup-fixture.continuation-fixture',
+                  { httpOnly: true, sameSite: 'Lax', age: 86400 }),
+              ]);
+              assert.equal(response.headers['retry-after'], undefined);
+            } else if (response.status === 429) {
+              assert.equal(response.headers['retry-after'], '60');
+            }
           }
-          assert.deepEqual(decoratedRoutes, ['/auth/login']);
-          assert.deepEqual(signupInputs, registrationIds.map(installationId => ({
+          // El cupo es compartido con los logins previos: solo importa el orden.
+          const accepted = statuses.filter(code => code === 202).length;
+          assert.ok(accepted >= 5 && accepted <= 9, String(statuses));
+          assert.deepEqual(statuses, [403, ...Array(accepted).fill(202), ...Array(13 - accepted).fill(429)]);
+          // La decoración de sesión ya precede al alta y no altera la respuesta pendiente.
+          assert.deepEqual(decoratedRoutes.slice(0, 1), ['/auth/login']);
+          assert.ok(decoratedRoutes.slice(1).every(route => route === '/auth/register'));
+          assert.deepEqual(signupInputs, registrationIds.slice(1, 1 + statuses.filter(code => code === 202).length).map(installationId => ({
             email, usernameBase: 'pending', password: account.password, installationId,
           })));
         } finally {
