@@ -21,7 +21,7 @@ const account = {
   beatgalerUserId: 'composition-installation',
 };
 
-async function withCloud(exercise, { inMemory = false, prepare } = {}) {
+async function withCloud(exercise, { inMemory = false, prepare, restoreState, requestTimeoutMs = 2500 } = {}) {
   assert.equal(findLocalSecretFiles(path.dirname(cloudDir)).length, 0, 'El Cloud de prueba requiere un worktree limpio.');
   const timeoutMs = Number(process.env.BEATGALER_COMPOSITION_STARTUP_TIMEOUT_MS ?? 60_000);
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2 ** 31 - 1,
@@ -69,6 +69,7 @@ async function withCloud(exercise, { inMemory = false, prepare } = {}) {
       }],
       sessions: {},
     }));
+    restoreState?.(stateDir);
     require('../../master-storage').masterStorageReady = () => false;
     https.request = function request(options, ...args) {
       if (options?.hostname !== 'api.telegram.org' || options.method !== 'HEAD') {
@@ -131,7 +132,7 @@ async function withCloud(exercise, { inMemory = false, prepare } = {}) {
       return;
     }
     const port = server.address().port;
-    await exercise(app, (method, url, options) => send(port, method, url, options));
+    await exercise(app, (method, url, options) => send(port, method, url, options, requestTimeoutMs));
     assert.ok(attempts.length > 0, 'El guard debe observar las peticiones del humo.');
     const unexpected = attempts.filter(({ api, host, port: targetPort, allowed }) => {
       if (!allowed || host !== '127.0.0.1') return true;
@@ -161,7 +162,7 @@ async function withCloud(exercise, { inMemory = false, prepare } = {}) {
   }
 }
 
-function send(port, method, url, { headers, body } = {}) {
+function send(port, method, url, { headers, body } = {}, timeoutMs) {
   return new Promise((resolve, reject) => {
     const encoded = body === undefined ? undefined : JSON.stringify(body);
     const req = http.request({
@@ -185,7 +186,7 @@ function send(port, method, url, { headers, body } = {}) {
       res.on('error', reject);
     });
     req.on('error', reject);
-    req.setTimeout(2500, () => req.destroy(new Error(`Tiempo agotado: ${method} ${url}`)));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Tiempo agotado: ${method} ${url}`)));
     req.end(encoded);
   });
 }
