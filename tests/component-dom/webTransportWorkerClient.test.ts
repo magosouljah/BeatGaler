@@ -62,22 +62,6 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     expect(firstWorker.terminate).toHaveBeenCalledOnce();
   });
 
-  it("keeps an INDEX request alive beyond the bootstrap timeout without terminating the Worker", async () => {
-    const client = new WebTransportWorkerClient(1000);
-    const request = client.getLibraryIndex();
-    const worker = FakeWorker.instances[0];
-
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(worker.terminate).not.toHaveBeenCalled();
-
-    worker.respond({ manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [] }, messageId: 7 });
-    await expect(request).resolves.toEqual({
-      manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [] },
-      messageId: 7,
-    });
-    expect(worker.terminate).not.toHaveBeenCalled();
-  });
-
   it("clears the bootstrap deadline when the worker answers", async () => {
     const client = new WebTransportWorkerClient(1000);
     const request = client.verifyReady();

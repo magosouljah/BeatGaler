@@ -137,13 +137,12 @@ function harness(desktop = false) {
     },
     telegram, CHAT, BOT, VITE_ENV: {}, exports: {},
     MtPeerNotFoundError: class MtPeerNotFoundError extends Error {},
-    armMtcuteIndexLivenessGuard: () => () => {},
   });
   const filename = desktop ? 'src-tauri/direct-transport/transport-helper.source.mjs' : 'src/features/cloud/webTransport.worker.ts';
   vm.runInContext(executableSource(filename, desktop), context, { filename });
   const api = vm.runInContext(desktop
     ? 'client=telegram; session={chat_id:String(CHAT),transport_id:"Bot02",transport_user_id:BOT}; tempExpiresAt=Number.MAX_SAFE_INTEGER; ({getIndex,replaceIndex,upload,download,downloadRange,ensureIndex})'
-    : 'client=telegram; chatId=CHAT; expectedBotId=BOT; vaultVerified=true; ({getLibraryIndex,replaceLibraryIndex,upload,download,stream,prefetch,prefetchBatch,verifyIdentity,verifyReady})', context);
+    : 'client=telegram; chatId=CHAT; expectedBotId=BOT; vaultVerified=true; ({upload,stream,prefetch,prefetchBatch,verifyIdentity,verifyReady})', context);
   return { api, calls, events, messages, faults, add, get pinned() { return pinned; }, set pinned(id) { pinned = id; } };
 }
 
@@ -198,34 +197,6 @@ test('Desktop initial INDEX and MP3/WAV/artwork/PROJECT bytes use Direct upload/
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('Web empty INDEX creation, cross-bot replacement, stale protection and failed-pin rollback execute actual worker', async () => {
-  const h = harness();
-  const initial = await h.api.replaceLibraryIndex({ manifest: empty(), expectedMessageId: 0 });
-  assert.equal(h.messages.get(initial.messageId).senderId, BOT);
-  // Model a persisted legacy message by a different bot. There is no author
-  // filter in the implementation: deletion addresses vault + message ID.
-  h.messages.get(initial.messageId).senderId = '1001';
-  const next = { ...empty(), beats: [{ id: 'beat-A' }] };
-  const replacement = await h.api.replaceLibraryIndex({ manifest: next, expectedMessageId: initial.messageId });
-  assert.equal(h.messages.has(initial.messageId), false);
-  assert.deepEqual(JSON.parse(JSON.stringify((await h.api.getLibraryIndex()).manifest)), next);
-  await assert.rejects(h.api.replaceLibraryIndex({ manifest: empty(), expectedMessageId: replacement.messageId }), /stale library update/);
-  await assert.rejects(h.api.replaceLibraryIndex({ manifest: next, expectedMessageId: 0 }), /another device/);
-  h.faults.pin = true;
-  await assert.rejects(h.api.replaceLibraryIndex({ manifest: next, expectedMessageId: replacement.messageId }), /CHAT_ADMIN_REQUIRED/);
-  assert.equal(h.messages.has(replacement.messageId), true);
-  assert.equal(h.messages.size, 1, 'failed candidate cleaned, prior winning INDEX retained');
-});
-
-test('Web bootstrap never interprets network failure or a foreign pinned message as empty vault', async () => {
-  const h = harness(); h.faults.read = true;
-  await assert.rejects(h.api.replaceLibraryIndex({ manifest: empty(), expectedMessageId: 0 }), /socket timeout/);
-  assert.equal(h.calls.some(call => call[0] === 'sendMedia'), false);
-  h.faults.read = false; h.add(9, 'not an index', '1001', 'foreign pinned message'); h.pinned = 9;
-  await assert.rejects(h.api.replaceLibraryIndex({ manifest: empty(), expectedMessageId: 0 }), /not available/);
-  assert.equal(h.calls.some(call => call[0] === 'sendMedia'), false);
-});
-
 test('Web playback prefix reads avoid mtcute precise EOF truncation and stay resumable', async () => {
   const h = harness(); await h.api.verifyIdentity(); await h.api.verifyReady();
   const bytes = Buffer.alloc(4284, 91);
@@ -267,6 +238,5 @@ test('Web MP3/WAV/artwork/PROJECT upload, export/playback streams and warm prefi
     }
     const warm = await h.api.prefetch(`warm-${id}`, { messageId: id, mimeType: mime });
     assert.deepEqual(Buffer.from(warm.prefix), bytes);
-    if (kind === 'ARTWORK') assert.equal((await h.api.download({ messageId: id, mimeType: mime })).dataUrl, `data:${mime};base64,${bytes.toString('base64')}`);
   }
 });

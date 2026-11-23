@@ -19,10 +19,6 @@ describe("Issue #97 runtime trace contract", () => {
     expect(worker).toContain("WARM_PREFIX_READY");
     expect(worker).toContain("PLAY_WARM_PREEMPT_ALL");
     expect(worker).toContain("WARM_RESUME");
-    expect(worker).toContain("INDEX_BEGIN");
-    expect(worker).toContain("INDEX_PREEMPTED_PLAY");
-    expect(worker).toContain("INDEX_RESUMED");
-    expect(worker).toContain("INDEX_DONE");
   });
 
   it("contains no startup Cloud-route override path", () => {

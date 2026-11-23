@@ -3,13 +3,8 @@ import { WebTransportWorkerClient } from "../../src/features/cloud/webTransportW
 import { WEB_DIRECT_MAX_FILE_BYTES, type WebTransportWorkerCommand } from "../../src/features/cloud/webTransportWorkerProtocol";
 
 const transport = vi.hoisted(() => {
-  const indexMedia = { type: "document", mimeType: "application/json" };
-  const artworkMedia = { type: "document", mimeType: "image/png" };
   const audioMedia = { type: "audio", mimeType: "audio/mpeg", fileSize: 5 };
   const projectMedia = { type: "document", mimeType: "application/zip", fileSize: 5 };
-  let pinnedId = 501;
-  let missingPinnedReads = 0;
-  let indexMessageAvailable = true;
   let peerAvailable = true;
   let clientOptions: any = null;
   let lastClient: any = null;
@@ -72,13 +67,11 @@ const transport = vi.hoisted(() => {
       }],
     ]),
   };
-  const sendMedia = vi.fn(async (_vault: unknown, media: any, options: any) => {
+  const sendMedia = vi.fn(async (_vault: unknown, _media: any, options: any) => {
     options.progressCallback?.(2, 5);
     options.progressCallback?.(5, 5);
-    return { id: media.caption === "BEATGALER_LIBRARY_INDEX_V1" ? 901 : 91, media: undefined as { fileSize: number; raw: { id: number } } | undefined };
+    return { id: 91, media: undefined as { fileSize: number; raw: { id: number } } | undefined };
   });
-  const pinMessage = vi.fn(async ({ message }: { message: number }) => { pinnedId = message; });
-  const deleteMessagesById = vi.fn(async () => undefined);
   class TelegramClient {
     constructor(options: any) { clientOptions = options; this.storage = options.storage; lastClient = this; }
     storage: any;
@@ -111,35 +104,16 @@ const transport = vi.hoisted(() => {
       if (!peerAvailable) throw new MtPeerNotFoundError("Peer -1001234567890 is not found in local cache");
       return { _: "inputPeerChannel", channelId: 1234567890, accessHash: new FakeLong(42, 0) };
     });
-    getFullChat = vi.fn(async () => {
-      if (missingPinnedReads > 0) {
-        missingPinnedReads -= 1;
-        return { pinnedMsgId: 0 };
-      }
-      return { pinnedMsgId: pinnedId };
-    });
     getMessages = vi.fn(async (_vault: unknown, ids: number[]) => {
       if (!peerAvailable) throw new MtPeerNotFoundError("Peer -1001234567890 is not found in local cache");
-      return ids.map(id => id === 501 && indexMessageAvailable
-      ? { id, text: "BEATGALER_LIBRARY_INDEX_V1", media: indexMedia }
-      : id === 601
-        ? { id, text: "", media: artworkMedia }
-        : id === 701
-          ? { id, text: "", media: audioMedia }
-          : id === 702
-            ? { id, text: "", media: projectMedia }
-        : null);
+      return ids.map(id => id === 701
+        ? { id, text: "", media: audioMedia }
+        : id === 702
+          ? { id, text: "", media: projectMedia }
+          : null);
     });
-    downloadAsBuffer = vi.fn(async (media: unknown) => media === indexMedia
-      ? new TextEncoder().encode(JSON.stringify({
-          schema: "beatgaler.telegram.library",
-          version: 2,
-          beats: [{ id: "beat-from-index", name: "Cloud Beat" }],
-          trash: [],
-        }))
-      : new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    getFullChat = vi.fn();
     downloadChunk = vi.fn(async () => new Uint8Array([1, 2]));
-    iterHistory = vi.fn(async function* () {});
     downloadAsIterable = vi.fn(async function* (_media: unknown, options: { offset?: number }) {
       if ((options?.offset || 0) < 5) yield new Uint8Array([3, 4, 5]);
     });
@@ -148,8 +122,6 @@ const transport = vi.hoisted(() => {
       return { _: "inputFile" };
     });
     sendMedia = sendMedia;
-    pinMessage = pinMessage;
-    deleteMessagesById = deleteMessagesById;
     destroy = vi.fn(async () => {});
   }
   return {
@@ -160,11 +132,6 @@ const transport = vi.hoisted(() => {
     boundConnection,
     onUsableAdd,
     sendMedia,
-    pinMessage,
-    deleteMessagesById,
-    resetPinned: () => { pinnedId = 501; missingPinnedReads = 0; indexMessageAvailable = true; },
-    delayPinnedReads: (count: number) => { missingPinnedReads = Math.max(0, count); },
-    setIndexMessageAvailable: (value: boolean) => { indexMessageAvailable = value; },
     setPeerAvailable: (value: boolean) => { peerAvailable = value; },
     isPeerAvailable: () => peerAvailable,
     MtPeerNotFoundError,
@@ -393,10 +360,7 @@ describe("catalog transfers through the Web Worker", () => {
 
 describe("Galer Cloud single-file Web Worker", () => {
   beforeEach(() => {
-    transport.resetPinned();
     transport.sendMedia.mockClear();
-    transport.pinMessage.mockClear();
-    transport.deleteMessagesById.mockClear();
   });
 
   it("continues the bound temporary MTProto session and allows post-bind initConnection without exposing permanent credentials", () => {
@@ -457,112 +421,6 @@ describe("Galer Cloud single-file Web Worker", () => {
       parts: [{ telegram_message_id: 91, size: 5 }],
     });
     expect(completed.result.parts).toHaveLength(1);
-  });
-
-  it("reads the authorized pinned library index directly", async () => {
-    const messages = await send({ requestId: "get-index", op: "get_index" });
-    const completed = messages.find(message => message.ok === true);
-
-    expect(completed.result).toMatchObject({
-      messageId: 501,
-      manifest: {
-        schema: "beatgaler.telegram.library",
-        version: 2,
-        beats: [{ id: "beat-from-index", name: "Cloud Beat" }],
-      },
-    });
-  });
-
-  it("waits for a new phone session to receive the pinned library index", async () => {
-    transport.delayPinnedReads(2);
-    const messages = await send({ requestId: "get-index-after-propagation", op: "get_index" });
-    const completed = messages.find(message => message.ok === true);
-
-    expect(completed.result).toMatchObject({
-      messageId: 501,
-      manifest: { beats: [{ id: "beat-from-index", name: "Cloud Beat" }] },
-    });
-  });
-
-  it("never turns a missing pinned index into an authoritative empty gallery", async () => {
-    transport.delayPinnedReads(10);
-    transport.setIndexMessageAvailable(false);
-    const messages = await send({ requestId: "get-index-still-missing", op: "get_index" }, 2500);
-
-    expect(messages.find(message => message.ok === true)).toBeUndefined();
-    expect(messages.find(message => message.ok === false)?.error).toContain("still synchronizing");
-  });
-
-  it("pins one complete replacement index before deleting the previous index", async () => {
-    const messages = await send({
-      requestId: "replace-index",
-      op: "replace_index",
-      input: {
-        expectedMessageId: 501,
-        manifest: {
-          schema: "beatgaler.telegram.library",
-          version: 2,
-          beats: [
-            { id: "new-beat", name: "New Beat" },
-            { id: "beat-from-index", name: "Cloud Beat" },
-          ],
-          trash: [],
-        },
-      },
-    });
-    const completed = messages.find(message => message.ok === true);
-
-    expect(transport.sendMedia).toHaveBeenCalledOnce();
-    expect(transport.sendMedia.mock.calls[0][1]).toMatchObject({
-      caption: "BEATGALER_LIBRARY_INDEX_V1",
-      fileMime: "application/json",
-    });
-    expect(transport.pinMessage).toHaveBeenCalledWith({ chatId: -1001234567890, message: 901, notify: false });
-    expect(transport.deleteMessagesById).toHaveBeenCalledWith(-1001234567890, [501]);
-    expect(completed.result).toEqual({ messageId: 901, previousMessageId: 501, beatCount: 2 });
-  });
-
-  it("allows an identity to disappear only when the replacement carries its tombstone", async () => {
-    const messages = await send({
-      requestId: "replace-with-tombstone",
-      op: "replace_index",
-      input: {
-        expectedMessageId: 501,
-        manifest: {
-          schema: "beatgaler.telegram.library",
-          version: 2,
-          beats: [],
-          trash: [],
-          deleted: [{ beat_id: "beat-from-index", deleted_at: 100 }],
-        },
-      },
-    });
-
-    expect(messages.find(message => message.ok === false)).toBeUndefined();
-    expect(messages.find(message => message.ok === true)?.result).toMatchObject({ beatCount: 0 });
-  });
-
-  it("deletes permanent media references in bounded batches", async () => {
-    const ids = Array.from({ length: 105 }, (_, index) => index + 1);
-    const messages = await send({ requestId: "delete-media", op: "delete_messages", input: { messageIds: ids } });
-
-    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(1, -1001234567890, ids.slice(0, 100));
-    expect(transport.deleteMessagesById).toHaveBeenNthCalledWith(2, -1001234567890, ids.slice(100));
-    expect(messages.find(message => message.ok === true)?.result).toEqual({ deleted: 105 });
-  });
-
-  it("hydrates artwork by its direct message reference", async () => {
-    const messages = await send({
-      requestId: "download-artwork",
-      op: "download",
-      input: { messageId: 601, mimeType: "image/png" },
-    });
-    const completed = messages.find(message => message.ok === true);
-
-    expect(completed.result).toEqual({
-      messageId: 601,
-      dataUrl: "data:image/png;base64,iVBORw==",
-    });
   });
 
   it("streams MASTER chunks progressively from one authorized message", async () => {
@@ -635,7 +493,7 @@ describe("Galer Cloud single-file Web Worker", () => {
     expect(rejected.find(message => message.ok === false)?.error).toContain("1.9 GB");
   });
 
-  it("acquires an uncached vault peer with the bot zero-hash RPC before the first pointer INDEX and restores it for a new client", async () => {
+  it("acquires an uncached vault peer with the bot zero-hash RPC before the first catalog read and restores it for a new client", async () => {
     const session = {
       user_id: "usr-peer-test", chat_id: "-1001234567890", transport_id: "Bot01",
       transport_user_id: "4242", expected_bot_id: "4242", lease_state: "ASSIGNING" as const,
@@ -648,7 +506,6 @@ describe("Galer Cloud single-file Web Worker", () => {
         lastSessionCreatedUid: { low: 0, high: 0, unsigned: false },
       },
       temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
-      index_pointer: { message_id: 501, revision: 1 },
     };
     await send({ requestId: "peer-shutdown-old", op: "shutdown" });
     transport.setPeerAvailable(false);
@@ -683,9 +540,9 @@ describe("Galer Cloud single-file Web Worker", () => {
       .toMatchObject({ attempt: 1, vault_chat_id: "-1001234567890", channel_id: 1234567890, expected_bot_id: "4242", actual_bot_id: "4242", membership_state: "bot_visible" });
     expect(verificationMessages.some(message => message.event === "stage1-trace" && message.trace?.stage === "WORKER_PEER_BOOTSTRAP_PEER_STORED")).toBe(true);
     expect(verificationMessages.some(message => message.event === "stage1-trace" && message.trace?.stage === "WORKER_PEER_BOOTSTRAP_RESOLVE_PEER_READY")).toBe(true);
-    const firstIndex = await send({ requestId: "peer-index-fresh", op: "get_index" });
-    expect(firstIndex.find(message => message.ok === true)?.result.messageId).toBe(501);
-    expect(firstClient.getMessages).toHaveBeenCalledWith(-1001234567890, [501]);
+    expect(await send({ requestId: "peer-read-fresh", op: "catalog_read", input: { messageId: 701, offset: 0, length: 3 } }))
+      .toContainEqual(expect.objectContaining({ requestId: "peer-read-fresh", ok: true }));
+    expect(firstClient.getMessages).toHaveBeenCalledWith(-1001234567890, [701]);
     expect(firstClient.getFullChat).not.toHaveBeenCalled();
 
     await send({ requestId: "peer-shutdown-fresh", op: "shutdown" });
@@ -695,41 +552,8 @@ describe("Galer Cloud single-file Web Worker", () => {
     const restored = await send({ requestId: "peer-verify-replacement", op: "verify" });
     expect(restored.find(message => message.ok === true)?.result).toEqual(verified.result);
     expect(replacement.getChat).toHaveBeenCalledWith(expect.objectContaining({ _: "inputPeerChannel", channelId: 1234567890 }));
-    expect((await send({ requestId: "peer-index-replacement", op: "get_index" })).find(message => message.ok === true)?.result.messageId).toBe(501);
+    expect(await send({ requestId: "peer-read-replacement", op: "catalog_read", input: { messageId: 701, offset: 0, length: 3 } }))
+      .toContainEqual(expect.objectContaining({ requestId: "peer-read-replacement", ok: true }));
     expect(replacement.getFullChat).not.toHaveBeenCalled();
-  });
-
-  it("recovers a validated INDEX by Telegram pin id when getFullChat is BOT_METHOD_INVALID", async () => {
-    await send({ requestId: "pin-recovery-shutdown", op: "shutdown" });
-    await send({
-      requestId: "pin-recovery-init", op: "initialize", startupMessageIds: [],
-      session: {
-        chat_id: "-1001234567890", transport_user_id: "4242", expected_bot_id: "4242",
-        temp_api_id: 12345, temp_auth_key: new Uint8Array(256).fill(7),
-        temp_session_id: { low: 123456, high: 789, unsigned: false },
-        temp_session_state: {
-          seqNo: 2, lastMessageId: { low: 333, high: 444, unsigned: false }, timeOffset: 5,
-          serverSalt: { low: 55, high: 66, unsigned: false }, queuedAcks: [],
-          bindMsgId: { low: 111, high: 222, unsigned: false },
-          lastSessionCreatedUid: { low: 0, high: 0, unsigned: false },
-        },
-        temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
-        index_pointer: null,
-      },
-    });
-    await send({ requestId: "pin-recovery-verify", op: "verify" });
-    const active = transport.getLastClient();
-    active.getFullChat.mockRejectedValue(new Error("Telegram API error 400: BOT_METHOD_INVALID"));
-    const failed = await send({ requestId: "pin-recovery-failed", op: "get_index" }, 4000);
-    expect(failed.find(message => message.ok === false)?.error).toContain("BOT_METHOD_INVALID");
-    const recovered = await send({ requestId: "pin-recovery-by-id", op: "get_index", recoveryMessageId: 501 });
-    expect(recovered.find(message => message.ok === true)?.result).toMatchObject({
-      messageId: 501,
-      manifest: { beats: [{ id: "beat-from-index" }] },
-      pointerRepair: { expectedMessageId: null, source: "pin_recovery" },
-    });
-    const immediateRead = await send({ requestId: "pin-recovery-immediate-read", op: "get_index" });
-    expect(immediateRead.find(message => message.ok === true)?.result.messageId).toBe(501);
-    expect(active.getFullChat).toHaveBeenCalledTimes(5);
   });
 });

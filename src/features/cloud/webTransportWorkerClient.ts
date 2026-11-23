@@ -1,15 +1,10 @@
-import { playTrace, playTraceSpan } from "../playback/playTrace";
+import { playTrace } from "../playback/playTrace";
 import { isPlaybackMessageRouteSuspect, markPlaybackMessageRouteSuspect } from "../playback/webPlaybackRoutingSuspect";
 import type { WebTransportRuntime } from "./webTransportController";
 import type { WebTransportSession } from "./webTransportSession";
 import { clearWebVaultPeer, readWebVaultPeer, writeWebVaultPeer, type WebVaultPeerRef } from "./webVaultPeerCache";
 import type {
-  WebTransportDownloadInput,
-  WebTransportDownloadResult,
-  WebTransportDeleteMessagesInput,
-  WebTransportDeleteMessagesResult,
   WebTransportErrorCode,
-  WebTransportLibraryIndexResult,
   WebTransportPrefetchBatchInput,
   WebTransportPrefetchBatchResult,
   WebTransportCatalogReadInput,
@@ -21,8 +16,6 @@ import type {
   WebTransportPrefetchInput,
   WebTransportPrefetchResult,
   WebTransportPrefetchTerminal,
-  WebTransportReplaceIndexInput,
-  WebTransportReplaceIndexResult,
   WebTransportProgress,
   WebTransportStreamInput,
   WebTransportStreamResult,
@@ -34,7 +27,6 @@ import type {
 } from "./webTransportWorkerProtocol";
 
 const WEB_TRANSPORT_BOOTSTRAP_REQUEST_TIMEOUT_MS = 30_000;
-const WEB_TRANSPORT_INDEX_ACTIVE_TIMEOUT_MS = 90_000;
 const WEB_TRANSPORT_SHUTDOWN_REQUEST_TIMEOUT_MS = 5_000;
 export const WEB_TRANSPORT_INVALIDATED_EVENT = "beatgaler:web-session-invalidated";
 const PLAYBACK_PREFIX_ALIGNMENT_BYTES = 4096;
@@ -105,7 +97,6 @@ type PendingRequest = {
   firstStreamChunkSeen?: boolean;
   invalidPrefetchMessageIds?: Set<number>;
   timeoutId: ReturnType<typeof setTimeout> | null;
-  activeTimeoutMs: number | null;
 };
 
 export interface WebTransportStreamHandle {
@@ -190,18 +181,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     return pending;
   }
 
-  private onIndexState(requestId: string, pending: PendingRequest, state: "active" | "paused"): void {
-    if (pending.operation !== "get_index" || pending.activeTimeoutMs === null) return;
-    if (state === "paused") {
-      this.clearPendingTimeout(pending);
-      playTrace("WORKER_INDEX_DEADLINE_PAUSED", { request_id: requestId });
-      return;
-    }
-    if (pending.timeoutId !== null) return;
-    pending.timeoutId = setTimeout(() => this.timeoutIndexRequest(requestId), pending.activeTimeoutMs);
-    playTrace("WORKER_INDEX_DEADLINE_ACTIVE", { request_id: requestId, timeout_ms: pending.activeTimeoutMs });
-  }
-
   private onPrefetchChunk(pending: PendingRequest, progress: WebTransportPrefetchChunk): void {
     if (isReusablePlaybackPrefixEnd(progress.offsetBytes, progress.chunk.byteLength, progress.totalBytes)) {
       pending.onPrefetchChunk?.(progress);
@@ -269,8 +248,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         if (!pending.invalidPrefetchMessageIds?.has(message.terminal.messageId)) {
           pending.onPrefetchTerminal?.(message.terminal);
         }
-      } else if (message.event === "index-state") {
-        this.onIndexState(message.requestId, pending, message.state);
       } else if (message.event === "download-chunk") {
         if (!pending.firstStreamChunkSeen) {
           pending.firstStreamChunkSeen = true;
@@ -343,14 +320,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     this.failPending("Galer Cloud Web transport reset after an unresponsive worker request.");
   }
 
-  private timeoutIndexRequest(requestId: string): void {
-    const timedOut = this.takePending(requestId);
-    if (!timedOut) return;
-    playTrace("WORKER_INDEX_ACTIVE_TIMEOUT", { request_id: requestId });
-    timedOut.reject(new Error("Galer Cloud Web transport timed out during active get_index."));
-    this.sendIndexCancel(requestId);
-  }
-
   private request<T>(
     command: WebTransportWorkerRequest,
     onProgress?: (progress: WebTransportProgress) => void,
@@ -359,7 +328,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     timeoutMs: number | null = null,
     onPrefetchChunk?: (progress: WebTransportPrefetchChunk) => void,
     onPrefetchTerminal?: (terminal: WebTransportPrefetchTerminal) => void,
-    activeTimeoutMs: number | null = null,
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timeoutId = timeoutMs !== null && timeoutMs > 0
@@ -380,7 +348,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         firstStreamChunkSeen: false,
         invalidPrefetchMessageIds: command.op === "prefetch_batch" ? new Set<number>() : undefined,
         timeoutId,
-        activeTimeoutMs,
       });
       try {
         const worker = this.ensureWorker();
@@ -442,7 +409,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
         temp_session_id: session.temp_session_id,
         temp_session_state: session.temp_session_state,
         temp_primary_dcs: session.temp_primary_dcs,
-        index_pointer: session.index_pointer,
         vault_peer: readWebVaultPeer(session.temp_auth.expected_bot_id, session.chat_id),
       },
     }, undefined, undefined, undefined, this.bootstrapRequestTimeoutMs);
@@ -481,42 +447,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
       }
       throw error;
     }
-  }
-
-  getLibraryIndex(recoveryMessageId?: number): Promise<WebTransportLibraryIndexResult> {
-    const requestId = crypto.randomUUID();
-    const finish = playTraceSpan("WORKER_INDEX", { request_id: requestId });
-    return this.request<WebTransportLibraryIndexResult>(
-      { op: "get_index", ...(recoveryMessageId ? { recoveryMessageId } : {}) },
-      undefined,
-      undefined,
-      requestId,
-      null,
-      undefined,
-      undefined,
-      WEB_TRANSPORT_INDEX_ACTIVE_TIMEOUT_MS,
-    ).then(
-      result => {
-        finish();
-        return result;
-      },
-      error => {
-        finish("error");
-        throw error;
-      },
-    );
-  }
-
-  replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promise<WebTransportReplaceIndexResult> {
-    return this.request<WebTransportReplaceIndexResult>({ op: "replace_index", input });
-  }
-
-  deleteMessages(input: WebTransportDeleteMessagesInput): Promise<WebTransportDeleteMessagesResult> {
-    return this.request<WebTransportDeleteMessagesResult>({ op: "delete_messages", input });
-  }
-
-  download(input: WebTransportDownloadInput): Promise<WebTransportDownloadResult> {
-    return this.request<WebTransportDownloadResult>({ op: "download", input });
   }
 
   prefetch(input: WebTransportPrefetchInput): Promise<WebTransportPrefetchResult> {
@@ -695,10 +625,6 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
     this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op, targetRequestId } as WebTransportWorkerCommand);
   }
 
-  private sendIndexCancel(targetRequestId: string): void {
-    this.ensureWorker().postMessage({ requestId: crypto.randomUUID(), op: "cancel_index", targetRequestId } as WebTransportWorkerCommand);
-  }
-
   private sendPrefetchControl(targetRequestId: string, messageId?: number): void {
     this.ensureWorker().postMessage({
       requestId: crypto.randomUUID(),
@@ -749,9 +675,7 @@ export class WebTransportWorkerClient implements WebTransportRuntime {
 
   abortImmediately(): void {
     const worker = this.worker;
-    // A lost operation lease is a fencing event, not normal navigation. Do
-    // not wait for a potentially stuck replace_index command to acknowledge a
-    // graceful shutdown; terminate its execution context synchronously first.
+    // Fence a lost operation lease by terminating the Worker synchronously.
     this.worker = null;
     this.desiredPlaybackMessageId = null;
     this.desiredPlaybackIntentId = null;
