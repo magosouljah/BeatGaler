@@ -38,7 +38,7 @@ export type CatalogSelectionStatus = "ACTIVE" | "FROZEN" | "CONFLICT" | "RELEASE
 export interface CatalogSelection { selectionId: string; setId: string; sort: CatalogSort; defaultSelected: boolean; selectionVersion: string; status: CatalogSelectionStatus; count: number; baseRevision: string; currentRevision?: string; stale?: boolean; flags?: Record<string, boolean>; replay?: boolean; created?: boolean }
 export type CatalogSelectionOp = { kind: "INCLUDE_IDS" | "EXCLUDE_IDS"; beatIds: string[] } | { kind: "INCLUDE_RANGE" | "EXCLUDE_RANGE"; fromBeatId: string; toBeatId: string } | { kind: "CLEAR" };
 export type CatalogBulkKind = "BULK_PATCH" | "BULK_TRASH" | "BULK_RESTORE" | "TAG_RENAME";
-export type CatalogBulkStatus = "QUEUED" | "RUNNING" | "CANCELLING" | "COMPLETED" | "PARTIAL" | "CONFLICT" | "CANCELLED" | "FAILED";
+export type CatalogBulkStatus = "QUEUED" | "RUNNING" | "CANCELLING" | "COMPLETED" | "PARTIAL" | "CONFLICT" | "CANCELLED" | "FAILED" | "BLOCKED";
 export interface CatalogBulkProgress { total: number; confirmed: number; notExecuted: number; cancelled: number; conflictBatchSeq: string | number | null }
 export interface CatalogBulkOperation { operationId: string; kind: CatalogBulkKind; status: CatalogBulkStatus; setId: string | null; selectionId: string | null; selectionVersion: string | null; expectedRevision: string | null; committedRevision: string | null; progress: CatalogBulkProgress; createdAt: string; updatedAt: string; completedAt: string | null; created?: boolean; replay?: boolean; batches?: unknown[]; details?: unknown[] }
 export interface CatalogRenamePreview { from: string; to: string; countActive: number; countTrash: number; mergesInto: boolean; revision: string; epoch: string; authorityEra: string }

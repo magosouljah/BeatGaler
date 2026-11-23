@@ -1,20 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCatalogCommandsApi } from "../../src/features/library/catalog/catalogCommandsApi";
-import { createCatalogInteractionStore, type InteractionQuery } from "../../src/features/library/catalog/catalogInteractionStore";
+import { createCatalogInteractionStore, createGallerySelection, type InteractionQuery } from "../../src/features/library/catalog/catalogInteractionStore";
 import { resolveReadyQuerySet } from "../../src/features/library/catalog/catalogPlaybackSets";
 import { createCatalogFakeApi } from "../helpers/catalogFakeApi";
 import { createCatalogFakeCommands, fakeBeats } from "../helpers/catalogFakeCommands";
 
 const POLL_MS = 5;
 
-function harness({ releaseSetWhilePolling = false } = {}) {
+function harness({ releaseSetWhilePolling = false, blockWhilePolling = false } = {}) {
   const beats = fakeBeats(2).map((beat) => ({ ...beat, tags: ["original"] }));
   const server = createCatalogFakeCommands({ beats, setReadyAfterPolls: 1, bulkBatch: 1 });
   const api = createCatalogFakeApi({ n: beats.length });
   const fetchImpl: typeof fetch = async (input, init) => {
     const path = new URL(String(input)).pathname;
     const operationId = /^\/catalog\/v1\/operations\/([^/]+)$/.exec(path)?.[1];
-    if (init?.method === "GET" && operationId) {
+    if (blockWhilePolling && init?.method === "GET" && operationId) {
       const operation = server.operation(operationId);
       // Simula una fila BLOCKED tras confirmar el primer lote, antes de ejecutar el segundo.
       if (operation?.status === "RUNNING") operation.status = "BLOCKED";
@@ -46,12 +46,17 @@ function harness({ releaseSetWhilePolling = false } = {}) {
     sort: "rating",
     revision: server.revision(),
   };
-  return { commands, store, query, server, accountId, now, sleep };
+  const setNotice = vi.fn();
+  const setSelectMode = vi.fn();
+  const gallery = createGallerySelection({
+    store, query, setNotice, setSelectMode, ordinalOf: () => undefined, refreshAfterMutation: vi.fn(),
+  });
+  return { commands, store, query, server, accountId, now, sleep, gallery, setNotice, setSelectMode };
 }
 
 const releasedError = { status: 409, code: "CURSOR_STALE", detail: { status: "RELEASED" } };
-const blockedReport = { status: "BLOCKED", report: { total: 2, confirmed: 1, completed: false } };
-const timeoutNotice = "La operación sigue en curso en el servidor; vuelve a consultar más tarde.";
+const blockedNotice = "La operación quedó bloqueada y no se completó. Revisa tu conexión o inténtalo de nuevo.";
+const blockedResult = { status: "BLOCKED", report: { total: 2, confirmed: 1, completed: false }, error: blockedNotice };
 
 describe("contrato de estados del catálogo", () => {
   it("seleccionar todo rechaza un conjunto RELEASED tras el primer GET y no crea una selección", async () => {
@@ -76,36 +81,53 @@ describe("contrato de estados del catálogo", () => {
     expect(server.counters["GET /catalog/v1/query-sets/:id"]).toBe(1);
   });
 
-  // CARACTERIZACIÓN ACTUAL (STOP-DESIGN C05, 2026-11-21): estos dos casos fijan la conducta de HOY ante BLOCKED
-  // (sondeo hasta el límite sin aviso en el estado: bulk.error null), no la deseada. Hoy el servidor no escribe
-  // BLOCKED en catalog_operations (failJob solo marca catalog_jobs), así que en producción se ve RUNNING/QUEUED.
-  // Cuando el propietario decida qué debe hacer la Galería con BLOCKED, invertir estas aserciones.
-  it("caracterización actual (STOP-DESIGN C05): bulk vuelve a consultar un BLOCKED hasta el límite, conserva el progreso y limpia la selección", async () => {
-    const { store, query, server } = harness();
+  it.each(["BULK_PATCH", "BULK_TRASH"] as const)("%s detiene el sondeo en BLOCKED, publica el aviso y limpia la selección", async (kind) => {
+    const { store, query, server, gallery, setNotice, setSelectMode } = harness({ blockWhilePolling: true });
     await store.selectAll(query);
+    const selectionId = store.getSnapshot().selection.selectionId!;
 
-    const result = await store.startBulk("BULK_TRASH");
+    if (kind === "BULK_PATCH") gallery.applyBulkUpdate({ rating: 5 });
+    else gallery.handleRemoveBulk();
 
-    expect(server.counters["GET /catalog/v1/operations/:id"]).toBe(3);
-    expect(result).toMatchObject({ ...blockedReport, error: timeoutNotice });
+    await vi.waitFor(() => expect(setNotice).toHaveBeenCalledExactlyOnceWith(blockedNotice));
+    expect(server.counters["GET /catalog/v1/operations/:id"]).toBe(2);
+    expect(server.counters["POST /catalog/v1/operations"]).toBe(1);
+    expect(server.selection(selectionId)?.status).toBe("FROZEN");
+    expect(setSelectMode).toHaveBeenCalledExactlyOnceWith(false);
     expect(store.getSnapshot()).toMatchObject({
-      bulk: { ...blockedReport, error: null },
-      selection: { status: "none" },
+      bulk: blockedResult,
+      selection: { status: "none", count: 0, selectionId: null },
     });
   });
 
-  it("caracterización actual (STOP-DESIGN C05): renombrar un tag queda en parcial cuando BLOCKED persiste hasta el límite", async () => {
-    const { store, server } = harness();
+  it("RUNNING mantiene la selección congelada y vuelve a sondear hasta COMPLETED", async () => {
+    const { store, query, server } = harness();
+    await store.selectAll(query);
+    const observed = vi.fn(store.getSnapshot);
+    store.subscribe(observed);
+
+    const result = await store.startBulk("BULK_TRASH");
+
+    expect(observed.mock.results.map(({ value }) => value)).toContainEqual(expect.objectContaining({
+      bulk: expect.objectContaining({ status: "RUNNING", error: null }),
+      selection: expect.objectContaining({ status: "frozen" }),
+    }));
+    expect(server.counters["GET /catalog/v1/operations/:id"]).toBe(2);
+    expect(result).toMatchObject({ status: "COMPLETED", report: { confirmed: 2, completed: true }, error: null });
+  });
+
+  it("renombrar un tag detiene el sondeo en BLOCKED y publica el aviso con el progreso parcial conservado", async () => {
+    const { store, server, gallery, setNotice } = harness({ blockWhilePolling: true });
     store.openRename("original");
     store.setRenameTarget("nuevo");
     await store.previewRename();
 
-    const result = await store.confirmRename();
+    gallery.confirmTagRename();
 
-    expect(server.counters["GET /catalog/v1/operations/:id"]).toBe(3);
-    expect(result).toMatchObject({ ...blockedReport, error: timeoutNotice });
+    await vi.waitFor(() => expect(setNotice).toHaveBeenCalledExactlyOnceWith(blockedNotice));
+    expect(server.counters["GET /catalog/v1/operations/:id"]).toBe(2);
     expect(store.getSnapshot().rename).toMatchObject({
-      stage: "partial", error: "Renombrado blocked: 1/2 confirmados.",
+      stage: "partial", error: blockedNotice, operation: blockedResult,
     });
   });
 });
