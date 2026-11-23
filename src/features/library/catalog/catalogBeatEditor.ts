@@ -389,14 +389,13 @@ interface GalleryBeatEditorPorts {
   setNotice(value: string | null): void;
   confirm: AudioEditOptions["confirm"];
   setBusy(beatId: string, busy: boolean, complete?: boolean): void;
-  playingId: string | null;
-  releaseFile(): void;
+  onTrashConfirmed(beatId: string): void;
   forgetArtworkOf(beatId: string): void;
 }
 
 export function createGalleryBeatEditor({
   mutations, media, knownDto, errorMessage, refreshAfterMutation, setNotice, confirm, setBusy,
-  playingId, releaseFile, forgetArtworkOf,
+  onTrashConfirmed, forgetArtworkOf,
 }: GalleryBeatEditorPorts) {
   const editor = createBeatEditor({
     mutations, knownDto, errorMessage,
@@ -419,8 +418,8 @@ export function createGalleryBeatEditor({
   function deleteBeat(beat: Beat) {
     const dto = knownDto(beat.id);
     if (!dto) return;
-    if (playingId === beat.id) releaseFile();
     void editor.trash([{ beatId: dto.id, expectedVersion: dto.version }]).then((result) => {
+      if (result.reading === "success") onTrashConfirmed(dto.id);
       if (result.reading === "rejected" && !result.partial) setNotice(result.message);
       if (effectsFor("trash", result).refresh) refreshAfterMutation();
     }).catch((error) => setNotice(errorText(error)));

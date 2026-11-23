@@ -42,7 +42,7 @@ export interface AudioState {
   endedSeq: number;
 }
 
-export function useAudio() {
+export function useAudio(onUnavailable?: () => void) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sourceUrlsRef = useRef<string[]>([]);
   const sourceIndexRef = useRef(0);
@@ -53,12 +53,15 @@ export function useAudio() {
   const routeRecoveryBeatIdRef = useRef<string | null>(null);
   const routeRecoveryResumeTimeRef = useRef(0);
   const firstProgressIntentRef = useRef<number | null>(null);
+  const onUnavailableRef = useRef(onUnavailable);
+  onUnavailableRef.current = onUnavailable;
   const [state, setState] = useState<AudioState>({ playingId: null, isPlaying: false, progress: 0, duration: 0, volume: 0.75, endedSeq: 0 });
 
   const getAudio = useCallback(() => {
     if (!audioRef.current) { audioRef.current = new Audio(); audioRef.current.volume = 0.75; }
     return audioRef.current;
   }, []);
+  const isAudioPaused = useCallback(() => audioRef.current?.paused ?? true, []);
 
   useEffect(() => {
     const audio = getAudio();
@@ -73,7 +76,11 @@ export function useAudio() {
         sourceIndexRef.current = nextIndex; audio.src = sourceUrlsRef.current[nextIndex]; audio.load(); audio.play().catch(console.error); return;
       }
       const failedBeatId = currentBeatIdRef.current; console.error("Audio playback failed for all available sources.", sourceUrlsRef.current); audio.pause(); audio.removeAttribute("src"); audio.load(); platform.media.releasePlayback(failedBeatId); sourceUrlsRef.current = []; sourceIndexRef.current = 0; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 }));
-      if (!errorNotifiedRef.current) { errorNotifiedRef.current = true; window.dispatchEvent(new CustomEvent("beatgaler:audio-unavailable", { detail: { beatId: failedBeatId } })); }
+      if (!errorNotifiedRef.current) {
+        errorNotifiedRef.current = true;
+        if (failedBeatId) onUnavailableRef.current?.();
+        window.dispatchEvent(new CustomEvent("beatgaler:audio-unavailable", { detail: { beatId: failedBeatId } }));
+      }
     };
     const syncDuration = () => { const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0; setState(s => ({ ...s, duration, progress: duration ? Math.max(0, Math.min(1, audio.currentTime / duration)) : 0 })); };
     const onTimeUpdate = () => { syncDuration(); const intentId = preparedWebPlaybackIntentIdForUrl(audio.currentSrc || audio.src); if (intentId !== null && audio.currentTime > 0 && firstProgressIntentRef.current !== intentId) { firstProgressIntentRef.current = intentId; playTrace("AUDIO_FIRST_PROGRESS", { beat_id: currentBeatIdRef.current, intent_id: intentId, current_time: audio.currentTime, ready_state: audio.readyState }); } publishPlaybackState(); };
@@ -86,7 +93,10 @@ export function useAudio() {
     const onPause = () => { const beatId = currentBeatIdRef.current; waitingRef.current = false; setState(s => ({ ...s, isPlaying: false })); publishPlaybackState(); if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:audio-idle", { detail: { beatId } })); };
     const onError = () => {
       waitingRef.current = false; playTrace("AUDIO_EVENT_ERROR", { beat_id: currentBeatIdRef.current, media_error: audio.error?.code || null, priming: primingRef.current }); publishPlaybackState(); if (primingRef.current) return;
+      const failedBeatId = currentBeatIdRef.current;
+      const failedSources = sourceUrlsRef.current;
       queueMicrotask(() => {
+        if (failedBeatId !== currentBeatIdRef.current || failedSources !== sourceUrlsRef.current) return;
         if (routeRecoveryBeatIdRef.current && routeRecoveryBeatIdRef.current === currentBeatIdRef.current) {
           waitingRef.current = true;
           playTrace("AUDIO_ROUTE_RECOVERY_ERROR_HELD", { beat_id: currentBeatIdRef.current });
@@ -176,5 +186,5 @@ export function useAudio() {
   const seek = useCallback((ratio: number) => { const audio = getAudio(); if (Number.isFinite(audio.duration) && audio.duration > 0 && Number.isFinite(ratio)) { const next = Math.max(0, Math.min(1, ratio)); audio.currentTime = next * audio.duration; setState(s => ({ ...s, progress: Math.max(0, Math.min(1, audio.currentTime / audio.duration)), duration: audio.duration })); const beatId = currentBeatIdRef.current; if (beatId) window.dispatchEvent(new CustomEvent("beatgaler:web-playback-state", { detail: { beatId, currentTime: audio.currentTime, playing: !audio.paused, waiting: waitingRef.current } })); } }, [getAudio]);
   const setVolume = useCallback((volume: number) => { const audio = getAudio(); const next = Math.max(0, Math.min(1, volume)); audio.volume = next; setState(s => ({ ...s, volume: next })); }, [getAudio]);
   const releaseFile = useCallback(() => { const audio = getAudio(); const releasedBeatId = currentBeatIdRef.current; audio.pause(); audio.removeAttribute("src"); audio.load(); sourceUrlsRef.current = []; sourceIndexRef.current = 0; currentBeatIdRef.current = null; errorNotifiedRef.current = false; waitingRef.current = false; routeRecoveryBeatIdRef.current = null; routeRecoveryResumeTimeRef.current = 0; platform.media.releasePlayback(releasedBeatId); setState(s => ({ ...s, playingId: null, isPlaying: false, progress: 0, duration: 0 })); }, [getAudio]);
-  return { state, play, primeAudioEngine, armPlaybackGesture, togglePause, seek, setVolume, releaseFile };
+  return { state, play, primeAudioEngine, armPlaybackGesture, togglePause, seek, setVolume, releaseFile, isAudioPaused };
 }
