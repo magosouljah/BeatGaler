@@ -21,7 +21,7 @@ const account = {
   beatgalerUserId: 'composition-installation',
 };
 
-async function withCloud(exercise) {
+async function withCloud(exercise, { inMemory = false, prepare } = {}) {
   assert.equal(findLocalSecretFiles(path.dirname(cloudDir)).length, 0, 'El Cloud de prueba requiere un worktree limpio.');
   const timeoutMs = Number(process.env.BEATGALER_COMPOSITION_STARTUP_TIMEOUT_MS ?? 60_000);
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2 ** 31 - 1,
@@ -48,6 +48,7 @@ async function withCloud(exercise) {
       AWS_SHARED_CREDENTIALS_FILE: path.join(stateDir, 'no-aws-credentials'),
       AWS_EC2_METADATA_DISABLED: 'true',
     };
+    prepare?.(stateDir);
 
     // El registro compuesto exige pending signup con PostgreSQL. Solo se
     // siembra el usuario con un vault ficticio ya asignado. El login emite la sesión.
@@ -96,6 +97,11 @@ async function withCloud(exercise) {
     // Se mantiene la cadena de listen de producción. Solo se sustituye el bind.
     express.application.listen = function listen(_port, _host, callback) {
       if (startupTimeout) throw startupTimeout;
+      if (inMemory) {
+        callback?.();
+        resolveListen(this);
+        return {};
+      }
       server = originalListen.call(this, 0, '127.0.0.1', callback);
       server.once('error', rejectListen);
       server.once('listening', () => {
@@ -107,7 +113,7 @@ async function withCloud(exercise) {
     restoreListen = () => {
       // Si el arranque se suspendió antes del bind, bloquear un listen tardío
       // en este proceso aislado aunque el temporal ya se haya borrado.
-      if (!startupTimeout || server) express.application.listen = originalListen;
+      if (!startupTimeout || server || app) express.application.listen = originalListen;
     };
     const timer = setTimeout(expireStartup, timeoutMs);
     let app;
@@ -119,6 +125,11 @@ async function withCloud(exercise) {
     }
     console.log(`Arranque compuesto hasta listen: ${elapsedMs()} ms.`);
     assert.equal(process.exitCode || 0, 0, 'Falló el arranque compuesto.');
+    if (inMemory) {
+      await exercise(app);
+      assert.deepEqual(attempts, [], 'El Cloud en memoria no debe intentar conexiones.');
+      return;
+    }
     const port = server.address().port;
     await exercise(app, (method, url, options) => send(port, method, url, options));
     assert.ok(attempts.length > 0, 'El guard debe observar las peticiones del humo.');
