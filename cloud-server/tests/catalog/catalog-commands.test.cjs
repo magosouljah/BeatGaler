@@ -28,6 +28,26 @@ const LIB = { user_id: 'u1', vault_id: 'v1', authority: 'POSTGRES', migration_st
 const make = (pool, options = {}) => commands.createCatalogCommands({ pool, authority: authority.createCatalogAuthority({ pool, env: { BEATGALER_CATALOG_NATIVE_ENABLED: 'true' }, controlPlaneAuthority: 'postgres' }), ...options });
 const H = { era: 'era-1', epoch: '1', idempotencyKey: 'k-1' };
 
+test('una operación BLOCKED se puede cancelar y rechaza la reanudación con 409', async () => {
+  const operation = { operation_id: 'op1', status: 'BLOCKED', total_frozen: '3', confirmed: '1', not_executed: '0' };
+  const pool = fakePool({ lib: LIB, onQuery(sql, params) {
+    if (sql.includes('FROM catalog_operations o')) return { rows: [operation] };
+    if (sql.startsWith("UPDATE catalog_operations SET status = 'CANCELLED'")) {
+      operation.status = 'CANCELLED';
+      operation.cancelled = params[2];
+      return { rows: [] };
+    }
+  } });
+  const service = make(pool);
+  const input = { ...H, userId: 'u1', operationId: 'op1' };
+  await assert.rejects(service.resumeOperation({ ...input, revision: '5' }), {
+    status: 409, code: 'OPERATION_TRANSITION_INVALID', detail: { status: 'BLOCKED' },
+  });
+  const cancelled = await service.cancelOperation(input);
+  assert.equal(cancelled.status, 'CANCELLED');
+  assert.equal(cancelled.progress.cancelled, 2);
+});
+
 test('PATCH conserva la forma y el orden del beat en la respuesta', async (t) => {
   const cases = [
     { name: 'tags y portada ausente', tags: ['Trap'], has_artwork: false, wire: '{"id":"b1","version":"1","state":"ACTIVE","name":"Beat","bpm":"120","key":"Cm","tags":["Trap"],"rating":5,"color":null,"color2":null,"hasArtwork":false}' },

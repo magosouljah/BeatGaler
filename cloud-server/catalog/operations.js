@@ -559,13 +559,17 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
     try {
       client = await pool.connect();
       await client.query('BEGIN');
-      const j = (await client.query('SELECT attempts FROM catalog_jobs WHERE job_id = $1 AND state = \'LEASED\' AND lease_owner = $2 AND lease_generation = $3::bigint FOR UPDATE', [jobId, lease.owner, lease.generation])).rows[0];
+      const j = (await client.query('SELECT attempts, user_id, kind, operation_id FROM catalog_jobs WHERE job_id = $1 AND state = \'LEASED\' AND lease_owner = $2 AND lease_generation = $3::bigint FOR UPDATE', [jobId, lease.owner, lease.generation])).rows[0];
       if (!j) throw new CatalogQueryError('LEASE_FENCED', 409, 'stale worker: failure ignored', { job_id: jobId });
       const blocked = !transient || j.attempts >= JOB_TRANSIENT_FAILURES_TO_BLOCK;
       const delay = backoffMs(j.attempts, retryAfterMs);
       const r = await client.query(`UPDATE catalog_jobs SET state = $2, lease_owner = NULL, lease_until = NULL, last_error = $3, next_attempt_at = now() + make_interval(secs => $4) WHERE job_id = $1 AND state = 'LEASED' AND lease_owner = $5 AND lease_generation = $6::bigint RETURNING state, next_attempt_at`,
         [jobId, blocked ? 'BLOCKED' : 'QUEUED', String(error ?? '').slice(0, 1000), delay / 1000, lease.owner, lease.generation]);
       if (!r.rows.length) throw new CatalogQueryError('LEASE_FENCED', 409, 'stale worker: failure ignored', { job_id: jobId });
+      if (blocked && j.kind === 'OPERATION_STEP' && j.operation_id) {
+        await client.query(`UPDATE catalog_operations SET status = 'BLOCKED'
+          WHERE user_id = $1 AND operation_id = $2 AND status IN ('QUEUED', 'RUNNING')`, [j.user_id, j.operation_id]);
+      }
       await client.query('COMMIT');
       return { jobId, state: r.rows[0].state, nextAttemptAt: r.rows[0].next_attempt_at, delayMs: delay };
     } catch (error) { if (client) await client.query('ROLLBACK').catch(() => {}); throw sqlError(error); } finally { client?.release(); }
