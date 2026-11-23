@@ -30,8 +30,8 @@ const SC = {
     ['cloud-server/control-plane-json-compat.js', 'response.send = function'],
   ],
   'B  Edit a beat\'s metadata (Drawer Save -> SQL UPDATE)': [
-    ['src/components/Drawer.tsx', 'onCatalogSave'],
-    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.saveDrawerToCatalog'],
+    ['src/components/Drawer.tsx', 'onWebSave'],
+    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.saveWebDrawer'],
     ['src/features/library/catalog/useCatalogGalleryScope.ts', 'saveDrawerToCatalog'],
     ['src/features/library/catalog/catalogBeatEditor.ts', 'mutations.patchBeat'],
     ['src/features/library/catalog/catalogMutations.ts', 'async function patchBeat'],
