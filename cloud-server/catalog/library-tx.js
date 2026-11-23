@@ -76,11 +76,16 @@ function decide(variant, { intent }) {
   };
 }
 
-function withDeadline(promise, ms) {
+function withDeadline(promise, ms, onTimeout) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog request exceeded the total time budget', { budget_ms: ms })), ms);
+    timer = setTimeout(() => {
+      const error = new CatalogQueryError('CATALOG_QUERY_TIMEOUT', 503, 'catalog request exceeded the total time budget', { budget_ms: ms });
+      onTimeout(error);
+      reject(error);
+    }, ms);
   });
+  // The race already observes rejection from work that settles after the deadline.
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
@@ -103,6 +108,7 @@ function createLibraryTx({ pool, authority, variant }) {
     if (policy.availability) await authority.availability();
     if (policy.checkPool && (!pool || typeof pool.connect !== 'function')) throw unavailable('POSTGRES_UNAVAILABLE');
     const client = await pool.connect();
+    let deadlineError;
 
     async function work() {
       await client.query(policy.begin);
@@ -120,6 +126,7 @@ function createLibraryTx({ pool, authority, variant }) {
         }
         if (policy.queryContext) {
           ctx = (await client.query(LIB_SQL, [uid])).rows[0] || null;
+          if (deadlineError) throw deadlineError;
           if (!ctx || ctx.authority !== 'POSTGRES' || !ctx.active_generation_id) {
             if (intent === 'read') return NO_LIBRARY;
             await client.query('ROLLBACK');
@@ -140,19 +147,23 @@ function createLibraryTx({ pool, authority, variant }) {
         else if (policy.onError !== 'commitFinally') await client.query('ROLLBACK').catch(() => {});
         throw error;
       } finally {
-        if (policy.onError === 'commitFinally') await client.query('COMMIT').catch(() => {});
+        if (policy.onError === 'commitFinally' && !deadlineError) await client.query('COMMIT').catch(() => {});
       }
     }
 
     let result;
     try {
       const pending = work();
-      // La lectura de queries conserva el plazo y la liberación heredados.
-      result = await (policy.deadlineMs ? withDeadline(pending, policy.deadlineMs) : pending);
+      result = await (policy.deadlineMs ? withDeadline(pending, policy.deadlineMs, (error) => {
+        deadlineError = error;
+        // A suspended callback may still hold this client after it is destroyed.
+        client.query = () => Promise.reject(error);
+      }) : pending);
     } catch (error) {
       throw policy.errorMap(error);
     } finally {
-      client.release();
+      if (deadlineError) client.release(true);
+      else client.release();
     }
     if (result === NO_LIBRARY) {
       await authority.resolveContext({ userId: uid });
