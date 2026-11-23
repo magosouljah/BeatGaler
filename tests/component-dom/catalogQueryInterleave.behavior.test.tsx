@@ -26,6 +26,45 @@ afterEach(() => {
 });
 
 describe("R-002 · orden y filtros diferidos de Gallery", () => {
+  it("publica el cambio de includeMode a reproducción con los demás filtros intactos", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const originalHref = window.location.href;
+    const originalHistory = window.history.state;
+    window.history.replaceState(null, "", "/gallery?bgInclude=odd&bgInclude=t3");
+    const beats = fakeBeats(4);
+    const server = createCatalogFakeCommands({ beats });
+    const api = createCatalogFakeApi({
+      n: beats.length,
+      generate: (i) => ({ ...beats[i], state: "ACTIVE", manualRank: beats[i].rank }),
+    });
+    const context = { authority_era: "era-fake", authority_epoch: "1", revision: server.revision() };
+    for (let rev = 1; rev < Number(context.revision); rev++) api.fake.bumpRevision();
+    const accountId = "fake-user";
+    const services = createCatalogServices({
+      api, accountId, context, fetchImpl: server.fetchImpl,
+      baseUrl: () => "https://cloud.invalid/api", token: () => "fake", csrf: () => "fake",
+      direct: server.directPort, prefixCache: null, artworkCache: null,
+    });
+    const root = createRoot(document.createElement("div"));
+
+    try {
+      await act(async () => {
+        root.render(<Probe options={{ services, accountId, context }} onScope={() => {}} />);
+      });
+      const initialQuery = services.playback.getSnapshot().query!;
+      expect(initialQuery.filters).toMatchObject({ includeTags: ["odd", "t3"], includeMode: "any" });
+      const filters = { ...initialQuery.filters, includeMode: "all" as const };
+      await act(async () => { await services.store.setQuery(filters, initialQuery.sort); });
+
+      expect(services.store.getSnapshot().filters).toEqual(filters);
+      expect(services.playback.getSnapshot().query).toEqual({ ...initialQuery, filters });
+    } finally {
+      act(() => root.unmount());
+      await services.teardown();
+      window.history.replaceState(originalHistory, "", originalHref);
+    }
+  });
+
   it.each<[Action, Action]>([["search", "sort"], ["sort", "tags"], ["sort", "search"], ["tags", "sort"]])(
     "%s → %s conserva el orden y la pista en curso al aplicar el filtro",
     async (first, second) => {

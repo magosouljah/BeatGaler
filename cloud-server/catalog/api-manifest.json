@@ -580,6 +580,7 @@
       "body": "{revision (actual, explícita)}",
       "response": "operation RUNNING",
       "errors": [
+        "400 INPUT_INVALID (id o revisión inválidos, o id del job de reanudación >64 caracteres)",
         "409 OPERATION_TRANSITION_INVALID",
         "409 REVISION_MISMATCH"
       ]

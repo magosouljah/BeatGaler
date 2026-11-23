@@ -28,6 +28,33 @@ const LIB = { user_id: 'u1', vault_id: 'v1', authority: 'POSTGRES', migration_st
 const make = (pool, options = {}) => commands.createCatalogCommands({ pool, authority: authority.createCatalogAuthority({ pool, env: { BEATGALER_CATALOG_NATIVE_ENABLED: 'true' }, controlPlaneAuthority: 'postgres' }), ...options });
 const H = { era: 'era-1', epoch: '1', idempotencyKey: 'k-1' };
 
+test('rechaza un job de reanudación de 65 caracteres antes de consultar SQL', async () => {
+  const pool = fakePool();
+  const operationId = 'o'.repeat(32);
+  const revision = '123456789012345678';
+  await assert.rejects(make(pool).resumeOperation({ ...H, userId: 'u1', operationId, revision }), {
+    status: 400, code: 'INPUT_INVALID', detail: { reason: 'OPERATION_ID' },
+  });
+  assert.equal(pool.statements.length, 0);
+});
+
+test('reanuda con el mismo job id cuando mide exactamente 64 caracteres', async () => {
+  const operationId = 'o'.repeat(31);
+  const revision = '123456789012345678';
+  const operation = { operation_id: operationId, status: 'CONFLICT', total_frozen: '3', confirmed: '1', not_executed: '0' };
+  const pool = fakePool({ lib: { ...LIB, revision }, onQuery(sql) {
+    if (sql.includes('FROM catalog_operations o')) return { rows: [operation] };
+    if (sql.startsWith("UPDATE catalog_operations SET status = 'RUNNING'")) operation.status = 'RUNNING';
+  } });
+
+  const result = await make(pool).resumeOperation({ ...H, userId: 'u1', operationId, revision });
+
+  assert.equal(result.status, 'RUNNING');
+  assert.equal(result.resumed, true);
+  const jobs = pool.statements.filter(({ sql }) => sql.startsWith('INSERT INTO catalog_jobs'));
+  assert.deepEqual(jobs.map(({ params }) => params[0]), [`job-op-${operationId}-resume-${revision}`]);
+});
+
 test('una operación BLOCKED se puede cancelar y rechaza la reanudación con 409', async () => {
   const operation = { operation_id: 'op1', status: 'BLOCKED', total_frozen: '3', confirmed: '1', not_executed: '0' };
   const pool = fakePool({ lib: LIB, onQuery(sql, params) {
