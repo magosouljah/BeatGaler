@@ -36,6 +36,7 @@ const CATALOG_SESSION_PROTOCOL = 'catalog-v1';
 const INDEX_OPERATION_TYPES = Object.freeze(['get_index', 'replace_index', 'delete_messages']);
 // §8.5: ningún cliente nativo recibe credenciales de Telegram.
 const DIRECT_CREDENTIAL_KEYS = Object.freeze(['bot_token', 'telegram_api_id', 'telegram_api_hash', 'api_id', 'api_hash']);
+const PERMANENT_CREDENTIAL = /^(?:bot_token|(?:telegram_)?api_hash|(?:perm|permanent)_auth_key)$/i;
 const SQLSTATE = Object.freeze({
   LEGACY_WRITE_FORBIDDEN: 'BGL01', CASCADE_FORBIDDEN: 'BGC02', VAULT_REBIND_FORBIDDEN: 'BGR03', NATIVE_RULE: 'BGN04', AUTHORITY_FORBIDDEN: 'BGA05',
 });
@@ -80,15 +81,26 @@ function parseTransportBotIds(text) {
   return parsed.map((id) => id.trim());
 }
 
+function stripDirectPublicJson(body, rootOnlyKeys) {
+  // El replacer también ve los campos que aportan los métodos toJSON anidados.
+  let root;
+  let first = true;
+  const json = JSON.stringify(body, function (key, value) {
+    if (first) {
+      first = false;
+      root = value;
+      return value;
+    }
+    if (PERMANENT_CREDENTIAL.test(key) || (this === root && rootOnlyKeys.includes(key))) return undefined;
+    return value;
+  });
+  return json === undefined ? undefined : JSON.parse(json);
+}
+
 // Devuelve una copia sin credenciales de Telegram (§8.5, probado sobre el JSON serializado).
 function stripDirectCredentials(session) {
-  if (!session || typeof session !== 'object' || Array.isArray(session)) return session;
-  const out = {};
-  for (const [key, value] of Object.entries(session)) {
-    if (DIRECT_CREDENTIAL_KEYS.includes(key)) continue;
-    out[key] = value;
-  }
-  return out;
+  if (!session || typeof session !== 'object') return session;
+  return stripDirectPublicJson(session, ['telegram_api_id', 'api_id']);
 }
 function containsDirectCredentials(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
@@ -328,6 +340,6 @@ module.exports = {
   RESET_LIBRARY_SQL,
   NATIVE_FLAG_ENV, ACCOUNT_DELETION_FLAG_ENV, CATALOG_SESSION_PROTOCOL, INDEX_OPERATION_TYPES, DIRECT_CREDENTIAL_KEYS, SQLSTATE,
   CatalogAuthorityError, catalogNativeConfig, createCatalogAuthority, evaluateNativePredicate, nativeGenerationDescriptor, canonicalJson,
-  stripDirectCredentials, containsDirectCredentials, assertNativeStartupCompatible, assertNoNativeActivation,
+  stripDirectCredentials, stripDirectPublicJson, containsDirectCredentials, assertNativeStartupCompatible, assertNoNativeActivation,
   configureCatalogAuthority, currentCatalogAuthority, assertVaultRebindAllowedIfConfigured,
 };
