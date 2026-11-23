@@ -11,7 +11,7 @@ import type { CatalogServices } from "./catalogLibraryProvider";
 import { createGallerySelection, useCatalogInteraction, type InteractionQuery } from "./catalogInteractionStore";
 import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { createGalleryPlaybackCommands, linkPlayback, reportPlaybackFailure } from "./catalogPlaybackLink";
-import { createGalleryBeatEditor } from "./catalogBeatEditor";
+import { createGalleryBeatEditor, dispatchWebDrawerSave } from "./catalogBeatEditor";
 import { appAlert, appConfirm } from "../../../lib/dialog";
 import { createGalleryDownloads, saveBlobWithBrowser, type DownloadKind, type GalleryDownloadFiles } from "./catalogDownloads";
 import { setBeatCloudUpdateBusy } from "../../cloud/beatCloudUpdateBusy";
@@ -198,13 +198,6 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   // ---- importación (T12) desde «Add beat» del navegador ----
   const [showAdd, setShowAdd] = useState(false);
   const { open: addBeatsAndReview, cancelReview, save: saveReview } = importSession;
-  const saveWebDrawer: WebDrawerSave = (request) => {
-    switch (request.kind) {
-      case "review": return saveReview(request.updated, request.onProgress);
-      case "edit": return saveDrawerToCatalog(request);
-      case "bulk": return applyBulkUpdate(request.updates, request.options);
-    }
-  };
   useEffect(() => { importSession.advanceReview(); }, [importSession, review]);
   const { residentIds, pendingCards } = useMemo(() => projectPendingCards(pendingImports, snapshot.blocks),
     [pendingImports, snapshot.blocks]);
@@ -242,7 +235,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     selectMode, selectedCount: interaction.selection.count, selectionStatus: interaction.selection.status, selectedBeats, toggleSelection, toggleSelectAll, finishSelection, clearSelection,
     handlePlay, handleWarm, addToQueue, handleNext, handlePrev, toggleShuffle, cycleRepeat, showQueue, toggleQueue, closeQueue, playQueueIndex, queuedBeats, currentBeat,
     shuffleEnabled: playback.shuffle, repeatMode: playback.repeat, togglePause, seek, setVolume, releaseFile,
-    drawer, setDrawer, saveWebDrawer, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
+    drawer, setDrawer, saveWebDrawer: ((request) => dispatchWebDrawerSave(request, { review: saveReview, edit: saveDrawerToCatalog, bulk: applyBulkUpdate })) as WebDrawerSave, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
     showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, uploads, pendingCards, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,

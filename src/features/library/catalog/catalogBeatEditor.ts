@@ -1,4 +1,5 @@
 import type { Beat } from "../../../types";
+import type { WebDrawerSave } from "../../../components/Drawer";
 import type { PlatformBeatEditFiles, PlatformCloudCommitProgress } from "../../../platform/contracts";
 import type { ArtworkDropSource } from "../../dragdrop/browserArtwork";
 import { fetchInternetArtworkDataUrl } from "../../artwork/internetArtwork";
@@ -460,4 +461,22 @@ export function createGalleryBeatEditor({
   }
 
   return { commitDrawerCloudMutation, deleteBeat, saveDrawerToCatalog, replaceAudioByDrop, replaceArtworkByDrop };
+}
+
+type WebDrawerRequest = Parameters<WebDrawerSave>[0];
+
+/** Una sola capacidad de guardado Web del Drawer: despacha cada modo a su intención (M3.2b). */
+export function dispatchWebDrawerSave(
+  request: WebDrawerRequest,
+  handlers: {
+    review(updated: Beat, onProgress: Extract<WebDrawerRequest, { kind: "review" }>["onProgress"]): Promise<void> | void;
+    edit(request: Extract<WebDrawerRequest, { kind: "edit" }>): Promise<void> | void;
+    bulk(updates: Partial<Beat>, options?: { tagsMode: "add" | "replace" | "remove" }): Promise<void> | void;
+  },
+): Promise<void> | void {
+  switch (request.kind) {
+    case "review": return handlers.review(request.updated, request.onProgress);
+    case "edit": return handlers.edit(request);
+    case "bulk": return handlers.bulk(request.updates, request.options);
+  }
 }
