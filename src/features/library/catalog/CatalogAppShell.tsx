@@ -66,6 +66,8 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
     },
   });
   const closeAdd = () => { setDroppedFile(null); scope.setShowAdd(false); };
+  // B11: cerrar «Añadir» por cualquier vía (Escape incluido) libera el archivo soltado y reabre el arrastre.
+  useEffect(() => { if (!scope.showAdd) setDroppedFile(null); }, [scope.showAdd]);
   const openAdd = () => { if (!scope.rejectOfflineMutation("Adding a beat")) scope.setShowAdd(true); };
   // Scope para GalleryChrome (misma forma que el legacy; `displayedBeats` no existe en POSTGRES: la selección es global en el servidor).
   const chromeScope: GalleryChromeScope = {

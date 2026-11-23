@@ -207,7 +207,7 @@ export function createImportSession(ports: ImportSessionPorts): ImportSession {
       }
       const failure = error || (reading?.reading === "rejected" && reading.error);
       const reason = failure ? importFailureMessage(failure) : `quedó en estado ${outcome ? outcome.status : "desconocido"}`;
-      const patch = { uploads, pendingCards, notice: `No se pudo importar «${updated.name}»: ${reason.replace(/[.s]+$/, "")}. Tus cambios siguen en la revisión.` };
+      const patch = { uploads, pendingCards, notice: `No se pudo importar «${updated.name}»: ${reason.replace(/[.\s]+$/, "")}. Tus cambios siguen en la revisión.` };
       if (importer.fileForBeat(reviewId)) showReview({ beat: updated, hydrated: null }, patch);
       else update(patch);
     });

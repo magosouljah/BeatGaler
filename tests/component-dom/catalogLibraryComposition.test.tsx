@@ -5,13 +5,14 @@
 // virtualizadas desde el store acotado, selección por toggle y aviso condicional.
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LibraryCompositionGate, type LibraryCompositionState } from "../../src/features/library/catalog/LibraryCompositionGate";
 import { createCatalogServices, useLibraryComposition } from "../../src/features/library/catalog/catalogLibraryProvider";
 import { CatalogGalleryWorkspace } from "../../src/features/library/catalog/CatalogGalleryWorkspace";
 import type { LibraryComposition } from "../../src/features/library/catalog/catalogComposition";
 import { createCatalogFakeApi } from "../helpers/catalogFakeApi";
 import { createCatalogFakeCommands, fakeBeats } from "../helpers/catalogFakeCommands";
+import { platform } from "../../src/platform";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let roots: Root[] = [];
@@ -102,13 +103,69 @@ function installDomPolyfills() {
 }
 
 describe("CatalogGalleryWorkspace (shell aprobado sobre servicios del catálogo)", () => {
-  it("monta GalleryChrome + BeatCards virtualizadas desde el store (sin pager ni INDEX), la selección del servidor marca las tarjetas y la barra de selección, el aviso condicional aparece al cambiar filtros y la sesión musical marca la tarjeta en reproducción; espías legacy = 0", async () => {
+  async function mountCatalog(count: number, viewportHeightFallback = 800) {
     installDomPolyfills();
-    const api = createCatalogFakeApi({ n: 30 });
-    const server = createCatalogFakeCommands({ beats: fakeBeats(30) });
+    const api = createCatalogFakeApi({ n: count });
+    const server = createCatalogFakeCommands({ beats: fakeBeats(count) });
     const services = createCatalogServices({ api: api as never, accountId: "u1", context: { authority_era: "e1", authority_epoch: "1" }, fetchImpl: server.fetchImpl, baseUrl: () => "https://cloud.invalid/api", token: () => "tok", csrf: () => "c" });
-    const el = mount(<div style={{ height: 800 }}><CatalogGalleryWorkspace services={services} accountId="u1" context={{ authority_era: "e1", authority_epoch: "1", revision: "1" }} viewportHeightFallback={800} /></div>);
+    const el = mount(<div style={{ height: 800 }}><CatalogGalleryWorkspace services={services} accountId="u1" context={{ authority_era: "e1", authority_epoch: "1", revision: "1" }} viewportHeightFallback={viewportHeightFallback} /></div>);
     await flush(10);
+    return { el, services, server, api };
+  }
+
+  function clickButton(el: HTMLElement, label: string) {
+    const button = [...el.querySelectorAll("button")].find((node) => node.textContent?.trim() === label);
+    expect(button).toBeDefined();
+    act(() => button!.click());
+  }
+
+  it("B11: Escape cierra Add beat tras un fallo y el siguiente drop se procesa", async () => {
+    const message = "No se pudo preparar el audio";
+    const fromFile = vi.spyOn(platform.importer, "fromFile").mockImplementation(() => { throw new Error(message); });
+    const { el, services } = await mountCatalog(1);
+    function drop(file: File) {
+      const event = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: { types: ["Files"], files: [file], items: [] } });
+      act(() => { el.querySelector("[data-library-scroll]")!.dispatchEvent(event); });
+    }
+    try {
+      const first = new File(["fake"], "primero.mp3", { type: "audio/mpeg" });
+      const next = new File(["fake"], "siguiente.mp3", { type: "audio/mpeg" });
+      drop(first);
+      expect(el.textContent).toContain(message);
+      expect(fromFile.mock.calls).toEqual([[first]]);
+      act(() => { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+      expect(el.textContent).not.toContain(message);
+      drop(next);
+      expect(fromFile.mock.calls).toEqual([[first], [next]]);
+    } finally {
+      fromFile.mockRestore();
+      await act(async () => { await services.teardown(); });
+    }
+  });
+
+  it("X62: Edit all abre los seleccionados de los bloques residentes, incluso fuera del área montada", async () => {
+    const { el, services, server } = await mountCatalog(241, 400);
+    try {
+      const cards = el.querySelectorAll("[data-card]");
+      const mountedCount = cards.length;
+      expect(mountedCount).toBeGreaterThan(0);
+      expect(mountedCount).toBeLessThan(240);
+      const firstId = cards[0].getAttribute("data-card")!;
+      const { filters, sort } = services.store.getSnapshot();
+      await act(async () => { await services.interaction.toggle(firstId, { shiftKey: false, ordinal: 0, query: { filters, sort, revision: server.revision() } }); });
+      clickButton(el, "Select All");
+      await flush();
+      expect(el.querySelector(".bg-gallery-selection-actions")?.textContent).toContain("241 selected");
+      clickButton(el, "Edit all");
+      expect(el.textContent).toContain("Edit 240 beats");
+    } finally {
+      await act(async () => { await services.teardown(); });
+    }
+  });
+
+  it("monta GalleryChrome + BeatCards virtualizadas desde el store (sin pager ni INDEX), la selección del servidor marca las tarjetas y la barra de selección, el aviso condicional aparece al cambiar filtros y la sesión musical marca la tarjeta en reproducción; espías legacy = 0", async () => {
+    const { el, services, server, api } = await mountCatalog(30);
     // chrome aprobado y scroller único
     expect(el.querySelector(".bg-gallery-chrome")).not.toBeNull(); expect(el.querySelector(".lab-gallery-main[data-library-scroll]")).not.toBeNull();
     expect(el.querySelector("[data-catalog-mode='postgres']")).not.toBeNull(); expect(document.querySelector(".bg-web-pagination, [data-web-pagination]")).toBeNull();
