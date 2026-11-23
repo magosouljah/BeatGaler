@@ -9,14 +9,6 @@ const harness = vi.hoisted(() => {
     resolve(bytes?: number): void;
     reject(error: Error): void;
   };
-  type IndexTransfer = {
-    signal: AbortSignal;
-    settled: boolean;
-    resolve(): void;
-    reject(error: Error): void;
-    rejectAbort(): void;
-  };
-
   class FakeLong {
     constructor(public low: number, public high: number, public unsigned = false) {}
   }
@@ -44,20 +36,12 @@ const harness = vi.hoisted(() => {
 
   const connection = new SessionConnection();
   const missingIds = new Set<number>();
-  const indexMessageId = 9001;
   let getMessagesGate: Promise<void> | null = null;
   let releaseGetMessagesGate: (() => void) | null = null;
   const getMessages = vi.fn(async (_chat: unknown, ids: number[]) => {
     if (getMessagesGate) await getMessagesGate;
     return ids.map(id => {
       if (missingIds.has(id)) return null;
-      if (id === indexMessageId) {
-        return {
-          id,
-          text: "BEATGALER_LIBRARY_INDEX_V1\n{}",
-          media: { type: "document", mimeType: "application/json", fileSize: 128, messageId: id },
-        };
-      }
       return {
         id,
         text: "",
@@ -65,9 +49,7 @@ const harness = vi.hoisted(() => {
       };
     });
   });
-  const getFullChat = vi.fn(async () => ({ pinnedMsgId: indexMessageId }));
   const transfers: Transfer[] = [];
-  const indexTransfers: IndexTransfer[] = [];
   let peakActive = 0;
   const downloadChunk = vi.fn((options: any) => new Promise<Uint8Array>((resolve, reject) => {
     const messageId = Number(options.location?.messageId || 0);
@@ -97,28 +79,6 @@ const harness = vi.hoisted(() => {
     const offset = Math.max(0, Number(options?.offset) || 0);
     if (offset < 200_000) yield new Uint8Array(200_000 - offset);
   });
-  const downloadAsBuffer = vi.fn((_location: unknown, options: any) => new Promise<Uint8Array>((resolve, reject) => {
-    const signal = (options?.abortSignal as AbortSignal | undefined) ?? new AbortController().signal;
-    const transfer: IndexTransfer = {
-      signal,
-      settled: false,
-      resolve() {
-        if (transfer.settled) return;
-        transfer.settled = true;
-        resolve(new TextEncoder().encode(JSON.stringify({ schema: "beatgaler.telegram.library", version: 2, beats: [] })));
-      },
-      reject(error: Error) {
-        if (transfer.settled) return;
-        transfer.settled = true;
-        reject(error);
-      },
-      rejectAbort() {
-        transfer.reject(new DOMException("aborted", "AbortError"));
-      },
-    };
-    indexTransfers.push(transfer);
-  }));
-
   class TelegramClient {
     onConnectionState = { add: vi.fn(), remove: vi.fn() };
     onError = { add: vi.fn(), remove: vi.fn() };
@@ -130,10 +90,8 @@ const harness = vi.hoisted(() => {
     getChat = vi.fn(async () => ({ id: -1001234567890 }));
     resolvePeer = vi.fn(async () => ({ _: "inputPeerChannel", channelId: 1234567890, accessHash: new FakeLong(42, 0) }));
     getMessages = getMessages;
-    getFullChat = getFullChat;
     downloadChunk = downloadChunk;
     downloadAsIterable = downloadAsIterable;
-    downloadAsBuffer = downloadAsBuffer;
     mt = {
       network: {
         _dcConnections: new Map([[2, {
@@ -151,12 +109,9 @@ const harness = vi.hoisted(() => {
     SessionConnection,
     TelegramClient,
     getMessages,
-    getFullChat,
     downloadChunk,
     downloadAsIterable,
-    downloadAsBuffer,
     transfers,
-    indexTransfers,
     missingIds,
     holdGetMessages: () => {
       getMessagesGate = new Promise<void>(resolve => { releaseGetMessagesGate = resolve; });
@@ -168,21 +123,17 @@ const harness = vi.hoisted(() => {
     },
     activeTransfers: () => transfers.filter(transfer => !transfer.settled),
     transfersFor: (messageId: number) => transfers.filter(transfer => transfer.messageId === messageId),
-    activeIndexTransfers: () => indexTransfers.filter(transfer => !transfer.settled),
     getPeakActive: () => peakActive,
     resetObservations: () => {
       transfers.length = 0;
-      indexTransfers.length = 0;
       peakActive = 0;
       missingIds.clear();
       releaseGetMessagesGate?.();
       releaseGetMessagesGate = null;
       getMessagesGate = null;
       getMessages.mockClear();
-      getFullChat.mockClear();
       downloadChunk.mockClear();
       downloadAsIterable.mockClear();
-      downloadAsBuffer.mockClear();
     },
     WebCryptoProvider: class { constructor(public readonly options: unknown) {} },
   };
@@ -688,59 +639,5 @@ describe("Worker playback scheduler with pending Telegram transfers", () => {
     }
     await vi.waitFor(() => expect(posted.some(message => message.requestId === "warm-peak" && message.ok === true)).toBe(true));
     expect(harness.getPeakActive()).toBe(7);
-  });
-
-  it("restarts an active INDEX immediately after Play preemption even when focus is released before the abort rejection", async () => {
-    vi.useFakeTimers();
-    try {
-      dispatch({ requestId: "index-play-race", op: "get_index" });
-      await flushMicrotasks();
-      expect(harness.activeIndexTransfers()).toHaveLength(1);
-      const firstIndex = harness.activeIndexTransfers()[0];
-
-      dispatch({ requestId: "index-focus", op: "playback_focus", messageId: 777 });
-      await flushMicrotasks();
-      expect(firstIndex.signal.aborted).toBe(true);
-
-      dispatch({ requestId: "index-release", op: "playback_release", messageId: 777 });
-      await flushMicrotasks();
-      firstIndex.rejectAbort();
-      await flushMicrotasks(16);
-
-      // A misclassified abort increments `failures` and sleeps 80 ms before retry.
-      // Correct preemption restarts without consuming that error/backoff budget.
-      expect(harness.indexTransfers).toHaveLength(2);
-      expect(harness.activeIndexTransfers()).toHaveLength(1);
-      harness.activeIndexTransfers()[0].resolve();
-      await flushMicrotasks(16);
-
-      const response = posted.findLast(message => message.requestId === "index-play-race" && "ok" in message);
-      expect(response).toEqual(expect.objectContaining({ ok: true }));
-      expect(harness.downloadAsBuffer).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps an active INDEX read ahead of a newly queued WARM transfer", async () => {
-    dispatch({ requestId: "index-warm-race", op: "get_index" });
-    await vi.waitFor(() => expect(harness.activeIndexTransfers()).toHaveLength(1));
-    const firstIndex = harness.activeIndexTransfers()[0];
-
-    dispatch({
-      requestId: "index-preempting-warm",
-      op: "prefetch_batch",
-      input: { inputs: [{ messageId: 888, mimeType: "audio/mpeg" }], maxConcurrency: 1 },
-    });
-    await vi.waitFor(() => expect(harness.activeTransfers().map(transfer => transfer.messageId)).toEqual([888]));
-    expect(firstIndex.signal.aborted).toBe(false);
-    expect(harness.indexTransfers).toHaveLength(1);
-
-    firstIndex.resolve();
-    await vi.waitFor(() => expect(posted.some(message => message.requestId === "index-warm-race" && message.ok === true)).toBe(true));
-    expect(posted.some(message => message.requestId === "index-preempting-warm" && message.ok === true)).toBe(false);
-    harness.activeTransfers()[0].resolve();
-    await vi.waitFor(() => expect(posted.some(message => message.requestId === "index-preempting-warm" && message.ok === true)).toBe(true));
-    expect(harness.downloadAsBuffer).toHaveBeenCalledOnce();
   });
 });

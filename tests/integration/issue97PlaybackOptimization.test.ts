@@ -132,17 +132,17 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(worker).toContain('playbackSchedulerState === "PLAY_STABLE" ? 6 : dataLaneLimit');
   });
 
-  it("keeps INDEX above WARM but below Play and makes the INDEX byte download abortable", () => {
+  it("gives foreground playback priority over startup media resolution", () => {
     const worker = source("src/features/cloud/webTransport.worker.ts");
+    const warmStartup = worker.slice(worker.indexOf("async function warmStartupPlaybackMedia("), worker.indexOf("async function verifyIdentity("));
+    const waitForPriority = worker.slice(worker.indexOf("function startupMediaPriorityAllowed("), worker.indexOf("function downloadMime("));
 
-    expect(worker).toContain("activeIndexAbortController");
-    expect(worker).toContain("waitUntilIndexPriorityAllowed");
-    expect(worker).toContain("abortSignal: controller.signal");
-    expect(worker).toContain('preemptActiveIndex("play")');
-    expect(worker).not.toContain('preemptActiveIndex("warm")');
-    expect(worker).toContain("request_id: activeIndexRequestId");
-    expect(worker).toContain('playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN", {');
-    expect(worker).toContain("request_id: requestId");
+    expect(warmStartup).toMatch(/await waitUntilStartupMediaPriorityAllowed\(\);[\s\S]*?await resolvePlaybackMediaBatch\(/);
+    expect(worker).not.toContain("!hasWarmWork()");
+    expect(waitForPriority).toContain('return playbackSchedulerState !== "PLAY_CRITICAL";');
+    expect(waitForPriority).toContain("while (!startupMediaPriorityAllowed())");
+    expect(waitForPriority).toContain("if (startupMediaPriorityAllowed()) return;");
+    expect(waitForPriority).toContain("await waitForSchedulerChange(epoch);");
   });
 
   it("publishes the playback data plane before getMe/getChat background verification", () => {

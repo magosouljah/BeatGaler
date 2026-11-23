@@ -1,7 +1,6 @@
 import { InputMedia, Long, MemoryStorage, MtPeerNotFoundError, SessionConnection, TelegramClient, WebCryptoProvider, type FileDownloadLocation } from "@mtcute/web";
 import mtcuteWasmUrl from "@mtcute/wasm/mtcute.wasm?url";
 import { Task2PacketLedger, task2DecryptWarningReason, task2Fingerprint, type Task2PacketIdentity } from "./task2PacketLedger";
-import { armMtcuteIndexLivenessGuard } from "./mtcuteIndexLivenessGuard";
 import { installMtcutePingSocketRecovery } from "./mtcutePingSocketRecovery";
 import { installPlaybackGetFileTrace } from "./playbackGetFileTrace";
 import { measureMp3PlayablePrefix } from "../audio/mp3PlayablePrefix";
@@ -17,20 +16,13 @@ import {
   WEB_PLAYBACK_DATA_LANES,
   WEB_PLAYBACK_FIRST_CHUNK_BYTES,
   WEB_PLAYBACK_FIRST_CHUNK_KB,
-  type WebTransportDownloadInput,
-  type WebTransportDownloadResult,
-  type WebTransportDeleteMessagesInput,
-  type WebTransportDeleteMessagesResult,
   type WebTransportErrorCode,
-  type WebTransportLibraryIndexResult,
   type WebTransportPrefetchBatchInput,
   type WebTransportPrefetchBatchItemResult,
   type WebTransportPrefetchBatchResult,
   type WebTransportPrefetchInput,
   type WebTransportPrefetchResult,
   type WebTransportPrefetchTerminal,
-  type WebTransportReplaceIndexInput,
-  type WebTransportReplaceIndexResult,
   type WebTransportStreamInput,
   type WebTransportStreamResult,
   type WebTransportUploadResult,
@@ -146,7 +138,6 @@ type PrefetchBatchControl = {
 type DataLanePriority = "foreground" | "warm";
 type DataLaneWaiter = { resolve(): void; priority: DataLanePriority; messageId: number | null };
 type PlaybackSchedulerState = "IDLE" | "PLAY_CRITICAL" | "PLAY_STABLE";
-type IndexAbortReason = "play" | "warm" | "cancel";
 
 const scope = globalThis as unknown as WorkerScope;
 let stage1TraceContext: { correlation_id: string; account_label: string; task2_passive_ping_trace?: boolean } | null = null;
@@ -1378,7 +1369,6 @@ let vaultPeerHint: WebVaultPeerRef | null = null;
 let startupMediaMessageIds: number[] = [];
 let transportStorage: MemoryStorage | null = null;
 let transportStorageBotId = "";
-let knownIndexPointer: { messageId: number | null; revision: number | null } = { messageId: null, revision: null };
 const activeStreams = new Map<string, { controller: AbortController; acknowledge: (() => void) | null }>();
 const activePrefetchBatches = new Map<string, PrefetchBatchControl>();
 const activeWarmTransfers = new Map<number, Set<AbortController>>();
@@ -1389,7 +1379,6 @@ const pendingPlaybackRanges = new Map<string, SharedPlaybackRange>();
 const playbackRangeCache = new Map<string, CachedPlaybackRange>();
 const MAX_PLAYBACK_MEDIA_CACHE_ENTRIES = 256;
 const MAX_PLAYBACK_RANGE_CACHE_ENTRIES = 128;
-const LIBRARY_INDEX_CAPTION = "BEATGALER_LIBRARY_INDEX_V1";
 const MAX_CONFIGURABLE_DATA_LANES = 16;
 const STARTUP_MEDIA_BATCH_RETRY_DELAY_MS = 70;
 
@@ -1401,10 +1390,6 @@ let playbackResourceGeneration = 0;
 let playbackSchedulerState: PlaybackSchedulerState = "IDLE";
 let playbackMessageId: number | null = null;
 let playbackIntentId: number | null = null;
-let activeIndexAbortController: AbortController | null = null;
-let activeIndexRequestId: string | null = null;
-let activeIndexAbortReason: IndexAbortReason | null = null;
-const cancelledIndexRequests = new Set<string>();
 let schedulerEpoch = 0;
 const schedulerWaiters = new Set<() => void>();
 
@@ -1622,11 +1607,6 @@ async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
   }
   activePrefetchBatches.clear();
   activeWarmTransfers.clear();
-  activeIndexAbortReason = "cancel";
-  activeIndexAbortController?.abort();
-  activeIndexAbortController = null;
-  activeIndexRequestId = null;
-  cancelledIndexRequests.clear();
   playbackMediaCache.clear();
   playbackMediaMissingCache.clear();
   foregroundLaneWaiters.splice(0).forEach(waiter => waiter.resolve());
@@ -1645,7 +1625,6 @@ async function closeClient(reason = "shutdown", requestId = ""): Promise<void> {
   authenticatedBotId = "";
   vaultVerified = false;
   startupMediaMessageIds = [];
-  knownIndexPointer = { messageId: null, revision: null };
   activeMtprotoRpc = null;
   activeClientInstanceId = null;
   activePrimaryDcId = 0;
@@ -1883,7 +1862,6 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     temp_session_id,
     temp_session_state,
     temp_primary_dcs,
-    index_pointer,
   } = command.session;
   const startupMessageIds = Array.from(new Set(
     (command.startupMessageIds || []).map(Number).filter(id => Number.isSafeInteger(id) && id > 0),
@@ -1985,10 +1963,6 @@ async function initialize(command: Extract<WebTransportWorkerCommand, { op: "ini
     authenticatedBotId = "";
     vaultVerified = false;
     startupMediaMessageIds = startupMessageIds;
-    knownIndexPointer = {
-      messageId: Number.isSafeInteger(Number(index_pointer?.message_id)) && Number(index_pointer?.message_id) > 0 ? Number(index_pointer?.message_id) : null,
-      revision: Number.isSafeInteger(Number(index_pointer?.revision)) && Number(index_pointer?.revision) > 0 ? Number(index_pointer?.revision) : null,
-    };
     stage1Trace(command.requestId, "WORKER_MTPROTO_CLIENT_READY", {
       user_id: user_id || null,
       vault_chat_id: String(chat_id),
@@ -2044,7 +2018,7 @@ async function warmStartupPlaybackMedia(active: TelegramClient, ids: readonly nu
   if (ids.length === 0) return;
   try {
     // Foreground playback keeps priority over this speculative vector.
-    await waitUntilIndexPriorityAllowed();
+    await waitUntilStartupMediaPriorityAllowed();
     if (client !== active || !vaultVerified) return;
     const mediaResult = await resolvePlaybackMediaBatch(active, chatId, ids, { source: "startup_media" });
     if (client !== active || !vaultVerified) return;
@@ -2243,375 +2217,16 @@ async function verifyReady(
   }
 }
 
-function indexPriorityAllowed(): boolean {
+function startupMediaPriorityAllowed(): boolean {
   return playbackSchedulerState !== "PLAY_CRITICAL";
 }
 
-async function waitUntilIndexPriorityAllowed(): Promise<void> {
-  while (!indexPriorityAllowed()) {
+async function waitUntilStartupMediaPriorityAllowed(): Promise<void> {
+  while (!startupMediaPriorityAllowed()) {
     const epoch = schedulerEpoch;
-    if (indexPriorityAllowed()) return;
+    if (startupMediaPriorityAllowed()) return;
     await waitForSchedulerChange(epoch);
   }
-}
-
-function postIndexState(requestId: string | null, state: "active" | "paused"): void {
-  if (!requestId) return;
-  scope.postMessage({ requestId, event: "index-state", state });
-}
-
-function preemptActiveIndex(reason: "play" | "warm"): void {
-  if (!activeIndexRequestId && !activeIndexAbortController) return;
-  activeIndexAbortReason = reason;
-  postIndexState(activeIndexRequestId, "paused");
-  const controller = activeIndexAbortController;
-  if (controller && !controller.signal.aborted) controller.abort();
-  playTrace(reason === "play" ? "INDEX_PREEMPTED_PLAY" : "INDEX_PREEMPTED_WARM", {
-    request_id: activeIndexRequestId,
-  });
-}
-
-function cancelIndex(targetRequestId: string): { cancelled: boolean } {
-  const requestId = String(targetRequestId || "");
-  if (!requestId) return { cancelled: false };
-  cancelledIndexRequests.add(requestId);
-  if (activeIndexRequestId === requestId) {
-    activeIndexAbortReason = "cancel";
-    activeIndexAbortController?.abort();
-  }
-  notifyScheduler();
-  return { cancelled: true };
-}
-
-function preemptWarmTransfersForIndex(): void {
-  let batches = 0;
-  for (const control of Array.from(activePrefetchBatches.values())) {
-    batches += 1;
-    cancelPrefetchBatch(control.requestId);
-  }
-  let aborted = 0;
-  for (const controllers of activeWarmTransfers.values()) {
-    for (const controller of controllers) {
-      if (!controller.signal.aborted) {
-        controller.abort();
-        aborted += 1;
-      }
-    }
-  }
-  if (batches || aborted) {
-    playTrace("INDEX_WARM_PREEMPT_ALL", { batches, aborted });
-  }
-}
-
-function assertIndexNotCancelled(requestId: string | null): void {
-  if (requestId && cancelledIndexRequests.has(requestId)) {
-    throw new WorkerTransportError("CANCELLED", "Galer Cloud INDEX read was cancelled.");
-  }
-}
-
-async function getLibraryIndex(requestId: string | null = null, allowMissing = false, recoveryMessageId: number | null = null): Promise<WebTransportLibraryIndexResult> {
-  const active = requireReady();
-  const started = Date.now();
-  // Startup warming is speculative. A library read is the authoritative
-  // boundary for an import/edit, so it must never wait behind concurrent
-  // prefix downloads on the same MTProto client.
-  preemptWarmTransfersForIndex();
-  let failures = 0;
-  let resumed = false;
-  try {
-    while (failures < 5) {
-      assertIndexNotCancelled(requestId);
-      if (requestId) stage1Trace(requestId, "WORKER_INDEX_PRIORITY_WAIT_BEGIN");
-      await waitUntilIndexPriorityAllowed();
-      if (requestId) stage1Trace(requestId, "WORKER_INDEX_PRIORITY_WAIT_DONE");
-      assertIndexNotCancelled(requestId);
-      activeIndexRequestId = requestId;
-      activeIndexAbortReason = null;
-      postIndexState(requestId, "active");
-      if (requestId) stage1Trace(requestId, "WORKER_INDEX_BEGIN", { resumed });
-      playTrace(resumed ? "INDEX_RESUMED" : "INDEX_BEGIN", { request_id: requestId });
-      let controller: AbortController | null = null;
-      try {
-        const readCandidate = async (messageId: number): Promise<{ manifest: unknown; bytes: number } | null> => {
-          const lookupStartedAt = Date.now();
-          if (requestId) {
-            stage1Trace(requestId, "WORKER_INDEX_POINTER_LOOKUP_BEGIN", { message_id: messageId });
-            stage1Trace(requestId, "WORKER_INDEX_POINTER_GET_MESSAGES_BEGIN", {
-              message_id: messageId,
-              ...mtprotoConnectionSnapshot(active),
-            });
-            if (task2PassivePingTraceEnabled()) {
-              stage1Trace(requestId, "TASK2_PING_GET_MESSAGES_BEGIN", {
-                message_id: messageId,
-                ...pingTraceSnapshot(active),
-                ...mtprotoConnectionSnapshot(active),
-              });
-            }
-          }
-          let message: Awaited<ReturnType<TelegramClient["getMessages"]>>[number] | undefined;
-          const disarmIndexLiveness = armMtcuteIndexLivenessGuard(
-            primarySessionConnection(active),
-            () => requestId === null || activeIndexRequestId === requestId,
-            detail => {
-              if (requestId) stage1Trace(requestId, "TASK2_PING_INDEX_LIVENESS_RECOVERY", {
-                rpc_msg_id: detail.rpcMsgId,
-                ping_msg_id: detail.pingMsgId,
-                delay_ms: detail.delayMs,
-                ...mtprotoConnectionSnapshot(active),
-              });
-              playTrace("INDEX_LIVENESS_RECOVERY", { delay_ms: detail.delayMs });
-            },
-          );
-          try {
-            const messages = requestId
-              ? await observeMtprotoRpc(
-                active,
-                requestId,
-                "WORKER_INDEX_POINTER_GET_MESSAGES",
-                ["channels.getMessages", "messages.getMessages"],
-                () => active.getMessages(chatId, [messageId]),
-              )
-              : await active.getMessages(chatId, [messageId]);
-            [message] = messages;
-          } finally {
-            disarmIndexLiveness();
-            if (requestId) {
-              stage1Trace(requestId, "WORKER_INDEX_POINTER_GET_MESSAGES_END", {
-                message_id: messageId,
-                found: Boolean(message),
-                elapsed_ms: Date.now() - lookupStartedAt,
-                ...mtprotoConnectionSnapshot(active),
-              });
-              if (task2PassivePingTraceEnabled()) {
-                stage1Trace(requestId, "TASK2_PING_GET_MESSAGES_END", {
-                  message_id: messageId,
-                  found: Boolean(message),
-                  elapsed_ms: Date.now() - lookupStartedAt,
-                  ...pingTraceSnapshot(active),
-                  ...mtprotoConnectionSnapshot(active),
-                });
-              }
-            }
-          }
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_POINTER_LOOKUP_DONE", { found: Boolean(message) });
-          // Telegram scopes this lookup to chatId, so a pointer from another
-          // vault cannot be read even if numeric message ids overlap.
-          if (!message || !String(message.text || "").startsWith(LIBRARY_INDEX_CAPTION)) return null;
-          controller = new AbortController();
-          activeIndexAbortController = controller;
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DOWNLOAD_BEGIN");
-          const bytes = await active.downloadAsBuffer(downloadableMedia(message), { abortSignal: controller.signal, stallTimeout: 20_000 });
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DOWNLOAD_DONE", { bytes: bytes.byteLength });
-          assertIndexNotCancelled(requestId);
-          if (controller.signal.aborted || !indexPriorityAllowed() || bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) return null;
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DECODE_BEGIN");
-          const decoded = new TextDecoder().decode(bytes);
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DECODE_DONE");
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_PARSE_BEGIN");
-          const manifest = JSON.parse(decoded) as Record<string, unknown>;
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_PARSE_DONE");
-          if (manifest?.schema !== "beatgaler.telegram.library" || Number(manifest?.version) !== 2) return null;
-          return { manifest, bytes: bytes.byteLength };
-        };
-        const finish = (messageId: number, loaded: { manifest: unknown; bytes: number }, pointerRepair?: WebTransportLibraryIndexResult["pointerRepair"]) => {
-          knownIndexPointer = { messageId, revision: knownIndexPointer.revision };
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_DONE", { bytes: loaded.bytes, message_id: messageId, pointer_repair: Boolean(pointerRepair) });
-          playTrace("INDEX_DONE", { elapsed_ms: Date.now() - started, bytes: loaded.bytes, request_id: requestId, message_id: messageId });
-          return { manifest: loaded.manifest, messageId, ...(pointerRepair ? { pointerRepair } : {}) };
-        };
-
-        const pointerId = knownIndexPointer.messageId;
-        if (pointerId) {
-          const loaded = await readCandidate(pointerId);
-          assertIndexNotCancelled(requestId);
-          if (loaded) return finish(pointerId, loaded);
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_POINTER_INVALID", { message_id: pointerId });
-        }
-
-        // Cloud obtained this id from Telegram's current pin. Validate its
-        // document through Direct before repairing the PostgreSQL shortcut.
-        if (recoveryMessageId) {
-          if (!Number.isSafeInteger(recoveryMessageId) || recoveryMessageId <= 0) throw new Error("Invalid INDEX recovery message id.");
-          const loaded = await readCandidate(recoveryMessageId);
-          if (!loaded) throw new Error("Pinned Telegram message is not a valid library INDEX.");
-          return finish(recoveryMessageId, loaded, { expectedMessageId: pointerId || null, source: "pin_recovery" });
-        }
-
-        // Pin lookup is recovery only. It repairs a missing/stale PostgreSQL
-        // shortcut without treating a failed shortcut as an empty library.
-        if (requestId) stage1Trace(requestId, "WORKER_INDEX_GET_FULL_CHAT_BEGIN");
-        const fullChat = requestId
-          ? await observeMtprotoRpc(active, requestId, "WORKER_INDEX_GET_FULL_CHAT", ["channels.getFullChannel", "messages.getFullChat"], () => active.getFullChat(chatId))
-          : await active.getFullChat(chatId);
-        assertIndexNotCancelled(requestId);
-        if (!indexPriorityAllowed()) { resumed = true; continue; }
-        const pinnedId = Number(fullChat.pinnedMsgId || 0);
-        if (requestId) {
-          stage1Trace(requestId, "WORKER_INDEX_GET_FULL_CHAT_LOCAL_DONE", { pinned_message_present: pinnedId > 0 });
-          stage1Trace(requestId, "WORKER_INDEX_GET_FULL_CHAT_END");
-        }
-        if (Number.isSafeInteger(pinnedId) && pinnedId > 0) {
-          const loaded = await readCandidate(pinnedId);
-          if (loaded) return finish(pinnedId, loaded, { expectedMessageId: pointerId || null, source: "pin_recovery" });
-        }
-
-        // A bad pin is not proof of absence. Exhaust the vault history only in
-        // recovery, validate candidates, and only then allow initial creation.
-        if (requestId) stage1Trace(requestId, "WORKER_INDEX_HISTORY_RECOVERY_BEGIN");
-        let recovered: { messageId: number; loaded: { manifest: unknown; bytes: number } } | null = null;
-        for await (const candidate of (active as any).iterHistory(chatId, { limit: Infinity })) {
-          const candidateId = Number(candidate?.id || 0);
-          if (!Number.isSafeInteger(candidateId) || candidateId <= 0 || !String(candidate?.text || "").startsWith(LIBRARY_INDEX_CAPTION)) continue;
-          const loaded = await readCandidate(candidateId);
-          if (loaded) { recovered = { messageId: candidateId, loaded }; break; }
-        }
-        if (recovered) return finish(recovered.messageId, recovered.loaded, { expectedMessageId: pointerId || null, source: "history_recovery" });
-        if (requestId) stage1Trace(requestId, "WORKER_INDEX_HISTORY_RECOVERY_EMPTY");
-        if (pinnedId > 0) throw new Error("Galer Cloud library index is not available for initial creation.");
-        if (allowMissing) return { messageId: 0, manifest: { schema: "beatgaler.telegram.library", version: 2, beats: [], trash: [], deleted: [] } };
-        throw new Error("Galer Cloud library index is still synchronizing.");
-      } catch (error) {
-        const preemptReason = activeIndexAbortReason;
-        if (preemptReason === "cancel" || (requestId && cancelledIndexRequests.has(requestId))) {
-          throw error instanceof WorkerTransportError
-            ? error
-            : new WorkerTransportError("CANCELLED", "Galer Cloud INDEX read was cancelled.");
-        }
-        if ((preemptReason === "play" || preemptReason === "warm") && (activeIndexAbortController?.signal.aborted || isAbortError(error) || !indexPriorityAllowed())) {
-          resumed = true;
-          continue;
-        }
-        const failedAttempt = failures + 1;
-        if (requestId) stage1Trace(requestId, "WORKER_INDEX_ATTEMPT_FAILED", {
-          attempt: failedAttempt,
-          error_name: error instanceof Error ? error.name : "unknown",
-        });
-        failures += 1;
-        playTrace("WORKER_GET_INDEX_RETRY", { attempt: failures, error_name: error instanceof Error ? error.name : "unknown" });
-        if (failures < 5) {
-          const delayMs = Math.min(1000, 80 * (2 ** (failures - 1)));
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_RETRY_BACKOFF_BEGIN", { attempt: failures, delay_ms: delayMs });
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_RETRY_BACKOFF_END", { attempt: failures });
-        } else {
-          if (requestId) stage1Trace(requestId, "WORKER_INDEX_RETRY_EXHAUSTED", { attempt: failures });
-          throw error;
-        }
-      } finally {
-        if (activeIndexAbortController === controller) activeIndexAbortController = null;
-        if (activeIndexRequestId === requestId) activeIndexRequestId = null;
-        activeIndexAbortReason = null;
-      }
-    }
-    throw new Error("Galer Cloud library index could not be read.");
-  } finally {
-    if (requestId) cancelledIndexRequests.delete(requestId);
-  }
-}
-
-function libraryIdentityIds(manifest: unknown): Set<string> {
-  const root = manifest && typeof manifest === "object" && !Array.isArray(manifest) ? manifest as Record<string, unknown> : {};
-  const ids = new Set<string>();
-  for (const value of Array.isArray(root.beats) ? root.beats : []) {
-    const id = String((value as Record<string, unknown>)?.id || "").trim();
-    if (id) ids.add(id);
-  }
-  for (const value of Array.isArray(root.trash) ? root.trash : []) {
-    const row = value as Record<string, unknown>;
-    const beat = row?.beat && typeof row.beat === "object" ? row.beat as Record<string, unknown> : row;
-    const id = String(beat?.id || "").trim();
-    if (id) ids.add(id);
-  }
-  for (const value of Array.isArray(root.deleted) ? root.deleted : []) {
-    const row = value as Record<string, unknown>;
-    const id = String(row?.beat_id || row?.id || "").trim();
-    if (id) ids.add(id);
-  }
-  return ids;
-}
-
-async function replaceLibraryIndex(input: WebTransportReplaceIndexInput): Promise<WebTransportReplaceIndexResult> {
-  const active = requireReady();
-  const root = input.manifest && typeof input.manifest === "object" && !Array.isArray(input.manifest)
-    ? input.manifest as Record<string, unknown> : null;
-  if (!root || root.schema !== "beatgaler.telegram.library" || Number(root.version) !== 2) throw new Error("Galer Cloud refused an invalid library update.");
-  // Only an explicit empty-vault bootstrap may start without an INDEX. Network,
-  // corrupt-document and foreign-pin errors still fail closed.
-  playTrace("WORKER_REPLACE_INDEX_BEGIN", { expected_message_id: input.expectedMessageId || 0 });
-  const current = await getLibraryIndex(null, input.expectedMessageId === 0);
-  if (current.messageId !== input.expectedMessageId) throw new Error("Your library changed on another device. Retry Save to use the latest version.");
-  const candidateIds = libraryIdentityIds(root);
-  const missing = Array.from(libraryIdentityIds(current.manifest)).filter(id => !candidateIds.has(id));
-  if (missing.length > 0) throw new Error("Galer Cloud blocked a stale library update.");
-  const bytes = new TextEncoder().encode(JSON.stringify(root));
-  if (bytes.byteLength <= 0 || bytes.byteLength > 16 * 1024 * 1024) throw new Error("Galer Cloud library update has an invalid size.");
-  const file = new File([bytes], `beatgaler-library-${Date.now()}.json`, { type: "application/json" });
-  const sent = await active.sendMedia(chatId, InputMedia.document(file, {
-    fileName: file.name, fileMime: file.type, fileSize: file.size, caption: LIBRARY_INDEX_CAPTION,
-  }), { silent: true });
-  const messageId = Number(sent?.id || 0);
-  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud returned incomplete library information.");
-  try {
-    await active.pinMessage({ chatId, message: messageId, notify: false });
-    let pinned = false;
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const full = await active.getFullChat(chatId);
-      if (Number(full.pinnedMsgId || 0) === messageId) { pinned = true; break; }
-      await new Promise(resolve => setTimeout(resolve, 80 * (attempt + 1)));
-    }
-    if (!pinned) throw new Error("Galer Cloud could not verify the library update.");
-  } catch (error) {
-    await active.deleteMessagesById(chatId, [messageId]).catch(() => {});
-    throw error;
-  }
-  if (current.messageId && current.messageId !== messageId) await active.deleteMessagesById(chatId, [current.messageId]).catch(() => {});
-  const result = { messageId, previousMessageId: current.messageId, beatCount: Array.isArray(root.beats) ? root.beats.length : 0 };
-  // A later read in this live Worker must use the newly pinned document even
-  // before the asynchronous Cloud pointer acknowledgement returns.
-  knownIndexPointer = { messageId, revision: knownIndexPointer.revision };
-  playTrace("WORKER_REPLACE_INDEX_DONE", { message_id: result.messageId, previous_message_id: result.previousMessageId, beat_count: result.beatCount });
-  return result;
-}
-
-function sniffImageMime(bytes: Uint8Array): string {
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
-  if (bytes.length >= 6 && new TextDecoder().decode(bytes.subarray(0, 6)).startsWith("GIF8")) return "image/gif";
-  if (bytes.length >= 12 && new TextDecoder().decode(bytes.subarray(0, 4)) === "RIFF" && new TextDecoder().decode(bytes.subarray(8, 12)) === "WEBP") return "image/webp";
-  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return "image/bmp";
-  return "image/png";
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  return btoa(binary);
-}
-
-async function download(input: WebTransportDownloadInput): Promise<WebTransportDownloadResult> {
-  const active = requireReady();
-  const messageId = Number(input.messageId || 0);
-  if (!Number.isInteger(messageId) || messageId <= 0) throw new Error("Galer Cloud object reference is invalid.");
-  const [message] = await active.getMessages(chatId, [messageId]);
-  if (!message) throw new WorkerTransportError("ROUTE_MISSING", "Galer Cloud object no longer exists.");
-  const bytes = await active.downloadAsBuffer(downloadableMedia(message), { stallTimeout: 20_000 });
-  if (bytes.byteLength <= 0) throw new WorkerTransportError("MEDIA_UNAVAILABLE", "Galer Cloud returned an empty object.");
-  const declaredMime = String(input.mimeType || "").trim().toLowerCase();
-  const mimeType = /^image\/(?:png|jpe?g|gif|webp|bmp|avif)$/.test(declaredMime) ? declaredMime : sniffImageMime(bytes);
-  return { messageId, dataUrl: `data:${mimeType};base64,${bytesToBase64(bytes)}` };
-}
-
-async function deleteMessages(input: WebTransportDeleteMessagesInput): Promise<WebTransportDeleteMessagesResult> {
-  const active = requireReady();
-  const ids = Array.from(new Set(input.messageIds.map(Number).filter(id => Number.isInteger(id) && id > 0)));
-  let deleted = 0;
-  for (let offset = 0; offset < ids.length; offset += 100) {
-    const batch = ids.slice(offset, offset + 100);
-    await active.deleteMessagesById(chatId, batch);
-    deleted += batch.length;
-  }
-  return { deleted };
 }
 
 function downloadMime(value: unknown): string {
@@ -3126,7 +2741,6 @@ function playbackFocus(messageId: number, traceIntentId?: number): { focused: bo
   playbackSchedulerState = "PLAY_CRITICAL";
   playbackMessageId = id;
   playTrace("WORKER_PLAYBACK_FOCUS", { message_id: id, intent_id: playbackIntentId });
-  preemptActiveIndex("play");
   let aborted = 0;
   for (const [activeId, controllers] of activeWarmTransfers) {
     if (activeId === id) continue;
@@ -3389,11 +3003,6 @@ async function handle(command: WebTransportWorkerCommand): Promise<unknown> {
     case "initialize": await initialize(command); return { ready: true };
     case "verify_identity": await verifyIdentity(command.requestId); return { verified: true };
     case "verify": return verifyReady(command.requestId, command.membership || null);
-    case "get_index": return getLibraryIndex(command.requestId, false, command.recoveryMessageId || null);
-    case "cancel_index": return cancelIndex(command.targetRequestId);
-    case "replace_index": return replaceLibraryIndex(command.input);
-    case "delete_messages": return deleteMessages(command.input);
-    case "download": return download(command.input);
     case "prefetch": return prefetch(command.requestId, command.input);
     case "prefetch_batch": return prefetchBatch(command.requestId, command.input);
     case "prefetch_batch_cancel": return cancelPrefetchBatch(command.targetRequestId, command.messageId);
@@ -3416,13 +3025,11 @@ scope.onmessage = event => {
   if (command.op === "prefetch" || command.op === "prefetch_batch" || command.op === "stream" || command.op === "playback_focus") {
     playTrace("WORKER_PLAYBACK_REQUEST_RECEIVED", { request_id: command.requestId, operation: command.op, message_id: command.op === "playback_focus" ? command.messageId : command.op === "prefetch_batch" ? null : command.input.messageId, intent_id: command.op === "playback_focus" ? command.traceIntentId ?? null : command.op === "prefetch_batch" ? null : command.input.traceIntentId ?? null, message_ids: command.op === "prefetch_batch" ? command.input.inputs.map(input => input.messageId) : undefined });
   }
-  if (command.op === "get_index") stage1Trace(command.requestId, "WORKER_INDEX_DISPATCH_RECEIVED");
   if (command.op === "initialize" || command.op === "verify" || command.op === "verify_identity") {
     playTrace("WORKER_REQUEST_RECEIVED", { request_id: command.requestId, operation: command.op });
   }
   void handle(command).then(
     result => {
-      if (command.op === "get_index") stage1Trace(command.requestId, "WORKER_INDEX_RESPONSE");
       if (command.op === "prefetch") {
         const prefix = result as WebTransportPrefetchResult;
         playTrace("WORKER_PREFIX_RESPONSE_POST_BEGIN", { request_id: command.requestId, message_id: command.input.messageId, intent_id: command.input.traceIntentId ?? null, bytes: prefix.prefix.byteLength });
