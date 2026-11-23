@@ -102,7 +102,7 @@ function fakeDatabase(now = () => Date.now()) {
       state.change.last_delivery_at = new Date(now()).toISOString();
       return { rows: [clone(state.change)] };
     }
-    if (text.startsWith('UPDATE auth_email_changes SET attempt_count=$2,state=CASE WHEN $2 >= $3')) {
+    if (text.startsWith('UPDATE auth_email_changes SET attempt_count=$2::int,state=CASE WHEN $2::int >= $3::int')) {
       state.change.attempt_count = Number(params[1]);
       if (Number(params[1]) >= Number(params[2])) state.change.state = 'FAILED';
       return { rows: [] };

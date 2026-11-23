@@ -59,6 +59,11 @@ function hardenCoreSource(source) {
 function bridgeSuffix() {
   return `
 
+// T25 retiró validBeatGalerUsername de server-core.js y este puente la sigue usando.
+function validBeatGalerUsername(username) {
+  return /^[a-z0-9._]{3,20}#\\d{4}$/.test(username) || /^[a-z0-9_]{1,15}$/.test(username);
+}
+
 ;module.exports.__beatgalerAuthBridge = Object.freeze({
   userIdByUsername(usernameInput) {
     return beatGalerUsers.get(normalizeBeatGalerUsername(usernameInput))?.id || null;
@@ -118,6 +123,8 @@ function bridgeSuffix() {
       };
     }
     beatGalerUsers.set(nextUsername, user);
+    // Sin persistir, el almacén (accountsSnapshot) conserva el email anterior y el inicio de sesión con el nuevo falla.
+    saveAuthData();
     return { userId: user.id, username: user.username, storageReady: Boolean(user.storageChatId) };
   },
 

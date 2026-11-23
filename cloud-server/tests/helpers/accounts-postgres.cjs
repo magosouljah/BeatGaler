@@ -33,7 +33,7 @@ async function seedAccount(pool, name, number) {
   const account = { id: `usr_${name}`, email: `${name}@example.test`, installation: `install_${name}` };
   const salt = randomBytes(16).toString('hex');
   await pool.query(`INSERT INTO users(id,username,username_source,email,password_hash,password_hash_algorithm,password_salt)
-    VALUES($1,$2,'beatgaler',$3,$4,'scrypt',$5)`, [account.id, `${name}#0001`, account.email, await hashPassword(password, salt), salt]);
+    VALUES($1,$2,'beatgaler',$3,$4,'scrypt',$5)`, [account.id, `${name.replace(/[^a-z0-9._]/g, "")}#0001`, account.email, await hashPassword(password, salt), salt]);
   await pool.query(`INSERT INTO vaults(id,user_id,telegram_chat_id,title) VALUES($1,$2,$3,'Vault de prueba')`,
     [`vault_${name}`, account.id, `-1000000000${number}`]);
   return account;

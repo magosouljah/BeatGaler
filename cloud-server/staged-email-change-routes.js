@@ -54,17 +54,19 @@ function installStagedEmailChangeRoutes(express, service) {
     if (routesInstalled || routesInstalling) return;
     routesInstalling = true;
     try {
-      app.post('/auth/email/change/start', (req, res) => {
+      // Se registran con el primer app.post(), antes del express.json() global: parser propio.
+      const bodyJson = express.json({ limit: '16kb' });
+      app.post('/auth/email/change/start', bodyJson, (req, res) => {
         void service.start(req, req?.body?.email)
           .then(result => res.status(202).json(result))
           .catch(error => fail(res, error));
       });
-      app.post('/auth/email/change/resend', (req, res) => {
+      app.post('/auth/email/change/resend', bodyJson, (req, res) => {
         void service.resend(req)
           .then(result => res.status(202).json(result))
           .catch(error => fail(res, error));
       });
-      app.post('/auth/email/change/confirm', (req, res) => {
+      app.post('/auth/email/change/confirm', bodyJson, (req, res) => {
         void service.confirm(req, req?.body?.token || req?.body?.code)
           .then(result => res.json(result))
           .catch(error => fail(res, error));

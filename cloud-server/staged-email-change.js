@@ -244,7 +244,7 @@ function createStagedEmailChange({
         const attempts = Number(row.attempt_count || 0) + 1;
         await client.query(`
           UPDATE auth_email_changes
-          SET attempt_count=$2,state=CASE WHEN $2 >= $3 THEN 'FAILED' ELSE state END,updated_at=now()
+          SET attempt_count=$2::int,state=CASE WHEN $2::int >= $3::int THEN 'FAILED' ELSE state END,updated_at=now()
           WHERE user_id=$1
         `, [String(userId), attempts, MAX_ATTEMPTS]);
         await client.query('COMMIT');

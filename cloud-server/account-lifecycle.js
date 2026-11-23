@@ -825,26 +825,29 @@ function installAccountLifecycle(express, options = {}) {
     if (app.__beatgalerAccountLifecycleRoutesInstalled || app.__beatgalerAccountLifecycleRoutesInstalling) return;
     app.__beatgalerAccountLifecycleRoutesInstalling = true;
     try {
-      app.post('/auth/email/verification/request', (req, res) => { void runtime._test.requestEmailVerification(req, res); });
-      app.post('/auth/email/verification/confirm', (req, res, next) => { void runtime._test.confirmEmailVerification(req, res).catch(next); });
-      app.post('/auth/password/reset/request', (req, res) => { void runtime._test.requestPasswordReset(req, res); });
-      app.post('/auth/password/reset/complete', (req, res) => { void runtime._test.completePasswordReset(req, res); });
-      app.post('/auth/reauth', (req, res) => { void runtime._test.reauthenticate(req, res); });
-      app.post('/auth/mfa/recovery/regenerate', runtime._test.regenerateRecovery);
-      app.post('/auth/security/notifications', (req, res) => {
+      // Estas rutas se registran con el primer app.post(), que puede ocurrir antes del express.json() global:
+      // sin su propio parser reciben el cuerpo vacío (reauth, reset de contraseña, export, borrado...).
+      const bodyJson = express.json({ limit: '256kb' });
+      app.post('/auth/email/verification/request', bodyJson, (req, res) => { void runtime._test.requestEmailVerification(req, res); });
+      app.post('/auth/email/verification/confirm', bodyJson, (req, res, next) => { void runtime._test.confirmEmailVerification(req, res).catch(next); });
+      app.post('/auth/password/reset/request', bodyJson, (req, res) => { void runtime._test.requestPasswordReset(req, res); });
+      app.post('/auth/password/reset/complete', bodyJson, (req, res) => { void runtime._test.completePasswordReset(req, res); });
+      app.post('/auth/reauth', bodyJson, (req, res) => { void runtime._test.reauthenticate(req, res); });
+      app.post('/auth/mfa/recovery/regenerate', bodyJson, runtime._test.regenerateRecovery);
+      app.post('/auth/security/notifications', bodyJson, (req, res) => {
         const info = runtime._test.sessionInfoFromRequest(req);
         if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
         const state = runtime._test.stateSnapshot();
         const rows = Array.isArray(state.notifications[info.userId]) ? state.notifications[info.userId] : [];
         return res.json({ ok: true, notifications: rows.slice(-50).reverse() });
       });
-      app.post('/auth/lifecycle/status', (req, res, next) => {
+      app.post('/auth/lifecycle/status', bodyJson, (req, res, next) => {
         const info = runtime._test.sessionInfoFromRequest(req);
         if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
         void runtime._test.lifecycleStatus(req, res).catch(next);
       });
-      app.post('/auth/account/export', (req, res, next) => { void runtime._test.exportAccount(req, res).catch(next); });
-      app.post('/auth/account/delete', (req, res, next) => { void runtime._test.deleteAccount(req, res).catch(next); });
+      app.post('/auth/account/export', bodyJson, (req, res, next) => { void runtime._test.exportAccount(req, res).catch(next); });
+      app.post('/auth/account/delete', bodyJson, (req, res, next) => { void runtime._test.deleteAccount(req, res).catch(next); });
       app.__beatgalerAccountLifecycleRoutesInstalled = true;
     } finally {
       app.__beatgalerAccountLifecycleRoutesInstalling = false;

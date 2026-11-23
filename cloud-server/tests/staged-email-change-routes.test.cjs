@@ -16,7 +16,7 @@ function fakeExpress() {
       return application;
     },
   };
-  return { application, routes };
+  return { application, routes, json: () => function bodyJson() {} };
 }
 
 {
@@ -32,6 +32,12 @@ function fakeExpress() {
   assert.equal(express.routes.has('/auth/email/change/start'), true);
   assert.equal(express.routes.has('/auth/email/change/resend'), true);
   assert.equal(express.routes.has('/auth/email/change/confirm'), true);
+  // X76: parser JSON propio antes del handler (se registran antes del express.json() global).
+  for (const route of ['start', 'resend', 'confirm']) {
+    const handlers = express.routes.get(`/auth/email/change/${route}`);
+    assert.equal(handlers.length, 2, route);
+    assert.equal(handlers[0].name, 'bodyJson', route);
+  }
   assert.equal(express.routes.has('/auth/login'), true);
 
   const before = express.routes.size;
