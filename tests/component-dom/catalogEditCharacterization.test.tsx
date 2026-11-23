@@ -41,15 +41,20 @@ const settle = async (steps = 6, stepMs = 1500) => { for (let i = 0; i < steps; 
 const sig = (reqs: Array<{ method: string; path: string }>) => reqs.map((r) => `${r.method} ${r.path.replace(/top-\d+/, "top-N").replace(/op-\d+/, "op-N").replace(/sel-\d+/, "sel-N").replace(/set-\d+/, "set-N")}`);
 const setValue = (el: HTMLInputElement, v: string) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); };
 
-/** Drawer montado con las mismas props que `CatalogAppShell` (guardado del catálogo, lote, commit Desktop). */
-async function openDrawer(ids: string[]) {
+/** Drawer montado con la capacidad de guardado de `CatalogAppShell`. */
+async function openDrawer(ids: string[], props: Omit<Partial<React.ComponentProps<typeof Drawer>>, "onSaved"> & {
+  saveReview?: React.ComponentProps<typeof Drawer>["onSaved"];
+} = {}) {
   const sc = () => h.scope();
   for (const id of ids.length > 1 ? ids : []) await act(async () => { sc().toggleSelection(sc().toBeat(h.dto(id)), false); });
   const beat = sc().toBeat(h.dto(ids[0]));
   const selected = ids.length > 1 ? sc().selectedBeats : undefined;
   const onClose = vi.fn(); const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host); roots.push(root);
-  await act(async () => { root.render(<Drawer beat={beat} mode="edit" onClose={onClose} onSaved={(...a: [Beat]) => sc().updateBeat(...(a as unknown as []))} onReleaseAudio={() => {}} tagSuggestions={[]}
-    selectedBeats={selected} onBulkSaved={(u, o) => sc().applyBulkUpdate(u, o)} mutationAllowed onCloudMutationCommit={(b) => sc().commitDrawerCloudMutation(b)} onCatalogSave={(i) => sc().saveDrawerToCatalog(i)} />); });
+  const { saveReview, ...drawerProps } = props;
+  await act(async () => { root.render(<Drawer beat={beat} mode="edit" onClose={onClose} onReleaseAudio={() => {}} tagSuggestions={[]}
+    selectedBeats={selected} mutationAllowed onWebSave={(request) => request.kind === "review" && saveReview
+      ? saveReview(request.updated, request.onProgress)
+      : sc().saveWebDrawer(request)} {...drawerProps} />); });
   const buttons = () => Array.from(host.querySelectorAll("button"));
   const find = (re: RegExp) => buttons().find((b) => re.test(b.textContent?.trim() ?? ""));
   return {
@@ -62,9 +67,74 @@ async function openDrawer(ids: string[]) {
     },
     async addTag(tag: string) { const input = host.querySelector('input[placeholder^="Add tag"]') as HTMLInputElement; await act(async () => { setValue(input, tag); }); await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); }); },
     async check(field: RegExp) { const label = Array.from(host.querySelectorAll("label")).find((l) => field.test(l.textContent ?? ""))!; await act(async () => { (label.querySelector("input") as HTMLInputElement).click(); }); },
+    async click(label: string) {
+      const button = buttons().find((b) => b.textContent?.trim() === label)!;
+      await act(async () => { button.click(); });
+    },
     async save(steps = 6) { const b = find(/^(Save changes|Apply to)/)!; await act(async () => { b.click(); }); await settle(steps); },
   };
 }
+
+describe("M3.2b · guardar desde el Drawer Web", () => {
+  it.each(["add", "replace", "remove"] as const)("lote %s: aplica el modo elegido en una operación", async (mode) => {
+    h = await mountFor("success");
+    const d = await openDrawer(["g0", "g1"], {
+      selectedBeats: ["g0", "g1"].map((id) => ({ ...h.scope().toBeat(h.dto(id)), tags: ["shared"] })),
+    });
+    await d.check(/TAGS/);
+    if (mode === "remove") {
+      await d.click("Remove tags");
+      await d.click("shared");
+    } else {
+      if (mode === "replace") await d.click("Replace tags");
+      await d.addTag("Rock");
+    }
+    const m = h.mark();
+    if (mode === "remove") {
+      await d.click("Remove 1 tag from 2 beats");
+      await settle();
+    } else {
+      await d.save();
+    }
+    const operations = h.writes(m).filter((r) => r.path === "/catalog/v1/operations");
+    expect(operations).toHaveLength(1);
+    expect(operations[0].body.kind).toBe("BULK_PATCH");
+    expect(operations[0].body.patch).toEqual(mode === "replace" ? { tags: ["rock"] } : {});
+    expect(operations[0].body.tagsOp).toEqual(mode === "replace" ? undefined : { op: mode, tags: [mode === "remove" ? "shared" : "rock"] });
+    expect(d.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("quita la portada desde el Drawer antes de reemplazar el archivo", async () => {
+    h = await mountFor("success");
+    const beat = h.scope().toBeat(h.dto("g0"));
+    const d = await openDrawer(["g0"], { beat: { ...beat, image_base64: "data:image/png;base64,AAAA" } });
+    await d.click("Remove");
+    await d.pickRow("MASTER", mp3(), "Replace");
+    const m = h.mark();
+    await d.save();
+    const writes = h.writes(m);
+    expect(writes[0]).toMatchObject({ method: "PATCH", path: "/catalog/v1/beats/g0", body: { expectedVersion: "1", patch: { artwork: null } } });
+    const operations = writes.filter((r) => r.path === "/catalog/v1/operations");
+    expect(operations).toHaveLength(1);
+    expect(operations[0].body).toMatchObject({ kind: "REPLACE", expectedVersion: "2" });
+    expect(h.server.directSent).toHaveLength(1);
+    expect(d.onClose).toHaveBeenCalledOnce();
+  });
+
+  it("en revisión de importación espera el guardado antes de cerrar", async () => {
+    h = await mountFor("success");
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const onSaved = vi.fn(() => pending);
+    const d = await openDrawer(["g0"], { reviewInfo: { current: 1, total: 1 }, saveReview: onSaved });
+    await d.click("Save and finish");
+    expect(onSaved).toHaveBeenCalledOnce();
+    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({ id: "g0", cloud_status: "PENDING_UPLOAD" }), expect.any(Function));
+    expect(d.onClose).not.toHaveBeenCalled();
+    await act(async () => { finish(); await pending; });
+    expect(d.onClose).toHaveBeenCalledOnce();
+  });
+});
 
 // ============================================================================================================
 describe("S1 · guardar metadatos desde el Drawer (PATCH con expectedVersion y clave de idempotencia)", () => {
