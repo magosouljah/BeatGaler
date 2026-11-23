@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Beat } from "../../../types";
 import type { WebDrawerSave } from "../../../components/Drawer";
-import { useAudio } from "../../../hooks/useAudio";
+import { useGalleryAudio } from "./useGalleryAudio";
 import { useTagColors } from "../../../lib/tagColors";
 import { platform } from "../../../platform";
 import { logoutBeatGalerAccount } from "../../../components/AccountGate";
@@ -35,7 +35,6 @@ export interface CatalogGalleryScopeOptions {
 export interface CatalogTagRename { oldTag: string; newTag: string; stage: "name" | "confirm" }
 
 const handleWarm = () => {};
-const PLAYBACK_UNAVAILABLE_NOTICE = "No se pudo reproducir este beat.";
 
 export function useCatalogGalleryScope({ services, accountId, context }: CatalogGalleryScopeOptions) {
   const { store, interaction: interactionStore, playback: session, media, mutations } = services;
@@ -74,12 +73,7 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const { setNotice } = importSession;
   const { notice, uploadNotice, review, uploads, pendingCards: pendingImports, batchOpen } =
     useSyncExternalStore(importSession.subscribe, importSession.getSnapshot, importSession.getSnapshot);
-  const { state: audio, play, togglePause: toggleEnginePause, seek, setVolume, releaseFile, isAudioPaused } =
-    useAudio(() => setNotice(PLAYBACK_UNAVAILABLE_NOTICE));
-  const togglePause = useCallback(() => {
-    session.cancelPendingPlay(!isAudioPaused());
-    toggleEnginePause();
-  }, [session, isAudioPaused, toggleEnginePause]);
+  const { state: audio, play, togglePause, toggleEnginePause, seek, setVolume, releaseFile, isAudioPaused } = useGalleryAudio(session, setNotice);
 
   const { knownDto, ordinalOf, noteOrdinal, onUnmountCard } = knownCards;
   const { firstBlockCache } = services;
@@ -169,10 +163,6 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
     link.setSession(session);
     link.onEngineState(audio, (error) => reportPlaybackFailure(setNotice, "No se pudo continuar con el siguiente beat", error));
   });
-  useEffect(() => session.onEvent(({ kind }) => {
-    if (kind === "release") releaseFile();
-    if (kind === "unavailable") setNotice(PLAYBACK_UNAVAILABLE_NOTICE);
-  }), [session, releaseFile, setNotice]);
   const { handlePlay, addToQueue, handleNext, handlePrev, toggleShuffle, cycleRepeat, playQueueIndex } = useMemo(() => createGalleryPlaybackCommands({
     session, knownDto, playingId: audio.playingId, togglePause, setNotice,
   }), [session, knownDto, audio.playingId, togglePause, setNotice]);
