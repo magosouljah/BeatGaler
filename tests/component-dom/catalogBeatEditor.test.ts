@@ -47,7 +47,8 @@ describe("readOutcome", () => {
   });
 });
 
-function setup({ blocked = false, timeout = false } = {}) {
+function setup({ blocked = false, timeout = false, readFailsAfterPatch = false } = {}) {
+  let patched = false;
   const server = createCatalogFakeCommands({ beats: fakeBeats(1), transferVerifyAfterPolls: blocked || timeout ? 99 : undefined });
   if (blocked) server.setFailure({ route: /\/commit$/, status: 409, code: "VERSION_CONFLICT" });
   const requests: { method: string; path: string; body: Record<string, unknown> | null }[] = [];
@@ -55,6 +56,10 @@ function setup({ blocked = false, timeout = false } = {}) {
     fetchImpl: (async (input, init) => {
       const path = new URL(String(input)).pathname.replace(/^.*?\/catalog\/v1/, "/catalog/v1");
       requests.push({ method: init?.method ?? "GET", path, body: typeof init?.body === "string" ? JSON.parse(init.body) : null });
+      if (readFailsAfterPatch && patched && (init?.method ?? "GET") === "GET" && path === "/catalog/v1/beats/g0") {
+        return new Response(JSON.stringify({ error: { code: "UNAVAILABLE", message: "sin lectura" } }), { status: 503, headers: { "content-type": "application/json" } });
+      }
+      if ((init?.method ?? "GET") === "PATCH") patched = true;
       return server.fetchImpl(input, init);
     }) as typeof fetch,
     baseUrl: () => "https://cloud.invalid/api", token: () => "fake", csrf: () => "fake",
@@ -173,6 +178,18 @@ describe("BeatEditor con catálogo y puerto Direct falsos", () => {
       expect.objectContaining({ method: "POST", path: "/catalog/v1/operations", body: expect.objectContaining({ kind: "REPLACE", expectedVersion: "2" }) }),
     ]);
     expect(h.server.directSent).toHaveLength(1);
+  });
+
+  it("X56: si la relectura falla tras quitar la portada, informa guardado parcial y no un error general", async () => {
+    const h = setup({ readFailsAfterPatch: true });
+    const shown = await h.show();
+    const result = await h.editor.saveDrawer({
+      original: shown, updated: { ...shown, bpm: "142", image_base64: null }, artworkRemoved: true, files: { MASTER: audio() },
+    });
+    expect(result).toMatchObject({ reading: "rejected", partial: true });
+    expect((result as { message: string }).message).toMatch(/^La portada se quitó y los metadatos se guardaron, pero los archivos no: /);
+    expect(h.creates()).toHaveLength(0);
+    expect(h.server.directSent).toHaveLength(0);
   });
 
   it("guardado manual: usa la versión residente y devuelve el mensaje específico al quedar pendiente", async () => {

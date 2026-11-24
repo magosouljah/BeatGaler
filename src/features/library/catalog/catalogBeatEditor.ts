@@ -295,9 +295,9 @@ export async function editDrawer(deps: DrawerSaveDeps, input: DrawerSaveInput | 
     const { MASTER, WAV, PROJECT } = input.files;
     if (!MASTER && !WAV && !PROJECT) return { ...first, artworkRemoved: true };
 
-    const confirmed = await deps.mutations.getBeat(detail.id);
     let second;
     try {
+      const confirmed = await deps.mutations.getBeat(detail.id);
       second = await saveFiles(deps, confirmed, { ...input, updated: { ...updated, image_base64: null } });
     } catch (e) { second = thrownFailure(e); }
     if (second.reading === "success") return { ...second, status: "committed", artworkRemoved: true };
