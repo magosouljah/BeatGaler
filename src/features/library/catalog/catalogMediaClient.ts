@@ -16,6 +16,7 @@ import type { ArtworkCache } from "./catalogArtworkCache";
 import type { MainManifest, MainPackApi, MainTicket } from "./catalogMainPack";
 import { createMseSink, feedStream, mseSupportsMp3, type FeedResult, type StreamSink } from "./catalogStreamSource";
 import { mp3DeclaredDuration } from "../../audio/mp3PlayablePrefix";
+import { isMp3Master } from "./catalogFileKinds";
 
 export interface MediaPartGrant { partIndex: number; size: number; sha256: string | null; hashVerified: boolean; verificationLevel: "PROVIDER" | "BYTES" | null; /** El hash de los bytes recibidos de Telegram ya fue atestiguado. */ bytesVerified?: boolean; /** E77: referencia directa (chat y mensaje); el navegador lee los bytes de Telegram, el Cloud no los sirve. */ direct?: { chatId: string; messageId: number } }
 export interface MediaAccess { fileId: string; beatId: string; role: string; slotKey: string; revision: string; filename: string | null; mime: string | null; sizeBytes: number; partsTotalBytes: number; sha256: string | null; declaredSha256: string | null; cacheKey: string; epoch: string; parts: MediaPartGrant[]; ttlMs: number }

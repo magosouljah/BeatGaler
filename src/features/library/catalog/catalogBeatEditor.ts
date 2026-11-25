@@ -3,6 +3,7 @@ import type { WebDrawerSave } from "../../../components/Drawer";
 import type { PlatformBeatEditFiles, PlatformCloudCommitProgress } from "../../../platform/contracts";
 import type { ArtworkDropSource } from "../../dragdrop/browserArtwork";
 import { fetchInternetArtworkDataUrl } from "../../artwork/internetArtwork";
+import { artworkFromDataUrl, dataUrlToFile, EXT_BY_MIME } from "./catalogFileKinds";
 import { classifyDroppedAudio, SUPPORTED_ARTWORK_MIME, type DroppedAudioKind } from "./catalogDropKinds";
 import type { CatalogBeatDto } from "./catalogApi";
 import type { CatalogBeatDetail, CatalogVersionedItem } from "./catalogCommandsApi";
@@ -186,13 +187,6 @@ export async function editArtworkFile(mutations: ReplacePort, beatId: string, fi
 }
 
 const MIME_BY_EXT: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp", gif: "image/gif", avif: "image/avif" };
-const EXT_BY_MIME: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/bmp": "bmp", "image/gif": "gif", "image/avif": "avif" };
-const DATA_URL = /^data:([^;,]+)?(;base64)?,(.*)$/s;
-
-function decodeArtworkBytes(data: string, base64: boolean) {
-  return base64 ? Uint8Array.from(atob(data), (c) => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(data));
-}
-
 /** Archivo de imagen con tipo MIME explícito y compatible; null si no lo es. */
 export function normalizeArtworkFile(file: File): File | null {
   const ext = /\.([a-z0-9]+)$/i.exec(file.name)?.[1]?.toLowerCase() ?? "";
@@ -201,22 +195,12 @@ export function normalizeArtworkFile(file: File): File | null {
   return file.type === type ? file : new File([file], file.name || `artwork.${EXT_BY_MIME[type]}`, { type });
 }
 
-function dataUrlToArtworkFile(dataUrl: string): File | null {
-  const m = DATA_URL.exec(dataUrl);
-  if (!m) return null;
-  const type = (m[1] || "").toLowerCase(); if (!SUPPORTED_ARTWORK_MIME.has(type)) return null;
-  try {
-    const bytes = decodeArtworkBytes(m[3], Boolean(m[2]));
-    return bytes.length > 0 ? new File([bytes], `artwork.${EXT_BY_MIME[type]}`, { type }) : null;
-  } catch { return null; }
-}
-
 /** Primera fuente utilizable (archivo local o URL de una página); un fallo de una no impide probar la siguiente. */
 export async function resolveArtworkFile(sources: ArtworkDropSource[]): Promise<File> {
   const errors: string[] = [];
   for (const source of sources) {
     try {
-      const file = source.kind === "file" ? normalizeArtworkFile(source.file) : dataUrlToArtworkFile(/^data:image\//i.test(source.url) ? source.url : await fetchInternetArtworkDataUrl(source.url));
+      const file = source.kind === "file" ? normalizeArtworkFile(source.file) : artworkFromDataUrl(/^data:image\//i.test(source.url) ? source.url : await fetchInternetArtworkDataUrl(source.url));
       if (file && file.size > 0) return file;
       errors.push(`${source.kind}: formato de imagen no compatible`);
     } catch (e) { errors.push(`${source.kind}: ${errorText(e)}`); }
@@ -226,17 +210,6 @@ export async function resolveArtworkFile(sources: ArtworkDropSource[]): Promise<
 
 /** Transferencia retenida que aún puede confirmarse (RECONCILE / tiempo agotado): nunca se reenvía. */
 export const pendingTransferNotice = (name: string) => `La subida de «${name}» sigue confirmándose en el servidor. No se reenvía ni se borra nada: el beat aparecerá si se recibió; si no, se te avisará.`;
-
-function dataUrlToFile(dataUrl: string, name: string): File | null {
-  const m = DATA_URL.exec(dataUrl);
-  if (!m) return null;
-  const mime = m[1] || "image/png";
-  const ext = mime.includes("jpeg") ? "jpg" : mime.includes("webp") ? "webp" : "png";
-  try {
-    const bytes = decodeArtworkBytes(m[3], Boolean(m[2]));
-    return new File([bytes], `${name.replace(/[\\/:*?"<>|]+/g, "_") || "artwork"}.${ext}`, { type: mime });
-  } catch { return null; }
-}
 
 const drawerConflict = "Este beat cambió en otro dispositivo. Tus cambios siguen aquí: revisa y vuelve a guardar.";
 const artworkChanged = (shown: Beat, updated: Beat) =>
