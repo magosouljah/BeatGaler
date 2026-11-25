@@ -6,7 +6,7 @@ on:
       - "src/features/cloud/**"
       - "src/mtcute-internals.d.ts"
       - "cloud-server/**"
-      - "scripts/regression-web-bound-temp-rpc.mjs"
+      - "tests/component-dom/webT*"
       - "vite.config.ts"
       - ".github/workflows/probe-task-5.1-productive-temp-auth-compile.yml"
 
@@ -31,7 +31,12 @@ jobs:
         run: npm ci
 
       - name: Enforce bound temporary-session continuity
-        run: node scripts/regression-web-bound-temp-rpc.mjs
+        run: >-
+          node node_modules/vitest/vitest.mjs run
+          tests/component-dom/webTempAuthBind.behavior.test.ts
+          tests/component-dom/webTransportBoundSession.behavior.test.ts
+          tests/component-dom/webTransportWorker.test.ts
+          --environment jsdom
 
       - name: Capture Web build output
         id: web-build

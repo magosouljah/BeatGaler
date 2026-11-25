@@ -9,7 +9,6 @@ cloud-server/tests/password-kdf.test.cjs
 cloud-server/tests/plan-dev-switch-removed.test.cjs
 scripts/regression-legacy-media-upload-disable.mjs
 scripts/regression-task-5.1-hardening.mjs
-scripts/regression-web-bound-temp-rpc.mjs
 scripts/test-public-operations-pages.mjs
 tests/component-dom/designFoundations.test.tsx
 tests/component-dom/libraryUxBridge.test.ts

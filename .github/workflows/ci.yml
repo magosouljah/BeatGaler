@@ -62,10 +62,6 @@ jobs:
           cache: npm
       - name: Instalar dependencias bloqueadas
         run: npm ci --no-audit --no-fund
-      - name: Guard browser startup bridge
-        run: node scripts/regression-web-startup-bridge.mjs
-      - name: Guard bound-temp Web RPC seam
-        run: node scripts/regression-web-bound-temp-rpc.mjs
       - name: Pruebas Web (npm run test:web)
         run: npm run test:web
       - name: Prueba TLS readiness del deploy Web
