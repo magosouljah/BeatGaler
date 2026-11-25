@@ -143,7 +143,7 @@ async function mountCatalog(outcome: DeleteOutcome, { holdTrash = false, unavail
     target, release, resident, audioElement, playAudio,
     get scope() { return scope; },
     async playBeat(index = 0) {
-      await act(async () => { scope.handlePlay(scope.toBeat(store.itemAt(index)!)); });
+      await act(async () => { scope.transport.handlePlay(scope.toBeat(store.itemAt(index)!)); });
     },
     async endAudio() {
       await act(async () => {
@@ -156,8 +156,8 @@ async function mountCatalog(outcome: DeleteOutcome, { holdTrash = false, unavail
     async deliverSource() { await act(async () => deliverSource()); },
     async playAndEvict() {
       await act(async () => {
-        scope.handlePlay(beat);
-        scope.addToQueue(beat);
+        scope.transport.handlePlay(beat);
+        scope.transport.addToQueue(beat);
       });
       await act(async () => {
         store.observeViewport({ firstOrdinal: 2, lastOrdinal: 3, perViewport: 1 });
@@ -168,7 +168,7 @@ async function mountCatalog(outcome: DeleteOutcome, { holdTrash = false, unavail
       expect(scope.playback).toMatchObject({ current: { beatId: beat.id }, source: { cacheKey: dto.playback?.fileId } });
     },
     async deleteBeat(targetBeat: Beat = beat) {
-      await act(async () => scope.deleteBeat(targetBeat));
+      await act(async () => scope.editor.deleteBeat(targetBeat));
       expect(fetchImpl).toHaveBeenCalledOnce();
       const [url, request] = fetchImpl.mock.calls[0];
       expect([url, request?.method]).toEqual(["https://catalog.invalid/catalog/v1/beats/trash", "POST"]);
@@ -233,7 +233,7 @@ it("la pausa de Gallery invalida una selección que todavía está cargando", as
   await h.playBeat(1);
   expect(h.scope.playback.status).toBe("loading");
   expect(h.scope.audio).toMatchObject({ playingId: h.target.id, isPlaying: true });
-  await act(async () => h.scope.togglePause());
+  await act(async () => h.scope.transport.togglePause());
   await h.deliverSource();
   expect(h.scope.playback).toMatchObject({ current: { beatId: h.target.id }, status: "paused" });
   expect(h.scope.audio).toMatchObject({ playingId: h.target.id, isPlaying: false });
@@ -280,8 +280,8 @@ it("repite una pista al terminar con el elemento de audio fuera del DOM", async 
   await h.playBeat();
   expect(h.audioElement.isConnected).toBe(false);
   expect(document.querySelector("audio")).toBeNull();
-  await act(async () => { h.scope.cycleRepeat(); });
-  await act(async () => { h.scope.cycleRepeat(); });
+  await act(async () => { h.scope.transport.cycleRepeat(); });
+  await act(async () => { h.scope.transport.cycleRepeat(); });
   expect(h.scope.playback.repeat).toBe("one");
   await h.endAudio();
   expect(h.audioElement.currentTime).toBe(0);

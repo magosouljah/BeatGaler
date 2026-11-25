@@ -51,9 +51,9 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
     const expected = (q: string, includeTags: string[], excludeTags: string[], includeMode: "any" | "all", sort: "rating" | "bpm") =>
       ({ state: "ACTIVE", q, includeTags, excludeTags, includeMode, sort, limit: 240, includeTotal: true, cursor: null, edge: null });
     const checkFacets = (entries: [string, number][]) => {
-      expect(scope.allTags).toEqual(entries.map(([tag]) => tag));
-      expect(scope.tagSuggestions).toEqual(scope.allTags);
-      expect([...scope.tagFrequency]).toEqual(entries);
+      expect(scope.filters.allTags).toEqual(entries.map(([tag]) => tag));
+      expect(scope.filters.tagSuggestions).toEqual(scope.filters.allTags);
+      expect([...scope.filters.tagFrequency]).toEqual(entries);
     };
 
     try {
@@ -63,28 +63,28 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
       expect(list).toHaveBeenCalledTimes(1);
       await advance(300);
       expect(replace.mock.calls).toEqual([[{ catalog: true, anchor: null }, "", window.location.origin + "/gallery"]]);
-      await act(async () => { scope.setSearch("Be"); });
+      await act(async () => { scope.filters.setSearch("Be"); });
       await advance(100);
       await act(async () => {
-        scope.setSearch(" Beat ");
-        scope.handleTagClick("odd", {});
-        scope.handleTagClick("shared", {});
+        scope.filters.setSearch(" Beat ");
+        scope.filters.handleTagClick("odd", {});
+        scope.filters.handleTagClick("shared", {});
       });
-      expect([scope.search, ...scope.includedTags]).toEqual([" Beat ", "odd", "shared"]);
+      expect([scope.filters.search, ...scope.filters.includedTags]).toEqual([" Beat ", "odd", "shared"]);
       await advance(249);
       expect(list).toHaveBeenCalledTimes(1);
       await advance(1);
       expect(list).toHaveBeenCalledTimes(2);
       checkFacets(originalFacets);
 
-      await act(async () => { await services.store.setQuery({ ...scope.query.filters, includeMode: "all" }, scope.sortBy); });
+      await act(async () => { await services.store.setQuery({ ...scope.filters.query.filters, includeMode: "all" }, scope.filters.sortBy); });
       await act(async () => {
-        scope.handleTagClick("odd", {});
-        scope.handleTagClick("even", { altKey: true });
-        scope.setSortBy("bpm");
+        scope.filters.handleTagClick("odd", {});
+        scope.filters.handleTagClick("even", { altKey: true });
+        scope.filters.setSortBy("bpm");
       });
-      expect([...scope.includedTags]).toEqual(["shared"]);
-      expect([...scope.excludedTags]).toEqual(["even"]);
+      expect([...scope.filters.includedTags]).toEqual(["shared"]);
+      expect([...scope.filters.excludedTags]).toEqual(["even"]);
       await advance(249);
       expect(list).toHaveBeenCalledTimes(4);
       await advance(1);
@@ -163,14 +163,14 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
     try {
       await render(previous);
       expect(pendingFacets).toHaveBeenCalledTimes(1);
-      await act(async () => { scope.setSearch("Beat"); });
+      await act(async () => { scope.filters.setSearch("Beat"); });
       await advance(100);
       await next.services.store.loadFirst();
       await render(next);
-      expect(scope.search).toBe("Beat");
-      expect(scope.allTags).toEqual(["vigente"]);
+      expect(scope.filters.search).toBe("Beat");
+      expect(scope.filters.allTags).toEqual(["vigente"]);
       await act(async () => { releaseFacets(); });
-      expect(scope.allTags).toEqual(["vigente"]);
+      expect(scope.filters.allTags).toEqual(["vigente"]);
       await advance(249);
       expect(nextList).toHaveBeenCalledTimes(1);
       await advance(1);
@@ -267,11 +267,11 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
       let scope!: Scope;
       const excludedTag = first === "tags" ? "t3" : null;
       const actions = {
-        search: () => scope.setSearch("Beat 2"),
-        sort: () => scope.setSortBy("bpm"),
+        search: () => scope.filters.setSearch("Beat 2"),
+        sort: () => scope.filters.setSortBy("bpm"),
         tags: () => {
-          scope.handleTagClick("odd", {});
-          if (excludedTag) scope.handleTagClick(excludedTag, { altKey: true });
+          scope.filters.handleTagClick("odd", {});
+          if (excludedTag) scope.filters.handleTagClick(excludedTag, { altKey: true });
         },
       };
       const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
@@ -283,7 +283,7 @@ describe("R-002 · orden y filtros diferidos de Gallery", () => {
         expect(scope.snapshot.status).toBe("ready");
         const dto = scope.snapshot.blocks.flatMap((block) => block.items).find((item) => item.id === "g0")!;
         const beat = scope.toBeat(dto);
-        await act(async () => { scope.toggleSelection(beat, false); scope.handlePlay(beat); });
+        await act(async () => { scope.selection.toggleSelection(beat, false); scope.transport.handlePlay(beat); });
         expect(scope.isSelected(beat.id)).toBe(true);
         const selectionId = scope.interaction.selection.selectionId;
         expect(selectionId).toBeTruthy();

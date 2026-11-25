@@ -62,6 +62,8 @@ export async function mountEditHarness(options: EditHarnessOptions = {}) {
   const flush = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(50); }); };
   return {
     server, api, services, reqs, busy, scope: () => scope, dto, drive, flush,
+    /** Vuelve a renderizar el hook con las mismas opciones (sin cambio de estado): mide la estabilidad referencial de los grupos. */
+    rerender: () => act(async () => { root.render(<Probe options={{ services, accountId, context: { ...context } }} onScope={(s) => { scope = s; }} />); }),
     /** Atrapa/ejecuta algo justo ANTES de que la petición llegue al Cloud falso (p. ej. una edición ajena). */
     onRequest(fn: ((r: EditReq) => void) | null) { before = fn; },
     mark: () => reqs.length,
