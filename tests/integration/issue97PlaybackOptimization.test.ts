@@ -76,6 +76,10 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
 
     expect(webSignIn).not.toContain("webRememberedDirectPreconnect");
     expect(webSignIn).not.toContain("webStartupPlaybackCoordinator");
+    for (const file of ["src/features/auth/webSession.ts", "src/components/AccountGate.tsx"]) {
+      expect(source(file)).not.toContain("webRememberedDirectPreconnect");
+      expect(source(file)).not.toContain("webStartupPlaybackCoordinator");
+    }
   });
 
   it("keeps startup routing local-only and makes late candidate configuration impossible", () => {

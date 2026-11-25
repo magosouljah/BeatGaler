@@ -1,7 +1,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
+import { getActiveWebAccountId, setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import { platform } from "../../src/platform";
 import AccountGate from "../../src/components/AccountGate";
 import { loginBeatGalerAccount } from "../../src/features/auth/webSignIn";
@@ -11,8 +11,12 @@ import {
   clearDesktopSignup,
   getBeatGalerInstallationId,
   rememberedDesktopSignup,
+  storeWebCookieSession,
   restoreBeatGalerSession,
 } from "../../src/features/auth/webSession";
+
+const playTraceCalls = vi.hoisted(() => [] as string[]);
+vi.mock("../../src/features/playback/playTrace", () => ({ playTrace: (stage: string) => { playTraceCalls.push(stage); } }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -220,5 +224,47 @@ describe("Desktop pending signup cleanup (SIGNUP_NOT_FOUND/EXPIRED branch of Acc
       (platform as { kind: string }).kind = original;
       localStorage.removeItem(PENDING_SIGNUP_KEY);
     }
+  });
+});
+
+describe("OAuth popup confirmation (storeWebCookieSession)", () => {
+  const user = { id: "oauth-user", username: "oauth#0001", storage_ready: true };
+
+  async function run(csrf: unknown, changeGeneration: boolean) {
+    localStorage.setItem(TOKEN_KEY, "legacy-web-token");
+    localStorage.removeItem(API_KEY);
+    sessionStorage.setItem(CSRF_KEY, "csrf-before");
+    playTraceCalls.length = 0;
+    const steps: unknown[] = [];
+    const sync = vi.spyOn(platform.cloudAuth, "syncSession").mockImplementationOnce(async (...args) => {
+      steps.push(["sync", ...args, getActiveWebAccountId(), localStorage.getItem(TOKEN_KEY),
+        localStorage.getItem(WEB_SESSION_MARKER_KEY), sessionStorage.getItem(CSRF_KEY), localStorage.getItem(API_KEY)]);
+      if (changeGeneration) setActiveWebAccountId("someone-else");
+    });
+    const event = (value: Event) => steps.push([value.type, (value as CustomEvent).detail]);
+    window.addEventListener("beatgaler:account-updated", event);
+    try {
+      const outcome = await storeWebCookieSession({ ok: true, user, csrf_token: csrf } as never).then(v => ({ v }), e => ({ e }));
+      return { steps, outcome };
+    } finally {
+      window.removeEventListener("beatgaler:account-updated", event);
+      sync.mockRestore();
+    }
+  }
+
+  it("stores identity, String(csrf), resolves the base before sync, emits the event and no trace", async () => {
+    const { steps, outcome } = await run(12345, false);
+    expect(outcome).toEqual({ v: user });
+    expect(steps).toEqual([
+      ["sync", null, SAME_ORIGIN_API, user.id, null, "1", "12345", SAME_ORIGIN_API],
+      ["beatgaler:account-updated", user],
+    ]);
+    expect(playTraceCalls).toEqual([]);
+  });
+
+  it("fails with the cancellation error and no event when the account generation changes", async () => {
+    const { steps, outcome } = await run("csrf-x", true);
+    expect((outcome as { e: Error }).e.message).toBe("Sign-in was cancelled by an account change.");
+    expect(steps).toEqual([["sync", null, SAME_ORIGIN_API, user.id, null, "1", "csrf-x", SAME_ORIGIN_API]]);
   });
 });

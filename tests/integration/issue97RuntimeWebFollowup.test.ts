@@ -65,6 +65,10 @@ describe("Issue #97 production runtime follow-up", () => {
 
     expect(webSignIn).toContain('import("../library/catalog/catalogDirectPort")');
     expect(webSignIn).not.toContain("webRememberedDirectPreconnect");
+    for (const file of ["src/features/auth/webSession.ts", "src/components/AccountGate.tsx"]) {
+      expect(source(file)).not.toContain("webRememberedDirectPreconnect");
+      expect(source(file)).not.toContain("webStartupPlaybackCoordinator");
+    }
 
     expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
     expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");
