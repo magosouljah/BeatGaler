@@ -37,6 +37,7 @@ Module._load = function(request, parent, isMain) {
 (async () => {
   const direct = require('../direct-transport-control.js');
   const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
+  const { seedOperation } = require('./helpers/seed-operation.cjs');
   const runtimePool = [{ id: 'Bot01' }];
   let monotonicClock = 100;
   direct.__testing.setMonotonicNow(() => monotonicClock);
@@ -48,15 +49,15 @@ Module._load = function(request, parent, isMain) {
     installationId: 'stale-operation-installation',
     chatId: '-1007000000999',
   });
-  const operation = await direct.__testing.beginOperation({
-    installationId: lease.installation_id,
-    sessionId: lease.session_id,
-    generation: lease.generation,
-    credentialVersion: lease.credential_version,
-    kind: 'get_index',
-    documentContext: { tab_id: 'tab-1', document_id: 'document-1', generation: 1 },
-  });
-  assert.equal(operation.ok, true);
+  const operation = {
+    operation_id: seedOperation({
+      directTransport: direct, pool: runtimePool, lease, kind: 'get_index',
+      extra: { document_tab_id: 'tab-1', document_id: 'document-1', document_generation: 1 },
+    }),
+  };
+  // First maintenance pass registers the persisted operation (bounded grace) and keeps it.
+  await direct.__testing.cleanupExpiredSessions();
+  assert.ok(JSON.parse(fs.readFileSync(stateFile, 'utf8')).operations[operation.operation_id], 'fresh operation must survive its first maintenance pass');
 
   monotonicClock += 15_001;
   const beforeRead = fs.readFileSync(stateFile, 'utf8');

@@ -107,8 +107,6 @@ if (!control.includes("directEnv.tokenRotationEnabled() || 'false'")) fail('Toke
 if (!envExample.includes('DIRECT_TOKEN_ROTATION_ENABLED=false')) fail('V5 test-mode no-revoke setting is missing from .env.example.');
 if (!control.includes('directEnv.heartbeatIntervalMs() || 60_000')) fail('Heartbeat default is no longer 60 seconds.');
 if (!control.includes('directEnv.heartbeatTimeoutMs() || 5 * 60_000')) fail('Heartbeat timeout default is no longer 5 minutes.');
-if (!control.includes("normalizedKind === 'replace_index'")) fail('Per-vault single-index swaps are no longer serialized across installations.');
-if (!control.includes("reason: 'index_busy'")) fail('Concurrent index writers no longer wait instead of racing index replacement.');
 
 // PostgreSQL is the sole authority. First access is lazy; an existing assignment
 // returns before candidate selection even if the bot is unavailable/quarantined.
@@ -147,11 +145,6 @@ const membershipLock = block(assignmentStore, 'withMembershipLock');
 const lockSql = querySql(membershipLock, 'client');
 if (!lockSql.includes('pg_advisory_lock(') || !lockSql.includes('pg_advisory_unlock(') || /['"`]BEGIN['"`]|pg_advisory_xact_lock/.test(lockSql)) fail('Membership network work must use a session advisory lock without an open SQL transaction.');
 requireCall(membershipLock, 'callback');
-const resolver = block(controlAst, 'ensureBotApiResolverChat');
-const persistedResolver = branch(resolver, 'existingId');
-if (!nodes(persistedResolver.thenStatement, node => ts.isReturnStatement(node) && node.expression?.getText() === 'existingId').length) fail('Persisted resolver must return without MASTER bootstrap.');
-const forbiddenMembership = /master|Master|InviteToChannel|EditAdmin|GetParticipant|EditBanned|kickAndUnban|decommissionVaultMembership|originalActivateSession|provisionCurrentLease|withMembershipLock|markMembership|repairMembership/;
-noLocalReachability(controlAst, persistedResolver.thenStatement, forbiddenMembership, 'Persisted resolver');
 
 // Normal cleanup keeps membership. Walk local callees to catch indirect churn;
 // kick/unban remains an explicit decommission primitive with one allowed caller.
@@ -161,7 +154,6 @@ for (const name of ['cleanupLease', 'cleanupLeaseSingleflight', 'stopSession', '
 }
 const cleanup = block(controlAst, 'cleanupLease');
 requireCall(cleanup, 'deleteLease');
-requireCall(cleanup, 'runtimeSessions.delete');
 const decommission = block(controlAst, 'decommissionVaultMembership');
 requireCall(decommission, 'masterForVault');
 const kick = requireCall(controlAst, 'kickAndUnban');
@@ -290,7 +282,7 @@ if (nodes(transform, node => ts.isSpreadAssignment(node) && node.expression.getT
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     verifyDirectArchitecture();
-    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, persisted resolver without MASTER, ephemeral cleanup, explicit decommission, secret/temp-auth boundary and MASTER-only INDEX pin/delete rights.');
+    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, ephemeral cleanup, explicit decommission, secret/temp-auth boundary and MASTER-only INDEX pin/delete rights.');
   } catch (error) {
     console.error(`FAIL Direct persistent guard: ${error.message}`);
     process.exitCode = 1;

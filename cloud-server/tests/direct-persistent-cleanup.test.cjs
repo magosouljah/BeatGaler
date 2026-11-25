@@ -69,6 +69,7 @@ Module._load = function(request, parent, isMain) {
 (async () => {
   const direct = require('../direct-transport-control.js');
   const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
+  const { seedOperation } = require('./helpers/seed-operation.cjs');
   const runtimePool = [{ id: 'Bot01' }];
 
   const first = prepareAssignedLease({
@@ -78,14 +79,8 @@ Module._load = function(request, parent, isMain) {
     installationId: 'normal-close-installation',
     chatId: '-1007000000001',
   });
-  const firstOp = await direct.__testing.beginOperation({
-    installationId: first.lease.installation_id,
-    sessionId: first.lease.session_id,
-    generation: first.lease.generation,
-    credentialVersion: first.lease.credential_version,
-    kind: 'data',
-  });
-  assert.equal(firstOp.ok, true);
+  const firstOp = { operation_id: seedOperation({ directTransport: direct, pool: runtimePool, lease: first.lease, kind: 'data' }) };
+  assert.ok(direct.__testing.stateSnapshot(runtimePool).operations[firstOp.operation_id], 'seeded operation must exist before close');
 
   const stopped = await direct.__testing.stopSession({
     installationId: first.lease.installation_id,
@@ -107,14 +102,8 @@ Module._load = function(request, parent, isMain) {
     installationId: 'heartbeat-expired-installation',
     chatId: '-1007000000002',
   });
-  const secondOp = await direct.__testing.beginOperation({
-    installationId: second.lease.installation_id,
-    sessionId: second.lease.session_id,
-    generation: second.lease.generation,
-    credentialVersion: second.lease.credential_version,
-    kind: 'data',
-  });
-  assert.equal(secondOp.ok, true);
+  const secondOp = { operation_id: seedOperation({ directTransport: direct, pool: runtimePool, lease: second.lease, kind: 'data' }) };
+  assert.ok(direct.__testing.stateSnapshot(runtimePool).operations[secondOp.operation_id], 'seeded operation must exist before expiry');
   direct.__testing.mutateState(runtimePool, current => {
     current.leases[second.lease.session_id].last_heartbeat_at = new Date(Date.now() - 120000).toISOString();
   });
