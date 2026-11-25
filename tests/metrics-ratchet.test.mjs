@@ -162,3 +162,38 @@ test('etiqueta por sujeto: solo-Desktop => desktop; módulo V1 o indeterminado =
     'unknown.test.ts': 'v1',
   });
 });
+
+test('una ruta de código usada solo para lanzar un proceso o pasada como dato no es lectura de texto', t => {
+  const repo = mkdtempSync(path.join(os.tmpdir(), 'metrics-notread-'));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const put = (file, text) => {
+    mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+    writeFileSync(path.join(repo, file), text);
+  };
+  const fn = ['read', 'FileSync'].join('');
+  // toda fixture lee un archivo temporal (no código) para que la ruta de código sea lo único que decide la clase
+  const head = "const path = require('node:path');\nconst { spawnSync } = require('node:child_process');\n"
+    + `require('node:fs').${fn}(path.join(process.cwd(), 'out.txt'), 'utf8');\n`;
+  const bin = "const bin = path.join(__dirname, '..', '..', 'scripts', 'tool.cjs');\n";
+  put('scripts/tool.cjs', 'console.log(1);\n');
+  put('cloud-server/tests/spawnOnly.test.cjs', `${head}${bin}spawnSync(process.execPath, [bin, '--help']);\n`);
+  put('cloud-server/tests/spawnAndRead.test.cjs', `${head}const fs = require('node:fs');\n${bin}spawnSync(process.execPath, [bin]);\nconst s = fs.${fn}(bin, 'utf8');\n`);
+  put('cloud-server/tests/readsProd.test.cjs', `${head}const fs = require('node:fs');\nspawnSync(process.execPath, ['x']);\nconst s = fs.${fn}(path.join(__dirname, '..', 'server.js'), 'utf8');\n`);
+  put('cloud-server/tests/dataToImported.test.cjs', `${head}const { assertDiff } = require('../scripts/tool.cjs');\nassertDiff(['cloud-server/billing.js']);\n`);
+  put('cloud-server/tests/dataToLocalReader.test.cjs', `${head}const fs = require('node:fs');\nconst rd = f => fs.${fn}(f, 'utf8');\nrd('cloud-server/billing.js');\nspawnSync(process.execPath, ['x']);\n`);
+  const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8' });
+  git('init', '-q');
+  git('add', '-A');
+  const run = spawnSync(process.execPath, [
+    fileURLToPath(new URL('../scripts/metrics/classify-tests.mjs', import.meta.url)), repo, 'files',
+  ], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const kind = Object.fromEntries(run.stdout.trim().split(/\r?\n/).map(l => l.split('\t')).map(c => [path.basename(c[1]), c[0]]));
+  assert.deepEqual(kind, {
+    'spawnOnly.test.cjs': 'C',
+    'dataToImported.test.cjs': 'C',
+    'spawnAndRead.test.cjs': 'M',
+    'readsProd.test.cjs': 'M',
+    'dataToLocalReader.test.cjs': 'M',
+  });
+});

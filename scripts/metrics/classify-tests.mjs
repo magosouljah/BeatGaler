@@ -43,7 +43,7 @@ const ANY_CODE_LITERAL = new RegExp(Q + '[^\'"`\\n]*\\.' + CODE_EXT + Q);
 const ENDS_CODE = new RegExp('\\.' + CODE_EXT + '$');
 const JOIN_SEG = new RegExp(Q + '(src|cloud-server|src-tauri|\\.github|scripts|deploy|public)' + Q + '\\s*,');
 const UP_DIR = new RegExp('__dirname\\s*,\\s*' + Q + '\\.\\.' + Q + '|require\\.resolve\\(|new URL\\(\\s*' + Q + '\\.\\.?/');
-const TESTISH = /(\.worker\.|\.test\.|\.e2e\.|fixtures?|helpers?\/|tmp|\.json['"`]|\.sql['"`])/i;
+const TESTISH = /(\.worker\.|\.test\.|\.integration\.|\.e2e\.|fixtures?|helpers?\/|tmp|\.json['"`]|\.sql['"`])/i;
 const IMPORT_PRODUCT = new RegExp(
   '(from\\s+' + Q + '(?:\\.\\./)+(?:src|cloud-server|scripts)/' +
   '|from\\s+' + Q + '@/' +
@@ -54,6 +54,26 @@ const IMPORT_PRODUCT = new RegExp(
   '|require\\(\\s*path\\.(?:join|resolve)\\([^)]*\\.\\.[^)]*\\)\\s*\\))');
 const SPAWN = SPAWN_LINE;
 const WDIO = new RegExp('\\bbrowser\\.(url|execute|\\$)|\\$\\(\\s*' + Q);
+
+// A path that is never read: (a) bound to a name whose every other use is inside a spawn/exec/fork call, or
+// (b) passed as data to a function imported from product code (callee imported from a non-helper module).
+const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function notRead(l, ls) {
+  const decl = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(l);
+  if (decl) {
+    const id = new RegExp('(?<![\\w$.])' + esc(decl[1]) + '(?![\\w$])');
+    const uses = ls.filter(x => x !== l && id.test(x));
+    if (uses.length && uses.every(x => SPAWN_LINE.test(x))) return true;
+  }
+  const call = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(\s*\[?\s*['"`]/.exec(l);
+  if (call && !READ_CALL.test(l)) {
+    const name = esc(call[1]);
+    const imp = new RegExp('^\\s*(?:(?:const|let|var)\\s+\\{[^}]*\\b' + name + '\\b[^}]*\\}\\s*=\\s*require|import\\s*\\{[^}]*\\b' + name + '\\b[^}]*\\}\\s*from)');
+    const src = ls.find(x => imp.test(x));
+    if (src && !/helpers?\b|fixtures?\b/i.test(src)) return true;
+  }
+  return false;
+}
 
 function sourceEvidence(ls) {
   for (const l of ls) {
@@ -67,9 +87,10 @@ function sourceEvidence(ls) {
       continue;
     }
     const m = PRODUCT_LITERAL.exec(l);
+    if (m && notRead(l, ls)) continue;
     if (m && ENDS_CODE.test(m[1]) && !TESTISH.test(m[1])) return l.trim();
     if (m && /^(src|cloud-server)\/[a-z-]+$/.test(m[1])) return l.trim(); // walk("src/features")
-    if (JOIN_SEG.test(l) && ANY_CODE_LITERAL.test(l) && !TESTISH.test(l)) return l.trim();
+    if (JOIN_SEG.test(l) && ANY_CODE_LITERAL.test(l) && !TESTISH.test(l) && !notRead(l, ls)) return l.trim();
   }
   return '';
 }
