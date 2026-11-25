@@ -28,13 +28,15 @@ class IdentitySnapshot {
   #usersById;
   #usersByEmail;
 
-  constructor(value) {
-    this.#value = structuredClone({
+  // `owned` marks a value freshly produced by JSON.parse (plain JSON, unshared): no clone needed.
+  constructor(value, owned = false) {
+    const normalized = {
       users: Array.isArray(value?.users) ? value.users : [],
       sessions: value?.sessions && typeof value.sessions === 'object' && !Array.isArray(value.sessions)
         ? value.sessions
         : {},
-    });
+    };
+    this.#value = owned ? normalized : structuredClone(normalized);
     this.#sessions = new Map(Object.entries(this.#value.sessions));
     this.#usersById = indexUsers(this.#value.users, userIdKey);
     this.#usersByEmail = indexUsers(this.#value.users, userEmailKey);
@@ -71,12 +73,13 @@ function installVirtualIdentity(fsModule, file, initialRaw, isShadowed) {
     virtualFiles.set(fsModule, files);
   }
   const previous = files.get(file);
-  let current = new IdentitySnapshot(initialRaw == null ? null : JSON.parse(initialRaw));
+  let current = new IdentitySnapshot(initialRaw == null ? null : JSON.parse(initialRaw), true);
   // A direct write to the final virtual path shadows the committed bytes in the legacy bridge.
   const read = () => isShadowed() ? null : current;
   files.set(file, read);
   return {
-    commit(value) { current = new IdentitySnapshot(value); },
+    // `raw` is the JSON text of `value`; re-parsing it yields an unshared copy without structuredClone.
+    commit(value, raw) { current = raw == null ? new IdentitySnapshot(value) : new IdentitySnapshot(JSON.parse(raw), true); },
     uninstall() {
       if (previous) files.set(file, previous);
       else files.delete(file);

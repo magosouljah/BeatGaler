@@ -83,6 +83,17 @@ test('el índice virtual solo se reconstruye al confirmar el archivo de identida
   assert.equal(virtualIdentity(fs, file), committed);
 });
 
+test('una escritura directa al archivo final sin rename sombrea el índice virtual', t => {
+  const { file, lifecycle } = fixture(t, { virtual: true });
+  const info = () => lifecycle.api.session.sessionInfoFromRequest(req);
+  assert.ok(virtualIdentity(fs, file));
+  assert.equal(info().user.id, 'usr_before');
+  fs.writeFileSync(file, JSON.stringify(snapshot('usr_direct', 'direct@example.test')));
+  // Sin rename no hay índice: se lee el contenido escrito por la vía heredada.
+  assert.equal(virtualIdentity(fs, file), null);
+  assert.equal(info().user.id, 'usr_direct');
+});
+
 test('las peticiones y las copias completas reciben datos de identidad aislados', t => {
   const { lifecycle, security } = fixture(t, { virtual: true });
   const info = () => lifecycle.api.session.sessionInfoFromRequest(req);
