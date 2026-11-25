@@ -3,18 +3,19 @@
 // estado de ciclo de vida). Debe vivir FUERA del directorio de la release: cada release es código inmutable y el estado
 // sobrevive a despliegues y rollbacks. Sin BEATGALER_STATE_DIR se conserva el comportamiento histórico (junto al código)
 // para LOCAL y tests; en producción `assertProductionStateDir` (arranque de server.js / worker) lo exige.
+const { getRuntimeEnv } = require('./runtime-env');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const CODE_DIR = __dirname;
 const isProduction = (env) => ['production', 'prod'].includes(String(env.BEATGALER_DEPLOYMENT_ENV || env.NODE_ENV || '').trim().toLowerCase());
 
-function resolveStateDir(env = process.env) {
+function resolveStateDir(env = getRuntimeEnv()) {
   const raw = String(env.BEATGALER_STATE_DIR || '').trim();
   return raw ? path.resolve(raw) : CODE_DIR;
 }
 
-function assertProductionStateDir(env = process.env, dir = resolveStateDir(env)) {
+function assertProductionStateDir(env = getRuntimeEnv(), dir = resolveStateDir(env)) {
   if (!isProduction(env)) return dir;
   if (!String(env.BEATGALER_STATE_DIR || '').trim()) throw new Error('STOP: BEATGALER_STATE_DIR is required in production (state must live outside the release directory).');
   let st; try { st = fs.statSync(dir); } catch { throw new Error('STOP: BEATGALER_STATE_DIR does not exist.'); }

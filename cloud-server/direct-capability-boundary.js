@@ -1,5 +1,6 @@
 "use strict";
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { sha256String: sha256, bearerTokenRequiredRequest: bearerToken } = require("./auth-helpers");
 
 const DEFAULT_CAPABILITY_TTL_MS = 10 * 60 * 1000;
@@ -282,7 +283,7 @@ async function revokeTenantCapabilities(tenantId, reason = "incident") {
 function installDirectCapabilityBoundary(express, options = {}) {
   if (express.application.__beatgalerDirectCapabilitiesInstalled) return installedRuntime;
   express.application.__beatgalerDirectCapabilitiesInstalled = true;
-  const env = options.env || process.env;
+  const env = options.env || getRuntimeEnv();
   const now = options.now || (() => Date.now());
   const maxActivePerTenant = Math.max(1, Math.min(16, Number(env.BEATGALER_DIRECT_TENANT_ACTIVE_CAP || DEFAULT_TENANT_ACTIVE_CAP)));
   const store = options.store || (options.pool ? createPostgresStore(options.pool, { maxActivePerTenant }) : createMemoryStore({ now, maxActivePerTenant }));

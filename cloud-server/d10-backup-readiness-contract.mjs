@@ -2,6 +2,9 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import runtimeEnv from './runtime-env.js';
+
+const { backupReadinessEnv } = runtimeEnv;
 
 const contract = Object.freeze({
   id: 'D10.1-backup-readiness-v1',
@@ -36,7 +39,7 @@ function validateContract() {
   return true;
 }
 
-function buildFailureAlert({ component = 'index', reason = 'simulated-backup-failure', route = process.env.BACKUP_FAILURE_ALERT_ROUTE ?? 'UNCONFIGURED' } = {}) {
+function buildFailureAlert({ component = 'index', reason = 'simulated-backup-failure', route = backupReadinessEnv.failureAlertRoute() } = {}) {
   return {
     event: 'backup.failure',
     severity: 'critical',
@@ -78,7 +81,7 @@ async function selfTest() {
   if (!validateFailureAlert(configured)) throw new Error('configured backup failure route rejected');
   const unconfigured = buildFailureAlert();
   if (validateFailureAlert(unconfigured)) throw new Error('unconfigured route must remain pending');
-  const dir = process.env.D10_DRY_RUN_DIR ?? '.tmp/d10-backup-readiness';
+  const dir = backupReadinessEnv.dryRunDir();
   const manifest = await writeDryRunManifest(dir);
   if (manifest.externalProofSatisfied !== false) throw new Error('local dry-run must not claim external proof');
   console.log(JSON.stringify({
@@ -96,7 +99,7 @@ if (command === '--self-test') {
 } else if (command === '--dry-run') {
   console.log(JSON.stringify(await writeDryRunManifest(arg ?? '.tmp/d10-backup-readiness'), null, 2));
 } else if (command === '--simulate-backup-failure') {
-  const alert = buildFailureAlert({ route: process.env.BACKUP_FAILURE_ALERT_ROUTE ?? 'UNCONFIGURED' });
+  const alert = buildFailureAlert({ route: backupReadinessEnv.failureAlertRoute() });
   const routed = validateFailureAlert(alert);
   console.log(JSON.stringify({ routed, alert }, null, 2));
   if (!routed) process.exitCode = 2;

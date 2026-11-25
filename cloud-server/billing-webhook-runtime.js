@@ -1,11 +1,12 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { createDurableWebhookInbox } = require('./billing-webhook-durable');
 
 let inbox = null;
 let failureCode = 'WEBHOOK_RUNTIME_NOT_INITIALIZED';
 
-function configure({ pool, adapter, env = process.env } = {}) {
+function configure({ pool, adapter, env = getRuntimeEnv() } = {}) {
   inbox = null;
   failureCode = 'WEBHOOK_RUNTIME_UNAVAILABLE';
   const environment = adapter?.environment;

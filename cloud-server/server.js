@@ -1,6 +1,7 @@
 "use strict";
 
 require('dotenv').config({ quiet: true });
+const { getRuntimeEnv, serverEnv } = require('./runtime-env');
 const express = require("express");
 const { installLegacyMediaUploadDisable } = require("./legacy-media-upload-disable");
 const { installHttpContainment } = require("./http-containment");
@@ -52,7 +53,7 @@ installLegacyMediaUploadDisable(express);
 
 async function start() {
   assertProductionStateDir();
-  const pgConfig = postgresConfig(process.env);
+  const pgConfig = postgresConfig(getRuntimeEnv());
   let pool = null;
   let authDeliveryWorker = null;
   let emailChangeNoticeWorker = null;
@@ -73,9 +74,9 @@ async function start() {
   configureRuntimeDependencies({ pool, postgresRequired: pgConfig.enabled });
   directPersistentAssignments.configure({ pool });
 
-  const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
+  const cutover = await prepareControlPlaneCutover({ pool, env: getRuntimeEnv() });
   const catalogServices = await assembleServerCatalog({
-    pool, env: process.env, cutover,
+    pool, env: getRuntimeEnv(), cutover,
     onGatewayConfigured: (runtime) => { catalogGatewayRuntime = runtime; },
   });
   const { configureCatalogBoot, assertVaultRebindAllowedIfConfigured } = require('./catalog-boot');
@@ -85,24 +86,24 @@ async function start() {
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
   accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
   if (cutover.authority === 'postgres') {
-    const billing = await webBillingRuntime.configure({ env: process.env });
-    console.log(`[billing] ${process.env.BILLING_PROVIDER_ENVIRONMENT || 'unconfigured'} sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
+    const billing = await webBillingRuntime.configure({ env: getRuntimeEnv() });
+    console.log(`[billing] ${serverEnv.billingProviderEnvironment()} sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
     const checkout = webCheckoutRuntime.configure({
       pool,
       adapter: billing.ready ? webBillingRuntime.provider() : null,
-      env: process.env,
+      env: getRuntimeEnv(),
     });
     console.log(`[billing] web checkout=${checkout.ready ? 'ready' : 'unavailable'} code=${checkout.failureCode || 'OK'}`);
     const portal = webPortalRuntime.configure({
       pool,
       adapter: billing.ready ? webBillingRuntime.provider() : null,
-      env: process.env,
+      env: getRuntimeEnv(),
     });
     console.log(`[billing] web portal=${portal.ready ? 'ready' : 'unavailable'} code=${portal.failureCode || 'OK'}`);
     const webhook = webhookRuntime.configure({
       pool,
       adapter: billing.ready ? webBillingRuntime.provider() : null,
-      env: process.env,
+      env: getRuntimeEnv(),
     });
     console.log(`[billing] webhook inbox=${webhook.ready ? 'ready' : 'unavailable'} code=${webhook.failureCode || 'OK'}`);
     const lifecycle = lifecycleRuntime.configure({
@@ -124,24 +125,24 @@ async function start() {
     }
   }
   const installationClaimCoordinator = pool ? createPostgresInstallationClaimCoordinator(pool) : null;
-  if (String(process.env.NODE_ENV || "") === "production" && !installationClaimCoordinator) {
+  if (serverEnv.isProduction() && !installationClaimCoordinator) {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");
   }
   const providerIdentityAuthority = pool && cutover.authority === 'postgres'
     ? createProviderIdentityAuthority({ pool, getBridge: getServerCoreAuthBridge, flushAuthority: () => cutover.runtime.flush() })
     : null;
 
-  const accountEmailNotifier = createSesEmailNotifier({ env: process.env });
+  const accountEmailNotifier = createSesEmailNotifier({ env: getRuntimeEnv() });
   let pendingSignupService = null;
   let pendingSignupActivation = null;
-  const pendingSignupEnabled = String(process.env.BEATGALER_PENDING_SIGNUP_ENABLED || '') === '1';
+  const pendingSignupEnabled = serverEnv.pendingSignupEnabled();
   if (pendingSignupEnabled) {
     if (!pool || cutover.authority !== 'postgres' || typeof cutover.runtime?.flush !== 'function') {
       throw new Error('BEATGALER_PENDING_SIGNUP_ENABLED=1 requires PostgreSQL control-plane authority.');
     }
-    const keyring = await resolveSecretEnvelopeKeyring(process.env);
-    const pendingRuntime = createPendingSignupRuntime({ pool, keyring, env: process.env });
-    pendingSignupService = createPendingSignupService({ pool, runtime: pendingRuntime, env: process.env });
+    const keyring = await resolveSecretEnvelopeKeyring(getRuntimeEnv());
+    const pendingRuntime = createPendingSignupRuntime({ pool, keyring, env: getRuntimeEnv() });
+    pendingSignupService = createPendingSignupService({ pool, runtime: pendingRuntime, env: getRuntimeEnv() });
     await pendingSignupService.recoverStaleActivations();
     authDeliveryWorker = createAuthDeliveryWorker({
       service: pendingSignupService,
@@ -153,14 +154,14 @@ async function start() {
   // Install these boundaries before lifecycle/containment wrappers so a public
   // register request can never fall through to the legacy create+provision path.
   installAuthPublicRegistrationHardening(express, {
-    env: process.env,
+    env: getRuntimeEnv(),
     getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
     getProviderIdentityAuthority: () => providerIdentityAuthority,
     getAuthPool: () => cutover.authority === 'postgres' ? pool : null,
   });
   installPendingSignupBoundary(express, {
     service: pendingSignupService,
-    env: process.env,
+    env: getRuntimeEnv(),
     activation: input => {
       if (!pendingSignupActivation) {
         const error = new Error('Pending signup activation is unavailable.');
@@ -172,7 +173,7 @@ async function start() {
   });
   const accountLifecycle = installAccountLifecycle(express, {
     dataDir: STATE_DIR,
-    env: d8LifecycleEnv(process.env),
+    env: d8LifecycleEnv(getRuntimeEnv()),
     emailNotifier: accountEmailNotifier,
     pool: cutover.authority === 'postgres' ? pool : null,
     getCapabilityStore: () => directCapabilities?.store || null,
@@ -199,7 +200,7 @@ async function start() {
         });
       },
       flushAuthority: () => cutover.runtime.flush(),
-      env: process.env,
+      env: getRuntimeEnv(),
     });
     installStagedEmailChangeRoutes(express, stagedEmailChange);
     emailChangeNoticeWorker = createStagedEmailChangeNoticeWorker(stagedEmailChange, {
@@ -210,7 +211,7 @@ async function start() {
   // Sensitive legacy mutations are contained before provider reauth wraps the
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
   installSensitiveAuthContainment(express, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
-  applyD8RoResolutions(express, accountLifecycle, { env: process.env });
+  applyD8RoResolutions(express, accountLifecycle, { env: getRuntimeEnv() });
   // Configure the remaining entries before server-core mounts the guard table.
   installSessionSecurity(express, {
     dataDir: STATE_DIR,
@@ -224,7 +225,7 @@ async function start() {
   // PostgreSQL is mandatory in production. These shared buckets therefore
   // coordinate auth abuse controls across every production process/restart;
   // the existing in-memory layer remains as an additional low-latency guard.
-  installDurableAuthAbuseControls(express, { pool, runtime: accountLifecycle, env: process.env });
+  installDurableAuthAbuseControls(express, { pool, runtime: accountLifecycle, env: getRuntimeEnv() });
   installAuthAbuseControls(express);
   installProductiveTempAuthBoundary(express);
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"} pending-signup=${pendingSignupEnabled ? 'configured' : 'disabled'}`);
@@ -247,7 +248,7 @@ async function start() {
       getBridge: getServerCoreAuthBridge,
       flushAuthority: () => cutover.runtime.flush(),
       installationClaimCoordinator,
-      staleMs: Number(process.env.BEATGALER_SIGNUP_ACTIVATION_STALE_MS || 5 * 60_000),
+      staleMs: serverEnv.signupActivationStaleMs(),
     });
   }
 

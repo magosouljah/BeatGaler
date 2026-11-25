@@ -1,5 +1,6 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { BILLING_V1_ACCESS_CATALOG } = require('./billing-access-resolver');
 const { createCommercialCatalog, getCheckoutReadyOffer } = require('./billing-commercial-catalog');
 const {
@@ -48,7 +49,7 @@ function publicPlanCatalog(catalog) {
   });
 }
 
-function createWebBillingRuntime({ env = process.env, adapterFactory = createPolarLifecycleAdapter } = {}) {
+function createWebBillingRuntime({ env = getRuntimeEnv(), adapterFactory = createPolarLifecycleAdapter } = {}) {
   // The public V1 contract is available even if provider configuration is absent.
   let catalog = createCommercialCatalog({ environment: 'sandbox' });
   let adapter = null;

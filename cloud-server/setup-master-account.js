@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const { telegramEnv } = require('./runtime-env');
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
@@ -20,8 +21,8 @@ try {
   process.exit(1);
 }
 
-const apiId = Number(process.env.TELEGRAM_API_ID);
-const apiHash = String(process.env.TELEGRAM_API_HASH || "");
+const apiId = Number(telegramEnv.apiId());
+const apiHash = String(telegramEnv.apiHash() || "");
 
 if (!Number.isFinite(apiId) || !apiHash) {
   console.error("TELEGRAM_API_ID and TELEGRAM_API_HASH must be configured first.");

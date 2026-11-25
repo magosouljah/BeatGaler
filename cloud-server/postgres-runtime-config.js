@@ -1,5 +1,7 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
+
 function integerEnv(value, fallback, { min, max, name }) {
   if (value == null || value === '') return fallback;
   const parsed = Number(value);
@@ -9,7 +11,7 @@ function integerEnv(value, fallback, { min, max, name }) {
   return parsed;
 }
 
-function postgresConfig(env = process.env) {
+function postgresConfig(env = getRuntimeEnv()) {
   const enabled = String(env.BEATGALER_POSTGRES_ENABLED || '').toLowerCase() === 'true';
   const connectionString = String(env.DATABASE_URL || '').trim();
   if (enabled && !connectionString) {
@@ -30,7 +32,7 @@ function postgresConfig(env = process.env) {
   });
 }
 
-function createPostgresPool(Pool, env = process.env) {
+function createPostgresPool(Pool, env = getRuntimeEnv()) {
   if (typeof Pool !== 'function') throw new Error('A PostgreSQL Pool constructor is required.');
   const config = postgresConfig(env);
   if (!config.enabled) return null;

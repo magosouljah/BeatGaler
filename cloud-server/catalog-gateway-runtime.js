@@ -7,6 +7,7 @@
 //  - Clientes perezosos: no se abre ninguna sesión (ni se lee ningún token) hasta la primera operación real.
 //  - Bots en cuarentena o con rotación pendiente se rechazan antes de cualquier efecto externo.
 //  - Sin `proveUniqueMatch`: toda reconciliación por búsqueda sigue en revisión manual (Opción A, E5).
+const { getRuntimeEnv } = require('./runtime-env');
 const { createTelegramGateway, GatewayError } = require('./catalog/transport-gateway');
 
 const GATEWAY_FLAG = 'BEATGALER_CATALOG_GATEWAY_ENABLED';
@@ -15,10 +16,10 @@ const OWNER_EXCEPTION_FLAG = 'BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED';
 const isTrue = (v) => String(v || '').trim().toLowerCase() === 'true';
 const isProduction = (env) => ['production', 'prod'].includes(String(env.BEATGALER_DEPLOYMENT_ENV || env.NODE_ENV || '').trim().toLowerCase());
 
-function gatewayEnabled(env = process.env) { return isTrue(env[GATEWAY_FLAG]); }
+function gatewayEnabled(env = getRuntimeEnv()) { return isTrue(env[GATEWAY_FLAG]); }
 
 // Guarda de arranque: devuelve null si el gateway está apagado; lanza STOP-* si está encendido sin condiciones.
-function assertGatewayAllowed(env = process.env) {
+function assertGatewayAllowed(env = getRuntimeEnv()) {
   if (!gatewayEnabled(env)) return false;
   // Owner-accepted rollout with reused, unrotated bots. This NEVER marks G2 PASS.
   // The Cloud bootstrap also verifies the SQL activation row records this mode.
@@ -147,7 +148,7 @@ function createRealBotClientProvider({ credentialFor, apiCredentials, telegram =
 }
 
 // Montaje desde entorno. Devuelve null si está apagado. `credentialFor` por defecto = pool de transporte vigente.
-function gatewayFromEnv({ pool, env = process.env, log = null, credentialFor = null, clientProvider = null, sdk = null } = {}) {
+function gatewayFromEnv({ pool, env = getRuntimeEnv(), log = null, credentialFor = null, clientProvider = null, sdk = null } = {}) {
   if (!assertGatewayAllowed(env)) return null;
   if (!pool) throw new Error('STOP-ENV: the catalog gateway requires the PostgreSQL control plane');
   const sdkReal = sdk || (() => { const { Api } = require('telegram'); return { Api, bigInt: require('big-integer') }; })();

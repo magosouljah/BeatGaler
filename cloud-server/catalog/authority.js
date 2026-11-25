@@ -7,6 +7,7 @@
 //  - Guardas §12 del control-plane JSON y rechazo en origen de rebind (§6.2.1).
 // No importa INDEX ni consulta Telegram. No contiene ninguna ruta de borrado de cuenta (§6.1 deshabilitado).
 
+const { getRuntimeEnv } = require('../runtime-env');
 const crypto = require('crypto');
 const { requireUserId } = require('./contract');
 
@@ -64,7 +65,7 @@ function nativeGenerationDescriptor({ era, chatId, vaultId }) {
   return { schema: 'beatgaler.catalog.generation', version: 1, origin: 'NATIVE', authority_era: String(era), vault_id: String(vaultId), chat_id: String(chatId), beats: 0 };
 }
 
-function catalogNativeConfig(env = process.env) {
+function catalogNativeConfig(env = getRuntimeEnv()) {
   const nativeEnabled = String(env[NATIVE_FLAG_ENV] || '').trim().toLowerCase() === 'true';
   const deletionRaw = String(env[ACCOUNT_DELETION_FLAG_ENV] || '').trim().toLowerCase();
   if (deletionRaw === 'true' || deletionRaw === '1') {
@@ -180,7 +181,7 @@ async function isQuarantined(client, userId) {
   return r.rows.length > 0;
 }
 
-function createCatalogAuthority({ pool = null, env = process.env, controlPlaneAuthority = null, randomUUID = () => crypto.randomUUID() } = {}) {
+function createCatalogAuthority({ pool = null, env = getRuntimeEnv(), controlPlaneAuthority = null, randomUUID = () => crypto.randomUUID() } = {}) {
   const config = catalogNativeConfig(env);
 
   // §3.4.1 Precondiciones de disponibilidad. Cualquier fallo: 503 sin efectos. Nunca "catálogo vacío".
