@@ -5,6 +5,7 @@ const { bearerTokenRequiredRequest: bearerToken, accountsDataPath } = require(".
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { virtualIdentity } = require("./identity-store");
 
 const FILE_UPLOAD_LIMIT_BYTES = 1_990_000_000;
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
@@ -60,6 +61,22 @@ function createHttpContainment(options = {}) {
   const installationClaimCoordinator = options.installationClaimCoordinator || null;
 
   function accountsData() { return readJson(accountsFile, { users: [], sessions: {} }); }
+  // Modo PG virtual: índice del almacén confirmado (copias); modo JSON: lectura actual del archivo.
+  function sessionByHash(key) {
+    const identity = virtualIdentity(fs, accountsFile);
+    return (identity ? identity.session(key) : accountsData().sessions?.[key]) || undefined;
+  }
+  function userById(id) {
+    const identity = virtualIdentity(fs, accountsFile);
+    if (identity) return identity.userById(id);
+    return (accountsData().users || []).find(user => String(user?.id || "") === String(id)) || null;
+  }
+  function userByEmail(email) {
+    const identity = virtualIdentity(fs, accountsFile);
+    const normalized = String(email || "").trim().toLowerCase();
+    if (identity) return identity.userByEmail(normalized);
+    return (accountsData().users || []).find(user => String(user?.email || "").trim().toLowerCase() === normalized) || null;
+  }
   function cloudData() { return readJson(cloudFile, { linkedAccounts: {}, beatTopics: {} }); }
   function authzData() { return readJson(bindingsFile, {}); }
   function saveAuthz(data) { writeJsonAtomic(bindingsFile, data); }
@@ -67,13 +84,12 @@ function createHttpContainment(options = {}) {
   function authenticate(req, res) {
     const token = bearerToken(req);
     if (!token) { sendJson(res, 401, "Session expired. Sign in again."); return null; }
-    const data = accountsData();
     const key = sessionKey(token);
-    const session = data.sessions?.[key];
+    const session = sessionByHash(key);
     if (!session || Number(session.expiresAt || 0) <= now()) {
       sendJson(res, 401, "Session expired. Sign in again."); return null;
     }
-    const user = (Array.isArray(data.users) ? data.users : []).find(entry => String(entry?.id || "") === String(session.userId || ""));
+    const user = userById(String(session.userId || ""));
     if (!user) { sendJson(res, 401, "Session expired. Sign in again."); return null; }
     return { token, key, session, user };
   }
@@ -86,16 +102,14 @@ function createHttpContainment(options = {}) {
     // ownership once their BeatGaler account no longer exists. Never let an
     // orphaned link block new X/Google sign-in or an installation claim.
     const ownerId = String(link.beatgalerAccountId || "");
-    if (!ownerId || !(accountsData().users || []).some(user => String(user?.id || "") === ownerId)) return null;
+    if (!ownerId || !userById(ownerId)) return null;
     return link;
   }
 
   function findLoginUser(req) {
     const identifier = String(req.body?.email || req.body?.identifier || "").trim().toLowerCase();
     if (!identifier) return null;
-    return (accountsData().users || []).find(user =>
-      String(user?.email || "").trim().toLowerCase() === identifier
-    ) || null;
+    return userByEmail(identifier);
   }
 
   async function reserveInstallationClaim(res, installationId, claimant) {
@@ -148,9 +162,8 @@ function createHttpContainment(options = {}) {
     if (!token || !id) return false;
     const cloudAccount = linkedAccount(id);
     if (!cloudAccount || String(cloudAccount.beatgalerAccountId || "") !== String(expectedUserId || "")) return false;
-    const data = accountsData();
     const key = sessionKey(token);
-    const session = data.sessions?.[key];
+    const session = sessionByHash(key);
     if (!session || String(session.userId || "") !== String(expectedUserId || "")) return false;
     const bindings = authzData();
     bindings[key] = { installationId: id, tenantId: String(expectedUserId), boundAt: now(), expiresAt: Number(session.expiresAt || 0) };
@@ -251,7 +264,7 @@ function createHttpContainment(options = {}) {
       // A returning user's previous session may have expired. Let the same
       // provider prove account ownership again, never a different provider.
       const provider = String(req.body?.provider || "").trim().toLowerCase();
-      const owner = (accountsData().users || []).find(u => String(u?.id || "") === String(current.beatgalerAccountId || ""));
+      const owner = userById(String(current.beatgalerAccountId || ""));
       if (!owner || !owner.providers?.[provider]?.id) {
         return sendJson(res, 403, "This installation is already linked. Sign in using its connected provider.");
       }
