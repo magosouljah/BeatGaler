@@ -225,3 +225,25 @@ test('worker autocommit reports duplicate job_id as 23505', async (t) => {
     { code: 'CATALOG_UNAVAILABLE', detail: { sqlstate: '23505', reason: 'SQL_ERROR' } });
   assert.deepEqual(db.trace.map(([connection]) => connection), ['pool']);
 });
+
+test('Direct replays an uncertain report and enqueues only one reconciliation after commit', async () => {
+  const db = fake([
+    ['FROM catalog_operation_parts', partRows[1]],
+    ['SELECT capability_hash, status', [{ status: 'CONSUMED' }]],
+  ]);
+  const direct = createCatalogDirect({ ...db, operations: { markDispatched: assert.fail, putReceipt: assert.fail } });
+  const report = { ...request, partKey, attempt: 1, outcome: 'UNCERTAIN' };
+  const expected = { state: 'UNCERTAIN', reconcile: true, resend: 'BLOCKED', retryAfterMs: 60000, replay: true };
+  const jobId = `job-reconcile-top-${uuid}-FILES_0_0`;
+  const enqueueTraces = [];
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual(await direct.reportSend(report), expected);
+    assert.deepEqual([...db.jobs], [jobId]);
+    enqueueTraces.push(db.trace.slice(-3));
+  }
+  const enqueueTrace = [
+    ['client', 'COMMIT', null], ['release'],
+    ['pool', directSql, [jobId, request.userId, request.operationId, '{"partKey":"FILES:0:0"}']],
+  ];
+  assert.deepEqual(enqueueTraces, [enqueueTrace, enqueueTrace]);
+});

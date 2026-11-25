@@ -20,7 +20,7 @@ function fakeOps({ jobs = [], verify = null, commit = null } = {}) {
     async renewJobLease({ jobId, lease }) { const j = jobs.find((x) => x.jobId === jobId); if (!j || j.lease.generation !== lease.generation) throw Object.assign(new Error('fenced'), { code: 'LEASE_FENCED' }); log.push(['renew', jobId]); return {}; },
     async completeJob({ jobId, lease }) { const j = jobs.find((x) => x.jobId === jobId); if (!j || j.lease.generation !== lease.generation) throw Object.assign(new Error('fenced'), { code: 'LEASE_FENCED' }); j.state = 'DONE'; log.push(['done', jobId]); return {}; },
     async failJob({ jobId, lease, error, transient, retryAfterMs }) { const j = jobs.find((x) => x.jobId === jobId); if (!j || j.lease.generation !== lease.generation) throw Object.assign(new Error('fenced'), { code: 'LEASE_FENCED' }); j.attempts = (j.attempts || 0) + 1; j.state = !transient || j.attempts >= 8 ? 'BLOCKED' : 'QUEUED'; log.push(['fail', jobId, transient, retryAfterMs, error]); return { state: j.state }; },
-    async enqueueJob({ jobId, kind, payload, userId, operationId }) { if (jobs.some((j) => j.jobId === jobId)) throw Object.assign(new Error('dup'), { detail: { sqlstate: '23505' } }); jobs.push({ jobId, kind, payload, userId, operationId, state: 'QUEUED' }); log.push(['enqueue', kind, jobId]); return { jobId }; },
+    async enqueueJob({ jobId, kind, payload, userId, operationId }) { if (jobs.some((j) => j.jobId === jobId)) { log.push(['duplicate', jobId]); throw Object.assign(new Error('dup'), { detail: { sqlstate: '23505' } }); } jobs.push({ jobId, kind, payload, userId, operationId, state: 'QUEUED' }); log.push(['enqueue', kind, jobId]); return { jobId }; },
     async recordVerification(a) { log.push(['verify', a.partKey, a.lease.generation]); return verify ? verify(a) : { verified: true, ready: true }; },
     async putReceipt(a) { log.push(['receipt', a.partKey, a.receipt.messageId]); return {}; },
     async commitOperation(a) { log.push(['commit', a.operationId]); return commit ? commit(a) : { status: 200, operation: { beatId: 'b1' } }; },
@@ -28,6 +28,45 @@ function fakeOps({ jobs = [], verify = null, commit = null } = {}) {
   return { ops, pool, log, jobs, parts, setPart: (op, key, row) => parts.set(`${op}:${key}`, row) };
 }
 const job = (jobId, kind, payload = {}, extra = {}) => ({ jobId, kind, payload, userId: 'u1', operationId: 'top-1', state: 'QUEUED', ...extra });
+
+for (const [kind, payload, expectedPayload, operationId] of [
+  ['QUERY_SET_BUILD', { setId: 'set-1' }, { setId: 'set-1' }, undefined],
+  ['OPERATION_STEP', { operationId: 'bulk-1' }, { operationId: 'bulk-1' }, 'top-1'],
+  ['PURGE', {}, { purgeId: 'top-1' }, 'top-1'],
+]) {
+  test(`${kind}: un fallo después de encolar permite reintentar sin duplicar la continuación`, async () => {
+    const f = fakeOps({ jobs: [job('root', kind, payload)] });
+    const complete = f.ops.completeJob;
+    let interrupted = false;
+    f.ops.completeJob = async (args) => {
+      if (!interrupted) { interrupted = true; throw new Error('completion unavailable'); }
+      return complete(args);
+    };
+    const w = createCatalogWorker({ pool: f.pool, operations: f.ops, owner: 'w1',
+      options: { globalConcurrency: 1, stepsPerClaim: 2 },
+      queries: { async stepQuerySet(args) { f.log.push(['step', args]); return { status: 'BUILDING', memberCount: 240 }; } },
+      commands: { async stepOperation(args) { f.log.push(['step', args]); return { status: 'RUNNING' }; } },
+      purge: { async step(args) { f.log.push(['step', args]); return { status: 'RUNNING', more: true }; } },
+    });
+    const step = ['step', {
+      QUERY_SET_BUILD: { userId: 'u1', setId: 'set-1', batch: 240 },
+      OPERATION_STEP: { userId: 'u1', era: 'era', epoch: '1', operationId: 'bulk-1', batch: 50 },
+      PURGE: { userId: 'u1', purgeId: 'top-1' },
+    }[kind]];
+    assert.equal((await w.runOnce())[0].outcome, 'retry');
+    assert.equal((await w.runOnce())[0].outcome, 'done');
+    assert.equal((await w.runOnce())[0].outcome, 'done');
+    assert.deepEqual(f.log, [
+      ['claim', ['root']], step, step, ['enqueue', kind, 'root-c1'], ['fail', 'root', true, 0, 'ERROR: completion unavailable'],
+      ['claim', ['root']], step, step, ['duplicate', 'root-c1'], ['done', 'root'],
+      ['claim', ['root-c1']], step, step, ['enqueue', kind, 'root-c2'], ['done', 'root-c1'],
+    ]);
+    assert.deepEqual(f.jobs.slice(1), [
+      { jobId: 'root-c1', kind, userId: 'u1', operationId, payload: { ...expectedPayload, continuation: 1, root: 'root' }, state: 'DONE', lease: { owner: 'w1', generation: '3' } },
+      { jobId: 'root-c2', kind, userId: 'u1', operationId, payload: { ...expectedPayload, continuation: 2, root: 'root' }, state: 'QUEUED' },
+    ]);
+  });
+}
 
 test('runOnce: claim acotado por concurrencia global, handlers ejecutan, completan con fencing y encolan el commit cuando todo está verificado', async () => {
   const f = fakeOps({ jobs: [job('j1', 'TRANSFER_VERIFY', { partKey: 'm0' }), job('j2', 'TRANSFER_VERIFY', { partKey: 'm1' }, { userId: 'u2' }), job('j3', 'TRANSFER_VERIFY', { partKey: 'm2' }, { userId: 'u3' })] });

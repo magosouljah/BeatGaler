@@ -17,9 +17,9 @@
 //    distinto (RECEIPT_CONFLICT) y la operación ya cerrada rechaza cualquier recibo (OPERATION_TRANSITION_INVALID).
 const crypto = require('crypto');
 const { requireUserId, partJobId } = require('./contract');
-const { canonicalJson } = require('./authority');
 const { CatalogQueryError } = require('./cursor');
 const { createLibraryTx } = require('./library-tx');
+const { enqueueOnConflictDoNothing } = require('./queue');
 const { captionFor } = require('./transport-gateway');
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -54,8 +54,12 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
     return r.rows[0];
   }
   const checkIds = (operationId, partKey) => { if (typeof operationId !== 'string' || !ID_RE.test(operationId) || typeof partKey !== 'string' || !PART_RE.test(partKey)) throw inputInvalid('OPERATION_OR_PART'); };
-  const enqueueReconcile = (uid, operationId, partKey) => journal(`INSERT INTO catalog_jobs(job_id, user_id, kind, operation_id, payload_json) VALUES ($1, $2, 'TRANSFER_RECONCILE', $3, $4) ON CONFLICT (job_id) DO NOTHING`,
-    [partJobId('reconcile', operationId, partKey), uid, operationId, canonicalJson({ partKey })]);
+  async function enqueueReconcile(uid, operationId, partKey) {
+    const jobId = partJobId('reconcile', operationId, partKey);
+    try {
+      return await enqueueOnConflictDoNothing(pool, uid, { jobId, kind: 'TRANSFER_RECONCILE', operationId, payload: { partKey } }, 'direct');
+    } catch (error) { throw sqlError(error); }
+  }
 
   // ---------- POST /catalog/v1/direct/session ----------
   // Sin tempAuthMetadata → bootstrap (dc, api_id, bot esperado); con él → bloque de vinculación. Sin lease legacy, sin INDEX, sin MASTER.
