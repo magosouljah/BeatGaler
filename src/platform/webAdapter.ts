@@ -17,7 +17,7 @@ function unavailable(feature: string): never { throw new Error(`${feature} is no
 const webClientId = getWebClientId();
 
 export const webAdapter: PlatformAdapter = {
-  kind: "web", capabilities: WEB_FOUNDATION_CAPABILITIES, clientId: webClientId,
+  kind: "web", capabilities: WEB_FOUNDATION_CAPABILITIES,
   // The Web Gallery uses the PostgreSQL catalog. These ports satisfy the shared platform contract.
   library: {
     async load() { throw new Error("Galer Cloud could not load your library. Please retry."); },

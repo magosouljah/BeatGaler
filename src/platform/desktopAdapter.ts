@@ -1,11 +1,10 @@
-import { filePathToUrl, getCloudClientId, loadLibrary } from "../lib/tauri";
+import { filePathToUrl, loadLibrary } from "../lib/tauri";
 import { DESKTOP_CAPABILITIES } from "./capabilities";
 import type { PlatformAdapter, PlatformEventHandler, PlatformUnlisten } from "./contracts";
 
 export const desktopAdapter: PlatformAdapter = {
   kind: "desktop",
   capabilities: DESKTOP_CAPABILITIES,
-  clientId: getCloudClientId(),
   library: {
     load: loadLibrary,
     async restoreAuthoritative() {
