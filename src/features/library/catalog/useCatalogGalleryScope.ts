@@ -169,20 +169,19 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const dismissNotice = useCallback(() => { setNotice(null); interactionStore.dismissNotice(); }, [interactionStore, setNotice]);
 
   return {
-    snapshot, interaction, playback, audio, query, revision,
-    toBeat, beatById, noteOrdinal, onMountCard, onUnmountCard, isSelected,
+    snapshot, interaction, playback, audio, query,
+    toBeat, noteOrdinal, onMountCard, onUnmountCard, isSelected,
     search, setSearch, sortBy, setSortBy: querySession.setSort, includedTags, excludedTags, handleTagClick, clearTagFilters,
     allTags: facets.tags, tagFrequency: facets.freq as ReadonlyMap<string, number>, tagSuggestions: facets.tags, tagColors,
-    selectMode, selectedCount: interaction.selection.count, selectionStatus: interaction.selection.status, selectedBeats, toggleSelection, toggleSelectAll, finishSelection, clearSelection,
-    handlePlay, handleWarm, addToQueue, handleNext, handlePrev, toggleShuffle, cycleRepeat, showQueue, toggleQueue, closeQueue, playQueueIndex, queuedBeats, currentBeat,
+    selectMode, selectedCount: interaction.selection.count, selectedBeats, toggleSelection, toggleSelectAll, finishSelection,
+    handlePlay, handleWarm, addToQueue, handleNext, handlePrev, toggleShuffle, cycleRepeat, showQueue, toggleQueue, playQueueIndex, queuedBeats, currentBeat,
     shuffleEnabled: playback.shuffle, repeatMode: playback.repeat, togglePause, seek, setVolume, releaseFile,
     drawer, setDrawer, saveWebDrawer: ((request) => dispatchWebDrawerSave(request, { review: saveReview, edit: saveDrawerToCatalog, bulk: applyBulkUpdate })) as WebDrawerSave, commitDrawerCloudMutation, saveDrawerToCatalog, deleteBeat, handleEditBulk, applyBulkUpdate, handleRemoveBulk,
     tagRename, tagRenameBusy: rename?.stage === "running", tagRenameError: rename?.error ?? null, tagRenameAffectedCount: (rename?.preview?.countActive ?? 0) + (rename?.preview?.countTrash ?? 0),
     openTagRename, setTagRenameNewTag, continueTagRename, backTagRename, cancelTagRename, confirmTagRename,
     showAdd, setShowAdd, addBeatsAndReview, review, cancelReview, saveReview, uploads, pendingCards, replaceAudioByDrop, replaceArtworkByDrop, cloudFiles, downloadBusy, downloaded, openDownloads, closeDownloads, downloadKind, showSettings, setShowSettings, handleDisconnectTelegramAccount, reloadLibrary,
-    connectionState, cloudSessionVerified, loading, libraryRefreshing: false, rejectOfflineMutation,
+    connectionState, cloudSessionVerified, loading, rejectOfflineMutation,
     notice: notice ?? uploadNotice ?? interaction.selection.notice ?? null, dismissNotice,
-    accountId, context,
   };
 }
 export type CatalogGalleryScope = ReturnType<typeof useCatalogGalleryScope>;
