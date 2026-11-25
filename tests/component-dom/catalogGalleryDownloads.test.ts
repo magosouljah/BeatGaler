@@ -12,7 +12,7 @@ const dto = (id: string): CatalogBeatDto => ({
 const file = (fileId: string, role: string, filename: string | null = null): CatalogBeatFile => ({
   fileId, role, current: true, revision: "1", filename, mime: null, sizeBytes: "10", status: "AVAILABLE", verified: true, slot: role, partCount: 1,
 });
-const deferred = <T,>() => { let resolve!: (v: T) => void; const promise = new Promise<T>((a) => { resolve = a; }); return { promise, resolve }; };
+const deferred = <T,>() => { let resolve!: (v: T) => void; let reject!: (e: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 
 // Adaptador: unico lugar que sabe como se monta el estado de descargas y como se lee lo que ve la UI.
 function mount(opts: { offline?: boolean; listBeatFiles?: (id: string) => Promise<CatalogBeatFile[]>; downloadFile?: (id: string) => Promise<{ blob: Blob }> } = {}) {
@@ -108,11 +108,31 @@ describe("estado de descargas de la Gallery", () => {
     expect(m.read()).toEqual({ cloudFiles: null, downloadBusy: null, downloaded: [] });
   });
 
-  it("dos aperturas seguidas: gana la ultima en resolver (comportamiento actual)", async () => {
+  it("dos aperturas seguidas: gana la ultima solicitada, aunque la anterior resuelva despues", async () => {
     const ga = deferred<CatalogBeatFile[]>(), gb = deferred<CatalogBeatFile[]>();
     const m = mount({ listBeatFiles: (id) => (id === "a" ? ga.promise : gb.promise) });
     m.open(beatA); m.open(beatB);
     gb.resolve([file("b1", "WAV")]); await vi.waitFor(() => expect(m.read().cloudFiles?.beat.id).toBe("b"));
-    ga.resolve([file("a1", "WAV")]); await vi.waitFor(() => expect(m.read().cloudFiles?.beat.id).toBe("a"));
+    ga.resolve([file("a1", "WAV")]); await new Promise((r) => setTimeout(r, 20));
+    expect(m.read().cloudFiles?.beat.id).toBe("b");
+    expect(m.read().cloudFiles?.files.map((f) => f.fileId)).toEqual(["b1"]);
+  });
+
+  it("apertura anterior que falla despues no avisa ni pisa la ultima", async () => {
+    const ga = deferred<CatalogBeatFile[]>();
+    const m = mount({ listBeatFiles: (id) => (id === "a" ? ga.promise : Promise.resolve([file("b1", "WAV")])) });
+    m.open(beatA); m.open(beatB);
+    await vi.waitFor(() => expect(m.read().cloudFiles?.beat.id).toBe("b"));
+    ga.reject(new Error("tarde")); await new Promise((r) => setTimeout(r, 20));
+    expect(m.notices).toEqual([]);
+    expect(m.read().cloudFiles?.beat.id).toBe("b");
+  });
+
+  it("cerrar con una apertura pendiente invalida su respuesta", async () => {
+    const ga = deferred<CatalogBeatFile[]>();
+    const m = mount({ listBeatFiles: () => ga.promise });
+    m.open(beatA); m.close();
+    ga.resolve([file("a1", "WAV")]); await new Promise((r) => setTimeout(r, 20));
+    expect(m.read().cloudFiles).toBeNull();
   });
 });
