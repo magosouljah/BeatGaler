@@ -10,6 +10,8 @@
 //   (2) a product path literal with a code extension elsewhere in the file (helper read("src/x.ts"), file tables).
 // Limits: text heuristic. A test that reads source only to locate something, or that both spawns and reads a script,
 // lands in M. Audit with mode "files" (prints the evidence line per file).
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { repoArg, tracked, read, head } from './lib.mjs';
 const repo = repoArg();
 const mode = process.argv[3] || 'summary';
@@ -72,6 +74,48 @@ function sourceEvidence(ls) {
   return '';
 }
 
+// Subject of an F/M test (derived, fail-closed): "desktop" only when every product path it names is Desktop-only
+// (src files reachable only through DesktopExperience per src-reach `desktop-only`, src-tauri/, DESIGN/, release/Desktop
+// scripts and workflows). Any other or unrecognised code path, or no recognisable path at all, gives "v1".
+const SEG = new RegExp(Q + '([^\'"`\\s,()]+)' + Q, 'g');
+const RUN = new RegExp(Q + '[^\'"`\\s,()]+' + Q + '(?:\\s*,\\s*' + Q + '[^\'"`\\s,()]+' + Q + ')+', 'g');
+const KNOWN_TOP = /^(src|cloud-server|src-tauri|\.github|scripts|deploy|public|DESIGN|BLUEPRINT)\//;
+const ROOT_FILES = /^(index\.html|vite\.config\.ts|package\.json|VERSION)$/;
+const DESKTOP_PATH = /^(src-tauri\/|DESIGN\/|\.github\/workflows\/release-desktop)|^scripts\/[^/]*(release|desktop|tauri|updater|authenticode|windows|macos|msi|nsis)[^/]*$/i;
+let desktopSrc = null;
+function desktopOnlySrc() {
+  if (!desktopSrc) {
+    const out = execFileSync(process.execPath, [fileURLToPath(new URL('src-reach.mjs', import.meta.url)), repo, 'desktop-only'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+    desktopSrc = new Set(out.split(/\r?\n/).map(l => l.split('\t')[0]).filter(Boolean));
+  }
+  return desktopSrc;
+}
+export function namedPaths(text) {
+  const cands = new Set();
+  for (const l of text.split(/\r?\n/)) {
+    if (IMPORT_LINE.test(l) && !READ_CALL.test(l)) continue;
+    for (const m of l.matchAll(RUN)) {
+      const segs = [...m[0].matchAll(SEG)].map(x => x[1]).filter(x => !/^(utf-?8|latin1|ascii|binary)$/i.test(x));
+      if (segs.length > 1 && !segs[0].includes('/')) cands.add(segs.join('/'));
+    }
+    for (const m of l.matchAll(SEG)) cands.add(m[1]);
+  }
+  const known = [], unknown = [];
+  for (const c of cands) {
+    const n = c.replace(/^(\.{1,2}\/)+/, '');
+    if (KNOWN_TOP.test(n) || ROOT_FILES.test(n)) known.push(n);
+    else if (ENDS_CODE.test(c) && !TESTISH.test(c)) unknown.push(c);
+  }
+  return { known, unknown };
+}
+export function subjectOf(text, isDesktopSrc = f => desktopOnlySrc().has(f)) {
+  const { known, unknown } = namedPaths(text);
+  const product = known.filter(f => !TESTISH.test(f) || /^src\//.test(f));
+  if (!product.length || unknown.length) return 'v1';
+  const isDir = f => !/\.[a-z0-9]+$/i.test(f);
+  return product.every(f => DESKTOP_PATH.test(f) || (/^src\//.test(f) && !isDir(f) && isDesktopSrc(f))) ? 'desktop' : 'v1';
+}
+
 const rows = [];
 const files = tracked(repo, 'tests', 'cloud-server/tests', 'scripts');
 for (const [dir, pred] of DIRS) {
@@ -86,11 +130,12 @@ for (const [dir, pred] of DIRS) {
     const executes = importLines.some(l => IMPORT_PRODUCT.test(l)) || SPAWN.test(t) || WDIO.test(t);
     const kind = readsSource && executes ? 'M' : readsSource ? 'F' : executes ? 'C' : 'O';
     const reads = (t.match(/\b(readFileSync|readFile)\s*\(/g) || []).length;
-    rows.push({ dir, file: f, kind, reads, evidence: evidence.slice(0, 140) });
+    const subject = kind === 'F' || kind === 'M' ? subjectOf(t) : '';
+    rows.push({ dir, file: f, kind, reads, evidence: evidence.slice(0, 140), subject });
   }
 }
 if (mode === 'json') { console.log(JSON.stringify(rows, null, 1)); }
-else if (mode === 'files') { for (const r of rows) console.log([r.kind, r.file, r.reads, r.evidence].join('\t')); }
+else if (mode === 'files') { for (const r of rows) console.log([r.kind, r.file, r.reads, r.evidence, r.subject].join('\t')); }
 else if ('FMOC'.includes(mode) && mode.length === 1) { for (const r of rows) if (r.kind === mode) console.log(r.file); }
 else {
   console.log('HEAD ' + head(repo));

@@ -7,6 +7,7 @@ import path from 'node:path';
 const baselinePath = 'scripts/metrics/ratchet-baseline.json';
 const allowlistPath = 'scripts/metrics/static-guards.allowlist.txt';
 const textMetric = 'F+M';
+const subjectMetrics = { v1: 'F+M:v1', desktop: 'F+M:desktop' };
 const metricHeader = 'metric\tvalue\tdetail';
 const summaryHeader = 'directory\tfiles\tC_behaviour\tF_source_text\tM_mixed\tO_other';
 const informationalIds = new Set([
@@ -121,8 +122,11 @@ function readTextTests(summary, files) {
   if (observed.F.length !== counts.F || observed.M.length !== counts.M) {
     throw new Error('El resumen F/M y el listado del clasificador difieren');
   }
+  // 5.ª columna = sujeto derivado por el clasificador; ausente o desconocido => v1 (fail-closed)
+  const desktop = rows.filter(([kind, , , , subject]) => (kind === 'F' || kind === 'M') && subject === 'desktop').length;
   return {
     count: counts.F + counts.M,
+    bySubject: { desktop, v1: counts.F + counts.M - desktop },
     files: textTestPaths([...observed.F, ...observed.M], 'Clasificador F/M'),
   };
 }
@@ -155,6 +159,8 @@ function main() {
   else errors.push('No se pudo leer la métrica 7 (ciclos) de src-reach.mjs cycles');
   const textTests = readTextTests(run('classify-tests.mjs', 'summary'), run('classify-tests.mjs', 'files'));
   measured.set(textMetric, textTests.count);
+  measured.set(subjectMetrics.v1, textTests.bySubject.v1);
+  measured.set(subjectMetrics.desktop, textTests.bySubject.desktop);
   for (const file of textTests.files) {
     if (!baseline.sourceTextTests.has(file) && !allowlist.has(file)) {
       errors.push(`Prueba de texto nueva (F/M) fuera de la lista: ${file}`);
@@ -177,7 +183,7 @@ function main() {
     for (const error of errors) console.error(error);
     process.exitCode = 1;
   } else {
-    console.log(`PASS trinquete: ${measured.size} métricas, ${textTests.count} pruebas F/M`);
+    console.log(`PASS trinquete: ${measured.size} métricas, ${textTests.count} pruebas F/M (v1 ${textTests.bySubject.v1}, desktop ${textTests.bySubject.desktop})`);
   }
 }
 
