@@ -68,6 +68,8 @@ jobs:
         run: node scripts/regression-web-bound-temp-rpc.mjs
       - name: Pruebas Web (npm run test:web)
         run: npm run test:web
+      - name: Prueba TLS readiness del deploy Web
+        run: bash tests/v1-web-tls-readiness.test.sh
       - name: Build Web como producción
         env:
           VITE_CATALOG_API_ENABLED: 'true'
