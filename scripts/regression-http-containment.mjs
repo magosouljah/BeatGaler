@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 
 const require = createRequire(import.meta.url);
+const { mountAccountRouteGuards } = require("../cloud-server/account-route-guards.js");
 const { FILE_UPLOAD_LIMIT_BYTES, createHttpContainment, installHttpContainment } = require("../cloud-server/http-containment.js");
 function sessionKey(token) { return crypto.createHash("sha256").update(token).digest("hex"); }
 function responseRecorder() {
@@ -236,19 +237,21 @@ try {
     fakeExpress.application.post = function(route, ...handlers) { registered.push({ method: "post", route, handlers }); return this; };
     fakeExpress.application.get = function(route, ...handlers) { registered.push({ method: "get", route, handlers }); return this; };
     installHttpContainment(fakeExpress, { dataDir: dir, env: { NODE_ENV: "production" } });
+    const app = Object.create(fakeExpress.application);
+    mountAccountRouteGuards(app);
     const multer = () => {};
-    fakeExpress.application.post("/beats/upload", multer, () => {});
+    app.post("/beats/upload", multer, () => {});
     const uploadRoute = registered.find(x => x.route === "/beats/upload");
     assert.equal(uploadRoute.handlers.length, 4);
     assert.notEqual(uploadRoute.handlers[0], multer, "authorization/rate boundary must run before Multer");
     assert.equal(uploadRoute.handlers[1], multer);
-    fakeExpress.application.post("/beats/delete-topics-batch", () => {});
+    app.post("/beats/delete-topics-batch", () => {});
     const batchDelete = registered.find(x => x.route === "/beats/delete-topics-batch");
     assert.equal(batchDelete.handlers.length, 2, "batch topic delete must be installation-authorized before mutation");
-    fakeExpress.application.get("/telegram/connect/status", () => {});
+    app.get("/telegram/connect/status", () => {});
     const statusRoute = registered.find(x => x.route === "/telegram/connect/status");
     assert.equal(statusRoute.handlers.length, 2, "installation authorization must precede GET handler");
-    fakeExpress.application.get("/auth/oauth/:provider/callback", () => {});
+    app.get("/auth/oauth/:provider/callback", () => {});
     const oauthCallback = registered.find(x => x.route === "/auth/oauth/:provider/callback");
     assert.equal(oauthCallback.handlers.length, 2, "OAuth ownership guard must precede provider callback work");
   }

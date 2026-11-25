@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { mountAccountRouteGuards } = require('../account-route-guards');
 const crypto = require('node:crypto');
 const { installSensitiveAuthCapabilityRevocation } = require('../sensitive-auth-capability-revocation');
 
@@ -56,7 +57,9 @@ test('sensitive auth capability revoke commits before password mutation and igno
   };
   const fakeExpress = createFakeExpress();
   installSensitiveAuthCapabilityRevocation(fakeExpress, { store });
-  fakeExpress.application.post('/auth/password/change', (_req, res) => {
+  const app = Object.create(fakeExpress.application);
+  mountAccountRouteGuards(app);
+  app.post('/auth/password/change', (_req, res) => {
     events.push('mutation');
     return res.json({ ok: true });
   });
@@ -85,7 +88,9 @@ test('revoke failure prevents sensitive auth mutation from executing', async () 
   };
   const fakeExpress = createFakeExpress();
   installSensitiveAuthCapabilityRevocation(fakeExpress, { store });
-  fakeExpress.application.post('/auth/account/delete', (_req, res) => {
+  const app = Object.create(fakeExpress.application);
+  mountAccountRouteGuards(app);
+  app.post('/auth/account/delete', (_req, res) => {
     mutationRan = true;
     return res.json({ ok: true });
   });
@@ -110,7 +115,9 @@ test('logout uses the same pre-mutation revoke ordering', async () => {
   };
   const fakeExpress = createFakeExpress();
   installSensitiveAuthCapabilityRevocation(fakeExpress, { store });
-  fakeExpress.application.post('/auth/logout', (_req, res) => {
+  const app = Object.create(fakeExpress.application);
+  mountAccountRouteGuards(app);
+  app.post('/auth/logout', (_req, res) => {
     events.push('logout');
     return res.json({ ok: true });
   });

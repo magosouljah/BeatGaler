@@ -618,30 +618,34 @@ function installSessionSecurity(express, options = {}) {
   application.__beatgalerSessionSecurityInstalled = true;
   const runtime = createSessionSecurityRuntime(options);
   application.__beatgalerSessionSecurityRuntime = runtime;
-  const originalPost = application.post;
+  application.__beatgalerSessionSecurityJson = options => express.json(options);
+  return runtime;
+}
 
-  function ensureManagementRoutes(app) {
-    if (app.__beatgalerSessionSecurityRoutesInstalled) return;
+function wrapSessionSecurityPost(routePath, handlers) {
+  const { app, next } = this;
+  const runtime = app.__beatgalerSessionSecurityRuntime;
+  if (!runtime) return next(routePath, ...handlers);
+
+  if (!app.__beatgalerSessionSecurityRoutesInstalled) {
     app.__beatgalerSessionSecurityRoutesInstalled = true;
-    originalPost.call(app, '/auth/sessions', runtime.listSessions);
-    originalPost.call(app, '/auth/sessions/revoke', express.json({ limit: '16kb' }), (req, res) => { void runtime.revokeOne(req, res); });
-    originalPost.call(app, '/auth/sessions/revoke-all', (req, res) => { void runtime.revokeAll(req, res); });
+    next('/auth/sessions', runtime.listSessions);
+    next('/auth/sessions/revoke', app.__beatgalerSessionSecurityJson({ limit: '16kb' }), (req, res) => { void runtime.revokeOne(req, res); });
+    next('/auth/sessions/revoke-all', (req, res) => { void runtime.revokeAll(req, res); });
   }
 
-  application.post = function patchedSessionSecurityPost(routePath, ...handlers) {
-    ensureManagementRoutes(this);
-    if (RESPONSE_AUTH_ROUTES.has(routePath)) {
-      return originalPost.call(this, routePath, (req, res, next) => runtime.decorateResponse(routePath, req, res, next), ...handlers);
-    }
-    return originalPost.call(this, routePath, ...handlers);
-  };
-
-  return runtime;
+  if (RESPONSE_AUTH_ROUTES.has(routePath)) {
+    return next(routePath, function decorateSessionResponse(req, res, next) {
+      return runtime.decorateResponse(routePath, req, res, next);
+    }, ...handlers);
+  }
+  return next(routePath, ...handlers);
 }
 
 module.exports = {
   installSessionSecurity,
   wrapSessionSecurityUse,
+  wrapSessionSecurityPost,
   createSessionSecurityRuntime,
   SESSION_COOKIE,
   CSRF_COOKIE,

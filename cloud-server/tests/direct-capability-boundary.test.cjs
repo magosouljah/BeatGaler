@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { mountAccountRouteGuards } = require('../account-route-guards');
 const crypto = require("node:crypto");
 const {
   createMemoryStore,
@@ -349,7 +350,9 @@ test("live Direct capability view rejects expiry, inactive leases and quarantine
 test("productive temp-auth strips permanent secrets from error and no-refresh response paths", async () => {
   const fakeExpress = createFakeExpress();
   installProductiveTempAuthBoundary(fakeExpress);
-  fakeExpress.application.post("/transport/session/start", (_req, res) => res.json({
+  const app = Object.create(fakeExpress.application);
+  mountAccountRouteGuards(app);
+  app.post("/transport/session/start", (_req, res) => res.json({
     ok: false,
     error: "denied",
     bot_token: "must-not-leak",
@@ -357,7 +360,7 @@ test("productive temp-auth strips permanent secrets from error and no-refresh re
     telegram_api_hash: "must-not-leak",
     credential_envelope: "must-not-leak",
   }));
-  fakeExpress.application.post("/transport/session/heartbeat", (_req, res) => res.json({
+  app.post("/transport/session/heartbeat", (_req, res) => res.json({
     ok: true,
     status: "ACTIVE",
     bot_token: "must-not-leak",
@@ -390,13 +393,15 @@ test("sensitive account routes revoke the whole authenticated capability set and
   };
   const fakeExpress = createFakeExpress();
   installDirectCapabilityBoundary(fakeExpress, { store });
+  const app = Object.create(fakeExpress.application);
+  mountAccountRouteGuards(app);
   const cases = [
     ["/auth/logout", "logout"],
     ["/auth/password/change", "password_change"],
     ["/auth/account/delete", "account_delete"],
   ];
   for (const [routePath] of cases) {
-    fakeExpress.application.post(routePath, (_req, res) => res.json({ ok: true }));
+    app.post(routePath, (_req, res) => res.json({ ok: true }));
   }
   for (const [routePath, reason] of cases) {
     const result = await runRoute(fakeExpress.routes.get(routePath), {
@@ -419,7 +424,9 @@ test("sensitive account route fails closed when durable capability revocation fa
   };
   const fakeExpress = createFakeExpress();
   installDirectCapabilityBoundary(fakeExpress, { store });
-  fakeExpress.application.post("/auth/password/change", (_req, res) => res.json({ ok: true }));
+  const app = Object.create(fakeExpress.application);
+  mountAccountRouteGuards(app);
+  app.post("/auth/password/change", (_req, res) => res.json({ ok: true }));
   const result = await runRoute(fakeExpress.routes.get("/auth/password/change"), {
     headers: { authorization: "Bearer session-secret" },
     body: { beatgalerUserId: "attacker-controlled-installation" },
@@ -440,7 +447,9 @@ test("lease stop uses only canonical installation state and does not continue on
   };
   const fakeExpress = createFakeExpress();
   installDirectCapabilityBoundary(fakeExpress, { store });
-  fakeExpress.application.post("/transport/session/stop", (_req, res) => {
+  const app = Object.create(fakeExpress.application);
+  mountAccountRouteGuards(app);
+  app.post("/transport/session/stop", (_req, res) => {
     downstreamRan = true;
     return res.json({ ok: true });
   });

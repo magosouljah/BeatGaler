@@ -22,36 +22,40 @@ function installSensitiveAuthCapabilityRevocation(express, { store } = {}) {
   const application = express?.application;
   if (!application || application.__beatgalerSensitiveCapabilityRevocationInstalled) return;
   application.__beatgalerSensitiveCapabilityRevocationInstalled = true;
-  const previousPost = application.post;
+  application.__beatgalerSensitiveCapabilityRevocationStore = store;
+}
 
-  application.post = function patchedSensitiveAuthPost(routePath, ...handlers) {
-    const reason = SENSITIVE_ROUTES.get(routePath);
-    if (!reason) return previousPost.call(this, routePath, ...handlers);
+function wrapSensitiveAuthCapabilityRevocationPost(routePath, handlers) {
+  const { app, next } = this;
+  if (!app.__beatgalerSensitiveCapabilityRevocationInstalled) return next(routePath, ...handlers);
+  const store = app.__beatgalerSensitiveCapabilityRevocationStore;
+  const reason = SENSITIVE_ROUTES.get(routePath);
+  if (!reason) return next(routePath, ...handlers);
 
-    const revokeBeforeMutation = async (req, res, next) => {
-      const token = bearerToken(req);
-      if (!token) return next();
-      if (!store || typeof store.revokeAuthSession !== 'function') {
-        return res.status(503).json({
-          error: 'DIRECT_CAPABILITY_REVOKE_FAILED: capability revocation store is unavailable.',
-          code: 'DIRECT_CAPABILITY_REVOKE_FAILED',
-        });
-      }
-      try {
-        await store.revokeAuthSession({ authSessionHash: sha256(token), reason });
-      } catch {
-        return res.status(503).json({
-          error: 'DIRECT_CAPABILITY_REVOKE_FAILED: session capability revocation could not be committed.',
-          code: 'DIRECT_CAPABILITY_REVOKE_FAILED',
-        });
-      }
-      return next();
-    };
+  async function revokeBeforeMutation(req, res, next) {
+    const token = bearerToken(req);
+    if (!token) return next();
+    if (!store || typeof store.revokeAuthSession !== 'function') {
+      return res.status(503).json({
+        error: 'DIRECT_CAPABILITY_REVOKE_FAILED: capability revocation store is unavailable.',
+        code: 'DIRECT_CAPABILITY_REVOKE_FAILED',
+      });
+    }
+    try {
+      await store.revokeAuthSession({ authSessionHash: sha256(token), reason });
+    } catch {
+      return res.status(503).json({
+        error: 'DIRECT_CAPABILITY_REVOKE_FAILED: session capability revocation could not be committed.',
+        code: 'DIRECT_CAPABILITY_REVOKE_FAILED',
+      });
+    }
+    return next();
+  }
 
-    return previousPost.call(this, routePath, revokeBeforeMutation, ...handlers);
-  };
+  return next(routePath, revokeBeforeMutation, ...handlers);
 }
 
 module.exports = {
   installSensitiveAuthCapabilityRevocation,
+  wrapSensitiveAuthCapabilityRevocationPost,
 };

@@ -106,8 +106,7 @@ function createAuthAbuseControls(options = {}) {
 function installAuthAbuseControls(express, options = {}) {
   if (express.application.__beatgalerAuthAbuseInstalled) return;
   express.application.__beatgalerAuthAbuseInstalled = true;
-  const controls = createAuthAbuseControls(options);
-  const originalPost = express.application.post;
+  express.application.__beatgalerAuthAbuseControls = createAuthAbuseControls(options);
   const originalJson = express.json;
 
   express.json = function patchedJson(...args) {
@@ -123,17 +122,20 @@ function installAuthAbuseControls(express, options = {}) {
       });
     };
   };
+}
 
-  express.application.post = function patchedPost(routePath, ...handlers) {
-    if (AUTH_ROUTES.has(routePath)) {
-      return originalPost.call(this, routePath, controls.middleware, ...handlers);
-    }
-    return originalPost.call(this, routePath, ...handlers);
-  };
+function wrapAuthAbusePost(routePath, handlers) {
+  const { app, next } = this;
+  const controls = app.__beatgalerAuthAbuseControls;
+  if (controls && AUTH_ROUTES.has(routePath)) {
+    return next(routePath, controls.middleware, ...handlers);
+  }
+  return next(routePath, ...handlers);
 }
 
 module.exports = {
   AUTH_ROUTES,
   createAuthAbuseControls,
   installAuthAbuseControls,
+  wrapAuthAbusePost,
 };

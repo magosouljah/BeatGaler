@@ -406,37 +406,39 @@ function installProductiveTempAuthBoundary(express) {
   void loadMtcuteInternals().catch(error => {
     console.error('[direct-temp-auth] mtcute prewarm failed:', error?.message || error);
   });
-  const originalPost = application.post;
-  application.post = function patchedPost(route, ...handlers) {
-    if (!TARGET_ROUTES.has(route)) return originalPost.call(this, route, ...handlers);
-    const boundary = (req, res, next) => {
-      const originalJson = res.json.bind(res);
-      let sent = false;
-      res.json = body => {
-        if (sent) return res;
-        sent = true;
-        void timeout(
-          transformTransportBody(req, body),
-          `${route} temporary authorization boundary`,
-          BOUNDARY_TIMEOUT_MS,
-        ).then(
-          transformed => originalJson(transformed),
-          error => {
-            console.error(`[direct-temp-auth] ${route} boundary failed:`, error?.message || error);
-            if (!res.headersSent) res.status(503);
-            originalJson({ ok: false, error: "Temporary transport authorization is unavailable." });
-          },
-        );
-        return res;
-      };
-      next();
+}
+
+function wrapProductiveTempAuthPost(route, handlers) {
+  const { app, next } = this;
+  if (!app.__beatgalerTempAuthBoundaryInstalled || !TARGET_ROUTES.has(route)) return next(route, ...handlers);
+  const boundary = (req, res, next) => {
+    const originalJson = res.json.bind(res);
+    let sent = false;
+    res.json = body => {
+      if (sent) return res;
+      sent = true;
+      void timeout(
+        transformTransportBody(req, body),
+        `${route} temporary authorization boundary`,
+        BOUNDARY_TIMEOUT_MS,
+      ).then(
+        transformed => originalJson(transformed),
+        error => {
+          console.error(`[direct-temp-auth] ${route} boundary failed:`, error?.message || error);
+          if (!res.headersSent) res.status(503);
+          originalJson({ ok: false, error: "Temporary transport authorization is unavailable." });
+        },
+      );
+      return res;
     };
-    return originalPost.call(this, route, boundary, ...handlers);
+    next();
   };
+  return next(route, boundary, ...handlers);
 }
 
 module.exports = {
   installProductiveTempAuthBoundary,
+  wrapProductiveTempAuthPost,
   stripPermanentSecrets,
   // Direct B (catálogo): mismo bloque de vinculación, sin pasar por las rutas legacy (/transport/session/*).
   transformSession,

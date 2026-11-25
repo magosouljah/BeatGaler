@@ -2,18 +2,34 @@
 
 const { wrapRuntimeUse } = require('./runtime-operability');
 const { wrapSecurityHeadersUse } = require('./security-headers');
-const { wrapSessionSecurityUse } = require('./session-security');
+const { wrapSessionSecurityUse, wrapSessionSecurityPost } = require('./session-security');
 const { wrapLifecycleRequestGuardUse } = require('./account-lifecycle-request-guard');
+const { wrapHttpContainmentPost, wrapHttpContainmentGet } = require('./http-containment');
+const { wrapDirectCapabilityPost } = require('./direct-capability-boundary');
+const { wrapSensitiveAuthCapabilityRevocationPost } = require('./sensitive-auth-capability-revocation');
+const { wrapDurableAuthAbusePost } = require('./auth-durable-abuse-controls');
+const { wrapAuthAbusePost } = require('./auth-abuse-controls');
+const { wrapProductiveTempAuthPost } = require('./productive-temp-auth-boundary');
 
-// Installation order. Each wrap delegates to the entries installed before it.
+// Each wrap delegates to the entries installed before it. The POST/GET suffix
+// delegates to the earlier prototype guards through the original app methods.
 const ROUTE_GUARD_TABLE = Object.freeze([
   { id: 'runtime-operability', method: 'use', wrap: wrapRuntimeUse },
   { id: 'security-headers', method: 'use', wrap: wrapSecurityHeadersUse },
   { id: 'session-security', method: 'use', wrap: wrapSessionSecurityUse },
   { id: 'account-lifecycle-request-guard', method: 'use', wrap: wrapLifecycleRequestGuardUse },
+  { id: 'session-security', method: 'post', wrap: wrapSessionSecurityPost },
+  { id: 'http-containment', method: 'post', wrap: wrapHttpContainmentPost },
+  { id: 'http-containment', method: 'get', wrap: wrapHttpContainmentGet },
+  { id: 'direct-capability-boundary', method: 'post', wrap: wrapDirectCapabilityPost },
+  { id: 'sensitive-auth-capability-revocation', method: 'post', wrap: wrapSensitiveAuthCapabilityRevocationPost },
+  { id: 'auth-durable-abuse-controls', method: 'post', wrap: wrapDurableAuthAbusePost },
+  { id: 'auth-abuse-controls', method: 'post', wrap: wrapAuthAbusePost },
+  { id: 'productive-temp-auth-boundary', method: 'post', wrap: wrapProductiveTempAuthPost },
 ]);
 
-// Still registered by their existing POST installers on the first app.post().
+// These routes are registered on the first app.post(), by the earlier prototype
+// guards and the session-security table entry.
 const SELF_REGISTERED_ROUTES = Object.freeze([
   '/auth/signup/verify',
   '/auth/signup/resend',
