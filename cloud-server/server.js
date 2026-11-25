@@ -217,7 +217,7 @@ async function start() {
   });
   installLifecycleRequestGuard(express, accountLifecycle);
   installHttpContainment(express, { dataDir: STATE_DIR, installationClaimCoordinator });
-  directCapabilities = installDirectCapabilityBoundary(express, { dataDir: STATE_DIR, pool });
+  directCapabilities = installDirectCapabilityBoundary(express, { pool });
   installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
   // PostgreSQL is mandatory in production. These shared buckets therefore
   // coordinate auth abuse controls across every production process/restart;

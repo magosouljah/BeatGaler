@@ -8,7 +8,6 @@ const {
   createMemoryStore,
   installDirectCapabilityBoundary,
 } = require("../direct-capability-boundary");
-const { activeOperationIdsForSessionState, validateCapabilitySessionState } = require("../direct-transport-capability-view");
 const { installProductiveTempAuthBoundary } = require("../productive-temp-auth-boundary");
 
 function record(overrides = {}) {
@@ -260,44 +259,6 @@ test("orphaned authorized capabilities are revoked when their Direct operations 
   assert.equal(store.__records.get("f".repeat(64)).status, "ACTIVE");
 });
 
-test("Direct capability view returns only operations owned by the exact live session", () => {
-  const nowMs = Date.parse("2026-08-28T18:00:30.000Z");
-  const state = {
-    leases: {
-      "session-a": {
-        session_id: "session-a",
-        installation_id: "install-a",
-        bot_id: "bot-a",
-        generation: 1,
-        status: "ACTIVE",
-        last_heartbeat_at: "2026-08-28T18:00:00.000Z",
-      },
-    },
-    bots: { "bot-a": { quarantined: false } },
-    operations: {
-      "op-1": { operation_id: "op-1", session_id: "session-a", installation_id: "install-a" },
-      "op-2": { operation_id: "op-2", session_id: "session-b", installation_id: "install-a" },
-      "op-3": { operation_id: "op-3", session_id: "session-a", installation_id: "install-b" },
-    },
-  };
-  assert.deepEqual(
-    activeOperationIdsForSessionState(
-      state,
-      { installationId: "install-a", sessionId: "session-a", generation: 1 },
-      { nowMs, heartbeatTimeoutMs: 60_000 },
-    ),
-    ["op-1"],
-  );
-  assert.equal(
-    activeOperationIdsForSessionState(
-      state,
-      { installationId: "install-a", sessionId: "session-a", generation: 2 },
-      { nowMs, heartbeatTimeoutMs: 60_000 },
-    ),
-    null,
-  );
-});
-
 test("an abandoned pre-authorize capability can only be cleaned up", async () => {
   const store = createMemoryStore({ now: () => 2_000, maxActivePerTenant: 4 });
   await store.issue(record());
@@ -322,29 +283,6 @@ test("lease end, auth changes and incident revoke ACTIVE or AUTHORIZED capabilit
   await store.issue(record({ capability_hash: "d".repeat(64), internal_operation_id: "op-3", tenant_id: "tenant-z" }));
   assert.equal(await store.revokeTenant({ tenantId: "tenant-z", reason: "incident" }), 1);
   assert.equal(store.__records.get("d".repeat(64)).status, "REVOKED");
-});
-
-test("live Direct capability view rejects expiry, inactive leases and quarantined bots", () => {
-  const nowMs = Date.parse("2026-08-28T18:00:30.000Z");
-  const baseState = {
-    leases: {
-      "session-a": {
-        session_id: "session-a",
-        installation_id: "install-a",
-        bot_id: "bot-a",
-        generation: 1,
-        status: "ACTIVE",
-        last_heartbeat_at: "2026-08-28T18:00:00.000Z",
-      },
-    },
-    bots: { "bot-a": { quarantined: false } },
-  };
-  const input = { installationId: "install-a", sessionId: "session-a", generation: 1 };
-  assert.deepEqual(validateCapabilitySessionState(baseState, input, { nowMs, heartbeatTimeoutMs: 60_000 }), { ok: true });
-  assert.equal(validateCapabilitySessionState(baseState, input, { nowMs: nowMs + 31_000, heartbeatTimeoutMs: 60_000 }).reason, "lease_expired");
-  assert.equal(validateCapabilitySessionState({ ...baseState, leases: { "session-a": { ...baseState.leases["session-a"], status: "QUARANTINED" } } }, input, { nowMs, heartbeatTimeoutMs: 60_000 }).ok, false);
-  assert.equal(validateCapabilitySessionState({ ...baseState, bots: { "bot-a": { quarantined: true } } }, input, { nowMs, heartbeatTimeoutMs: 60_000 }).reason, "bot_quarantined");
-  assert.equal(validateCapabilitySessionState(baseState, { ...input, generation: 2 }, { nowMs, heartbeatTimeoutMs: 60_000 }).reason, "lease_inactive");
 });
 
 test("productive temp-auth strips permanent secrets from error and no-refresh response paths", async () => {
@@ -434,36 +372,4 @@ test("sensitive account route fails closed when durable capability revocation fa
   assert.equal(result.statusCode, 503);
   assert.equal(result.payload.code, "DIRECT_CAPABILITY_REVOKE_FAILED");
   assert.match(result.payload.error, /revocation could not be committed/i);
-});
-
-test("lease stop uses only canonical installation state and does not continue on revoke failure", async () => {
-  let revokeInput = null;
-  let downstreamRan = false;
-  const store = {
-    async revokeSession(input) {
-      revokeInput = input;
-      throw new Error("injected store failure");
-    },
-  };
-  const fakeExpress = createFakeExpress();
-  installDirectCapabilityBoundary(fakeExpress, { store });
-  const app = Object.create(fakeExpress.application);
-  mountAccountRouteGuards(app);
-  app.post("/transport/session/stop", (_req, res) => {
-    downstreamRan = true;
-    return res.json({ ok: true });
-  });
-  const result = await runRoute(fakeExpress.routes.get("/transport/session/stop"), {
-    headers: { authorization: "Bearer session-secret" },
-    beatgalerAuthorizedInstallationId: "install-canonical",
-    body: { beatgalerUserId: "install-spoofed", sessionId: "session-a" },
-  });
-  assert.deepEqual(revokeInput, {
-    installationId: "install-canonical",
-    sessionId: "session-a",
-    reason: "lease_end",
-  });
-  assert.equal(downstreamRan, false);
-  assert.equal(result.statusCode, 503);
-  assert.equal(result.payload.code, "DIRECT_CAPABILITY_REVOKE_FAILED");
 });

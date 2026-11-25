@@ -446,8 +446,6 @@ function wrapHttpContainmentPost(routePath, handlers) {
   if (routePath === "/auth/oauth/start") return next(routePath, containment.guardOAuthStart, ...handlers);
   if (routePath === "/auth/oauth/poll") return next(routePath, containment.guardOAuthPoll, containment.bindSessionOnSuccess, ...handlers);
   if (routePath === "/auth/logout") return next(routePath, containment.logoutSession, ...handlers);
-  if (routePath === "/transport/project/upload") return next(routePath,
-    containment.installationOwner, containment.preUpload, ...handlers);
   if (UPLOAD_ROUTES.has(routePath) && handlers.length >= 2) return next(routePath, containment.preUpload, handlers[0], containment.postUpload, ...handlers.slice(1));
   if (BODY_OWNER_ROUTES.has(routePath)) return next(routePath, containment.bodyOwner, ...handlers);
   if (routePath === "/beats/delete-topic") return next(routePath, containment.beatTopicOwner, ...handlers);
