@@ -59,7 +59,7 @@ function context(tab, document, generation) {
 
 (async () => {
   const direct = require('../direct-transport-control.js');
-  const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
+  const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
   const runtimePool = [{ id: 'Bot01' }];
   const chatId = '-1007000000999';
 

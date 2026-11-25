@@ -8,7 +8,6 @@ const path = require('path');
 const db = require('../helpers/catalog-test-db.cjs');
 const mig = require('../../postgres-migrations.js');
 const authority = require('../../catalog/authority.js');
-const { createLegacyFence } = require('../../catalog/legacy-fence.js');
 const { mergeAuthSnapshotDelta } = require('../../postgres-auth-multiprocess-compat.js');
 
 const { Pool } = require(path.join(__dirname, '..', '..', 'node_modules', 'pg'));
@@ -331,8 +330,6 @@ test('PASS 11+12: reglas DB §7 en generaciones nativas; era/época ausente o vi
     await assert.rejects(a.requireLibraryForMutation(c2, { userId: u, era: stale.authority_era, epoch: stale.authority_epoch }), (e) => e.code === 'CATALOG_EPOCH_STALE' && e.detail.current_epoch === '2');
     await c2.query('ROLLBACK');
   } finally { c2.release(); }
-  await assert.rejects(createLegacyFence({ pool }).assertLegacyEntryAllowed({ userId: u }), (e) => e.status === 410);
-  await createLegacyFence({ pool }).assertLegacyEntryAllowed({ userId: 'nobody', chatId: '-1' });
 }));
 
 test('PASS 13: json + pool con activación no arranca; re-cutover JSON→PG con activación se niega sin escribir', () => withDb(async (pool) => {

@@ -37,7 +37,7 @@ function context(tab, generation) { return { tab_id: tab, document_id: `${tab}-d
   const direct = require('../direct-transport-control.js');
   let clockA = 100;
   direct.__test.setMonotonicNow(() => clockA);
-  const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
+  const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
   const pool = [{ id: 'Bot01' }];
   const chatId = '-1007000000777';
   const first = prepareAssignedLease({ directTransport: direct, status: direct.poolStatus(), transportBotId: 'Bot01', installationId: 'live-device', chatId }).lease;

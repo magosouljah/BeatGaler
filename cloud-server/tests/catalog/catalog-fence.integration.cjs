@@ -1,10 +1,5 @@
+// T16 — Disponibilidad del catálogo, recuperación del worker y guarda de esquema en PostgreSQL aislado.
 'use strict';
-// T16 — Cercado y arranque contra PostgreSQL real aislado (`node scripts/catalog-check.cjs T16`): "dos bibliotecas" según NATIVO r2.1
-// (nativa + RESET_REQUIRED + flag apagado) más una legacy sin catálogo; capa 1 (410 en entradas C10 por usuario y por chat, también con el flag
-// apagado), capa 2 (session/start exige catalog-v1 solo con el flag encendido), interruptor no destructivo (flag apagado → 503
-// NATIVE_FLAG_DISABLED en la API nativa sin tocar datos), Telegram caído (gateway nulo → 503 TRANSFER_UNAVAILABLE / job en reintento;
-// la metadata sigue), REVIEW aislada (LIBRARY_FROZEN solo en esa biblioteca), reinicio del worker (lease vencido → otro worker termina,
-// el viejo queda fenced) y guarda hacia delante (versión desconocida en schema_migrations → CATALOG_SCHEMA_AHEAD). FAKE: sin proveedor real.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
@@ -18,7 +13,6 @@ const operations = require('../../catalog/operations.js');
 const queries = require('../../catalog/queries.js');
 const commands = require('../../catalog/commands.js');
 const { createCatalogWorker } = require('../../catalog/worker.js');
-const { createLegacyFence } = require('../../catalog/legacy-fence.js');
 
 const { Pool } = require(path.join(__dirname, '..', '..', 'node_modules', 'pg'));
 db.validateAdminTarget();
@@ -51,21 +45,12 @@ async function user(pool, { native = true } = {}) {
   return { userId: id, chatId: chat, era: ctx.authority_era, epoch: ctx.authority_epoch, generationId: ctx.generation_id };
 }
 const rejects = (p, code, extra = () => true) => assert.rejects(p, (e) => { assert.equal(e.code, code, `código esperado ${code}, recibido ${e.code}: ${e.message}`); return extra(e); });
-const C10_ENTRIES = ['index/publish', 'index/commit', 'index/bootstrap-state', 'index/recover', 'index/ensure-bootstrap', 'quota/reserve', 'quota/renew', 'quota/cancel', 'trash/purge', 'topic/delete', 'topic/ensure', 'project/authorize', 'project/upload', 'routing/reconcile', 'capability/get_index', 'capability/replace_index', 'capability/delete_messages'];
 
-test('dos bibliotecas (nativa + RESET_REQUIRED + flag apagado) y una legacy: capa 1 → 410 en todas las entradas C10 por usuario y por chat para la nativa, nunca para las legacy (RESET_REQUIRED sigue siendo legacy hasta su reinicio); flag apagado → API nativa 503 NATIVE_FLAG_DISABLED sin tocar datos (interruptor no destructivo)', () => withDb(async (pool) => {
-  const native = await user(pool); const legacy = await user(pool, { native: false }); const reset = await user(pool, { native: false });
+test('flag apagado → API nativa 503 NATIVE_FLAG_DISABLED sin tocar datos; flag encendido → contexto nativo o RESET_REQUIRED sin crear biblioteca', () => withDb(async (pool) => {
+  const native = await user(pool); const reset = await user(pool, { native: false });
   // RESET_REQUIRED: vault con historial legacy (no elegible: index_bootstrap_pending=false por defecto y ledger legacy presente) y sin fila de catálogo.
   // 0027 prohíbe filas LEGACY en un entorno nativo: el "reinicio requerido" lo declara la provisión nativa, no una fila.
   await pool.query("INSERT INTO library_quota_state(user_id, index_message_id, index_sha256) VALUES ($1, 77, $2)", [reset.userId, H]);
-  const fence = createLegacyFence({ pool });
-  for (const entry of C10_ENTRIES) {
-    await rejects(fence.assertLegacyEntryAllowed({ userId: native.userId, entry }), 'LEGACY_CLIENT_UNSUPPORTED', (e) => e.status === 410 && e.detail.by === 'user' && e.detail.entry === entry);
-    await rejects(fence.assertLegacyEntryAllowed({ chatId: native.chatId, entry }), 'LEGACY_CLIENT_UNSUPPORTED', (e) => e.detail.by === 'chat');
-    await fence.assertLegacyEntryAllowed({ userId: legacy.userId, chatId: legacy.chatId, entry }); // la biblioteca legacy conserva su flujo
-    await fence.assertLegacyEntryAllowed({ userId: reset.userId, chatId: reset.chatId, entry }); // RESET_REQUIRED aún es legacy: su flujo no se corta
-  }
-  // flag apagado: la API nativa responde 503 y nada cambia en SQL; la capa 1 sigue activa (comprobado arriba con el mismo pool)
   const off = authOff(pool);
   await rejects(off.availability(), 'CATALOG_UNAVAILABLE', (e) => e.detail.reason === 'NATIVE_FLAG_DISABLED');
   const before = (await pool.query('SELECT revision::text AS r, active_count::text AS a FROM catalog_libraries WHERE user_id = $1', [native.userId])).rows[0];

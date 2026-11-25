@@ -1,36 +1,10 @@
 "use strict";
 
 const crypto = require("crypto");
-const fs = require("fs");
-const path = require("path");
-const directTransport = require("./direct-transport-capability-view");
-const criticalPathTrace = require("./stage1-critical-path-trace");
-const { createLegacyFence, isLegacyFenceError } = require("./catalog/legacy-fence");
-const { INDEX_OPERATION_TYPES } = require("./catalog/authority");
-
 const DEFAULT_CAPABILITY_TTL_MS = 10 * 60 * 1000;
-const DEFAULT_CLOCK_SKEW_MS = 5 * 1000;
 const DEFAULT_TENANT_ACTIVE_CAP = 4;
-const SAFE_SCOPE_ID_RE = /^[A-Za-z0-9._:@+-]{1,192}$/;
 const LIVE_STATUSES = new Set(["ACTIVE", "AUTHORIZED"]);
 let installedRuntime = null;
-
-const OPERATION_SCOPE_RULES = new Map([
-  ["upload", new Set(["beat", "topic"])],
-  ["download", new Set(["message"])],
-  ["download_range", new Set(["message"])],
-  ["probe_media", new Set(["message"])],
-  ["get_index", new Set(["index"])],
-  ["replace_index", new Set(["index"])],
-  ["delete_messages", new Set(["message"])],
-  ["load_artwork", new Set(["message"])],
-  ["stream_master", new Set(["message"])],
-  ["commit_import", new Set(["beat"])],
-  ["commit_edit", new Set(["beat"])],
-  ["trash_move", new Set(["beat"])],
-  ["trash_restore", new Set(["trash"])],
-  ["trash_purge", new Set(["trash"])],
-]);
 
 function sha256(value) {
   return crypto.createHash("sha256").update(String(value || "")).digest("hex");
@@ -49,34 +23,6 @@ function codedError(code, message, status = 403) {
   return error;
 }
 
-function normalizeOperationKind(value) {
-  const kind = String(value || "").trim().toLowerCase();
-  if (!OPERATION_SCOPE_RULES.has(kind)) throw codedError("DIRECT_CAPABILITY_DENIED", "operation is not allowlisted.");
-  return kind;
-}
-
-function normalizeScope(kindInput, scopeInput) {
-  const kind = normalizeOperationKind(kindInput);
-  if (!scopeInput || typeof scopeInput !== "object" || Array.isArray(scopeInput)) {
-    throw codedError("DIRECT_CAPABILITY_SCOPE_REQUIRED", "explicit object scope is required.", 400);
-  }
-  const objectType = String(scopeInput.objectType || scopeInput.object_type || "").trim().toLowerCase();
-  if (!OPERATION_SCOPE_RULES.get(kind).has(objectType)) {
-    throw codedError("DIRECT_CAPABILITY_SCOPE_DENIED", `${kind} cannot target ${objectType || "unspecified"}.`);
-  }
-  const sourceIds = Array.isArray(scopeInput.objectIds || scopeInput.object_ids)
-    ? (scopeInput.objectIds || scopeInput.object_ids)
-    : [scopeInput.objectId ?? scopeInput.object_id];
-  const objectIds = [...new Set(sourceIds.map(value => String(value ?? "").trim()).filter(Boolean))].sort();
-  if (!objectIds.length || objectIds.length > 64 || objectIds.some(value => !SAFE_SCOPE_ID_RE.test(value) || value === "*")) {
-    throw codedError("DIRECT_CAPABILITY_SCOPE_INVALID", "object ids must be explicit bounded identifiers.", 400);
-  }
-  if (objectType === "index" && (objectIds.length !== 1 || objectIds[0] !== "pinned")) {
-    throw codedError("DIRECT_CAPABILITY_SCOPE_DENIED", "index scope must be the canonical pinned index.");
-  }
-  return { object_type: objectType, object_ids: objectIds };
-}
-
 function canonicalScope(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const objectType = String(value.object_type || value.objectType || "").trim().toLowerCase();
@@ -89,20 +35,6 @@ function canonicalScope(value) {
 
 function sameScope(left, right) {
   return JSON.stringify(canonicalScope(left)) === JSON.stringify(canonicalScope(right));
-}
-
-function capabilityToken() {
-  return `cap_${crypto.randomBytes(32).toString("base64url")}`;
-}
-
-function readVaultScope(dataDir, installationId, tenantId) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(dataDir, "cloud-data.json"), "utf8"));
-    const account = parsed?.linkedAccounts?.[String(installationId)] || null;
-    const vault = String(account?.storageChatId || account?.telegramUserId || "").trim();
-    if (vault) return vault;
-  } catch {}
-  return `tenant-vault:${String(tenantId)}`;
 }
 
 function identityMatches(record, input) {
@@ -358,95 +290,6 @@ function responseError(res, error) {
   });
 }
 
-function requestIdentity(req, fallback = null) {
-  const userId = String(fallback?.userId || req.beatgalerAuthorizedUserId || "").trim();
-  const tenantId = String(fallback?.tenantId || req.beatgalerAuthorizedTenantId || "").trim();
-  const installationId = String(fallback?.installationId || req.beatgalerAuthorizedInstallationId || req.body?.beatgalerUserId || "").trim();
-  const token = bearerToken(req);
-  if (!userId || !tenantId || !installationId || !token) throw codedError("DIRECT_CAPABILITY_AUTHZ_REQUIRED", "session-bound authorization must run first.");
-  return { userId, tenantId, installationId, authSessionHash: sha256(token) };
-}
-
-function capabilityInput(req, claims, { requireScope = false } = {}) {
-  const capability = String(req.body?.operationId || req.body?.capability || "").trim();
-  if (!capability.startsWith("cap_") || capability.length < 40) throw codedError("DIRECT_CAPABILITY_REQUIRED", "operation capability is missing.");
-  const input = {
-    capabilityHash: sha256(capability),
-    ...claims,
-    sessionId: String(req.body?.sessionId || ""),
-    generation: Number(req.body?.generation || 0),
-    clockSkewMs: installedRuntime?.clockSkewMs ?? DEFAULT_CLOCK_SKEW_MS,
-  };
-  if (requireScope) {
-    input.operationType = normalizeOperationKind(req.body?.kind);
-    input.objectScope = normalizeScope(input.operationType, req.body?.scope);
-  }
-  return { capability, input };
-}
-
-function keepOperationIdPublic(res, capability) {
-  const originalJson = res.json.bind(res);
-  res.json = payload => {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return originalJson(payload);
-    const { internal_operation_id: _internalOperationId, ...publicPayload } = payload;
-    if (Object.hasOwn(publicPayload, "operation_id")) publicPayload.operation_id = capability;
-    return originalJson(publicPayload);
-  };
-}
-
-async function authorizePresentedCapability(req, fallbackIdentity = null) {
-  if (!installedRuntime?.store) throw codedError("DIRECT_CAPABILITY_UNAVAILABLE", "capability store is unavailable.", 503);
-  const claims = requestIdentity(req, fallbackIdentity);
-  const { capability, input } = capabilityInput(req, claims, { requireScope: true });
-  const liveSession = directTransport.validateCapabilitySession({
-    installationId: input.installationId,
-    sessionId: input.sessionId,
-    generation: input.generation,
-  });
-  if (!liveSession?.ok) {
-    throw codedError("DIRECT_CAPABILITY_SESSION_INACTIVE", `Direct session is not live (${liveSession?.reason || "unknown"}).`);
-  }
-  const result = await installedRuntime.store.authorize(input);
-  if (!result.ok) {
-    const code = result.reason === "scope" ? "DIRECT_CAPABILITY_SCOPE_DENIED" : "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED";
-    throw codedError(code, "capability is not active for this exact session/operation/object.");
-  }
-  return {
-    ok: true,
-    authorized: true,
-    operation_id: capability,
-    capability: {
-      operation: result.record.operation_type,
-      object_scope: result.record.object_scope,
-      vault_scope: result.record.vault_scope,
-    },
-  };
-}
-
-async function verifyAuthorizedCapability(req, fallbackIdentity = null) {
-  if (!installedRuntime?.store) throw codedError("DIRECT_CAPABILITY_UNAVAILABLE", "capability store is unavailable.", 503);
-  const claims = requestIdentity(req, fallbackIdentity);
-  const { capability, input } = capabilityInput(req, claims, { requireScope: true });
-  const liveSession = directTransport.validateCapabilitySession({
-    installationId: input.installationId,
-    sessionId: input.sessionId,
-    generation: input.generation,
-  });
-  if (!liveSession?.ok) {
-    throw codedError("DIRECT_CAPABILITY_SESSION_INACTIVE", `Direct session is not live (${liveSession?.reason || "unknown"}).`);
-  }
-  const result = await installedRuntime.store.renew({ ...input, renewalLeaseMs: installedRuntime.ttlMs });
-  if (!result.ok) {
-    const code = result.reason === "scope" ? "DIRECT_CAPABILITY_SCOPE_DENIED" : "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED";
-    throw codedError(code, "capability is not authorized for this exact session/operation/object.");
-  }
-  if (result.record.operation_type !== input.operationType || !sameScope(result.record.object_scope, input.objectScope)) {
-    throw codedError("DIRECT_CAPABILITY_SCOPE_DENIED", "capability does not match this operation and object.");
-  }
-  return { operation_id: capability, operation: result.record.operation_type,
-    object_scope: result.record.object_scope, vault_scope: result.record.vault_scope };
-}
-
 async function revokeTenantCapabilities(tenantId, reason = "incident") {
   if (!installedRuntime?.store) throw codedError("DIRECT_CAPABILITY_UNAVAILABLE", "capability store is unavailable.", 503);
   return installedRuntime.store.revokeTenant({ tenantId: String(tenantId), reason: String(reason || "incident") });
@@ -456,202 +299,11 @@ function installDirectCapabilityBoundary(express, options = {}) {
   if (express.application.__beatgalerDirectCapabilitiesInstalled) return installedRuntime;
   express.application.__beatgalerDirectCapabilitiesInstalled = true;
   const env = options.env || process.env;
-  const dataDir = options.dataDir || require("./state-dir").STATE_DIR;
   const now = options.now || (() => Date.now());
-  const ttlMs = Math.max(30_000, Math.min(30 * 60 * 1000, Number(env.BEATGALER_DIRECT_CAPABILITY_TTL_MS || DEFAULT_CAPABILITY_TTL_MS)));
-  const clockSkewMs = Math.max(0, Math.min(30_000, Number(env.BEATGALER_DIRECT_CAPABILITY_CLOCK_SKEW_MS || DEFAULT_CLOCK_SKEW_MS)));
   const maxActivePerTenant = Math.max(1, Math.min(16, Number(env.BEATGALER_DIRECT_TENANT_ACTIVE_CAP || DEFAULT_TENANT_ACTIVE_CAP)));
   const store = options.store || (options.pool ? createPostgresStore(options.pool, { maxActivePerTenant }) : createMemoryStore({ now, maxActivePerTenant }));
-  // T05-N capa 1 (NATIVO r2.1 §5.1): la emisión de get_index/replace_index/delete_messages se rechaza con 410 para un
-  // dueño con fila de catálogo, antes de que el handler cree la operación Direct. Sin PostgreSQL no existe catálogo.
-  const legacyFence = options.legacyFence || (options.pool ? createLegacyFence({ pool: options.pool }) : null);
-  installedRuntime = { store, ttlMs, clockSkewMs, maxActivePerTenant };
+  installedRuntime = { store };
   const originalPost = express.application.post;
-
-  async function cleanupInternalOperation(req, internalOperationId) {
-    if (!internalOperationId) return;
-    const cleanupStartedAt = now();
-    directTransport.recordDiagnostic?.("CAPABILITY_INTERNAL_CLEANUP_BEGIN", {
-      internal_operation_id: String(internalOperationId),
-      session_id: String(req.body?.sessionId || ""),
-      generation: Number(req.body?.generation || 0),
-    });
-    try {
-      await directTransport.endOperation({
-        installationId: String(req.beatgalerAuthorizedInstallationId || req.body?.beatgalerUserId || ""),
-        sessionId: String(req.body?.sessionId || ""),
-        generation: Number(req.body?.generation || 0),
-        operationId: internalOperationId,
-      });
-      directTransport.recordDiagnostic?.("CAPABILITY_INTERNAL_CLEANUP_DONE", {
-        internal_operation_id: String(internalOperationId),
-        session_id: String(req.body?.sessionId || ""),
-        elapsed_ms: now() - cleanupStartedAt,
-      });
-    } catch (error) {
-      directTransport.recordDiagnostic?.("CAPABILITY_INTERNAL_CLEANUP_FAILED", {
-        internal_operation_id: String(internalOperationId),
-        session_id: String(req.body?.sessionId || ""),
-        elapsed_ms: now() - cleanupStartedAt,
-        error_code: String(error?.code || ""),
-        error_name: String(error?.name || ""),
-      });
-    }
-  }
-
-  function beginCapability(req, res, next) {
-    let claims, kind, scope;
-    try {
-      claims = requestIdentity(req);
-      kind = normalizeOperationKind(req.body?.kind);
-      scope = normalizeScope(kind, req.body?.scope);
-    } catch (error) { return responseError(res, error); }
-    if (legacyFence && INDEX_OPERATION_TYPES.includes(kind)) {
-      legacyFence.assertUserNotCatalog(claims.userId, { entry: `operation/begin:${kind}` })
-        .then(() => beginCapabilityAuthorized(req, res, next, { claims, kind, scope }))
-        .catch(error => {
-          if (isLegacyFenceError(error)) return res.status(error.status).json({ ok: false, code: error.code, error: error.message });
-          return responseError(res, codedError("DIRECT_CAPABILITY_FENCE_UNAVAILABLE", "catalog fence could not be evaluated.", 503));
-        });
-      return undefined;
-    }
-    return beginCapabilityAuthorized(req, res, next, { claims, kind, scope });
-  }
-
-  function beginCapabilityAuthorized(req, res, next, { claims, kind, scope }) {
-    const originalJson = res.json.bind(res);
-    res.json = payload => {
-      if (!(Number(res.statusCode || 200) < 300 && payload?.ok === true && payload?.operation_id)) return originalJson(payload);
-      const internalOperationId = String(payload.operation_id);
-      const token = capabilityToken();
-      const issuedAt = now();
-      const record = {
-        capability_hash: sha256(token), internal_operation_id: internalOperationId,
-        user_id: claims.userId, tenant_id: claims.tenantId, installation_id: claims.installationId,
-        auth_session_hash: claims.authSessionHash, session_id: String(req.body?.sessionId || ""),
-        generation: Number(req.body?.generation || 0), vault_scope: readVaultScope(dataDir, claims.installationId, claims.tenantId),
-        operation_type: kind, object_scope: scope, issued_at_ms: issuedAt, expires_at_ms: issuedAt + ttlMs,
-      };
-      const capabilityIssueStartedAt = now();
-      directTransport.recordDiagnostic?.("CAPABILITY_ISSUE_BEGIN", {
-        internal_operation_id: internalOperationId,
-        session_id: String(req.body?.sessionId || ""),
-        generation: Number(req.body?.generation || 0),
-        kind,
-      });
-      const liveDirectOperationIds = directTransport.activeOperationIdsForSession?.({
-        installationId: claims.installationId,
-        sessionId: String(req.body?.sessionId || ""),
-        generation: Number(req.body?.generation || 0),
-      });
-      const reconcilePromise =
-        Array.isArray(liveDirectOperationIds) && typeof store.revokeMissingOperations === "function"
-          ? store.revokeMissingOperations({
-              tenantId: claims.tenantId,
-              installationId: claims.installationId,
-              sessionId: String(req.body?.sessionId || ""),
-              liveOperationIds: [...new Set([...liveDirectOperationIds, internalOperationId])],
-              reason: "direct_operation_missing",
-            })
-          : Promise.resolve(0);
-      void reconcilePromise.then(revoked => {
-        if (revoked > 0) {
-          directTransport.recordDiagnostic?.("CAPABILITY_STALE_REVOKED", {
-            session_id: String(req.body?.sessionId || ""),
-            kind,
-            revoked,
-          });
-        }
-        return store.issue(record);
-      }).then(() => {
-        directTransport.recordDiagnostic?.("CAPABILITY_ISSUE_DONE", {
-          internal_operation_id: internalOperationId,
-          session_id: String(req.body?.sessionId || ""),
-          kind,
-          elapsed_ms: now() - capabilityIssueStartedAt,
-        });
-        directTransport.recordDiagnostic?.("CAPABILITY_RESPONSE_SEND", {
-          internal_operation_id: internalOperationId,
-          session_id: String(req.body?.sessionId || ""),
-          kind,
-        });
-        const { internal_operation_id: _internalOperationId, ...publicPayload } = payload;
-        return originalJson({
-          ...publicPayload,
-          operation_id: token,
-          capability: {
-            token, user_id: claims.userId, tenant_id: claims.tenantId, installation_id: claims.installationId,
-            vault_scope: record.vault_scope, operation: kind, object_scope: scope,
-            issued_at: new Date(issuedAt).toISOString(), expires_at: new Date(record.expires_at_ms).toISOString(),
-          },
-        });
-      }).catch(async error => {
-        directTransport.recordDiagnostic?.("CAPABILITY_ISSUE_FAILED", {
-          internal_operation_id: internalOperationId,
-          session_id: String(req.body?.sessionId || ""),
-          kind,
-          elapsed_ms: now() - capabilityIssueStartedAt,
-          error_code: String(error?.code || ""),
-          error_name: String(error?.name || ""),
-          status_code: Number(error?.status || 0) || null,
-        });
-        await cleanupInternalOperation(req, internalOperationId);
-        directTransport.recordDiagnostic?.("CAPABILITY_ERROR_RESPONSE_SEND", {
-          internal_operation_id: internalOperationId,
-          session_id: String(req.body?.sessionId || ""),
-          kind,
-          status_code: Number(error?.status || 500),
-        });
-        responseError(res, error);
-      });
-      return res;
-    };
-    next();
-  }
-
-  async function finishCapability(req, res, next) {
-    let claims, parsed;
-    try {
-      claims = requestIdentity(req);
-      parsed = capabilityInput(req, claims);
-    } catch (error) { return responseError(res, error); }
-    try {
-      const result = await store.finish(parsed.input);
-      if (!result.ok) {
-        const code = result.reason === "scope" ? "DIRECT_CAPABILITY_SCOPE_DENIED" : "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED";
-        return responseError(res, codedError(code, "capability cannot be finished for this session."));
-      }
-      req.body.operationId = String(result.record.internal_operation_id);
-      keepOperationIdPublic(res, parsed.capability);
-      next();
-    } catch (error) { responseError(res, error); }
-  }
-
-  async function renewCapability(req, res, next) {
-    let claims, parsed;
-    try {
-      claims = requestIdentity(req);
-      parsed = capabilityInput(req, claims);
-    } catch (error) { return responseError(res, error); }
-    const liveSession = directTransport.validateCapabilitySession({
-      installationId: parsed.input.installationId,
-      sessionId: parsed.input.sessionId,
-      generation: parsed.input.generation,
-    });
-    if (!liveSession?.ok) {
-      return responseError(res, codedError("DIRECT_CAPABILITY_SESSION_INACTIVE", `Direct session is not live (${liveSession?.reason || "unknown"}).`));
-    }
-    try {
-      const result = await store.renew({ ...parsed.input, renewalLeaseMs: ttlMs });
-      if (!result.ok) {
-        const code = result.reason === "scope" ? "DIRECT_CAPABILITY_SCOPE_DENIED" : "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED";
-        return responseError(res, codedError(code, "capability cannot be renewed for this session."));
-      }
-      req.body.operationId = String(result.record.internal_operation_id);
-      keepOperationIdPublic(res, parsed.capability);
-      next();
-    } catch (error) { responseError(res, error); }
-  }
 
   async function revokeSession(req, res, next) {
     const installationId = String(req.beatgalerAuthorizedInstallationId || "").trim();
@@ -695,27 +347,7 @@ function installDirectCapabilityBoundary(express, options = {}) {
     };
   }
 
-  async function authorizeCapability(req, res) {
-    criticalPathTrace.write(req, "cloud_handler_start");
-    try {
-      const result = await criticalPathTrace.step(req, "capability_authorize", () => authorizePresentedCapability(req));
-      criticalPathTrace.write(req, "cloud_handler_finished");
-      return res.json(result);
-    } catch (error) {
-      return responseError(res, error);
-    }
-  }
-
   express.application.post = function patchedDirectCapabilityPost(routePath, ...handlers) {
-    if (routePath === "/transport/operation/begin") {
-      if (!this.__beatgalerDirectCapabilityAuthorizeRouteInstalled) {
-        this.__beatgalerDirectCapabilityAuthorizeRouteInstalled = true;
-        originalPost.call(this, "/transport/capability/authorize", authorizeCapability);
-      }
-      return originalPost.call(this, routePath, beginCapability, ...handlers);
-    }
-    if (routePath === "/transport/operation/end") return originalPost.call(this, routePath, finishCapability, ...handlers);
-    if (routePath === "/transport/operation/renew") return originalPost.call(this, routePath, renewCapability, ...handlers);
     if (routePath === "/transport/session/stop") return originalPost.call(this, routePath, revokeSession, ...handlers);
     if (routePath === "/auth/logout") return originalPost.call(this, routePath, revokeAuthOnSuccess("logout"), ...handlers);
     if (routePath === "/auth/password/change") return originalPost.call(this, routePath, revokeAuthOnSuccess("password_change"), ...handlers);
@@ -727,15 +359,9 @@ function installDirectCapabilityBoundary(express, options = {}) {
 
 module.exports = {
   DEFAULT_CAPABILITY_TTL_MS,
-  DEFAULT_CLOCK_SKEW_MS,
   DEFAULT_TENANT_ACTIVE_CAP,
-  OPERATION_SCOPE_RULES,
-  normalizeOperationKind,
-  normalizeScope,
   createMemoryStore,
   createPostgresStore,
-  authorizePresentedCapability,
-  verifyAuthorizedCapability,
   revokeTenantCapabilities,
   installDirectCapabilityBoundary,
 };

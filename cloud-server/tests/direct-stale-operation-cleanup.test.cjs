@@ -36,7 +36,7 @@ Module._load = function(request, parent, isMain) {
 
 (async () => {
   const direct = require('../direct-transport-control.js');
-  const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
+  const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
   const runtimePool = [{ id: 'Bot01' }];
   let monotonicClock = 100;
   direct.__test.setMonotonicNow(() => monotonicClock);

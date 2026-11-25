@@ -84,7 +84,7 @@ function opArgs(lease, kind) {
 
 (async () => {
   const direct = require('../direct-transport-control.js');
-  const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
+  const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
 
   assert.equal(direct.enabled(), true);
   assert.deepEqual(direct.poolStatus().bots.map(bot => bot.id), ['Bot01', 'Bot02', 'Bot03']);

@@ -77,7 +77,7 @@ process.env.DIRECT_HEARTBEAT_INTERVAL_MS = '60000';
 process.env.DIRECT_HEARTBEAT_TIMEOUT_MS = '300000';
 
 const direct = withFakeTelegram(() => require('../direct-transport-control.js'));
-const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
+const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
 function prepare(botId, installationId, chatId) {
   return prepareAssignedLease({ directTransport: direct, status: direct.poolStatus(), transportBotId: botId, installationId, chatId });
 }

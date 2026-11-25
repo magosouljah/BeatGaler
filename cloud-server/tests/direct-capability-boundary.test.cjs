@@ -4,16 +4,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const {
-  normalizeOperationKind,
-  normalizeScope,
   createMemoryStore,
   installDirectCapabilityBoundary,
-  verifyAuthorizedCapability,
 } = require("../direct-capability-boundary");
-const directTransport = require("../direct-transport-capability-view");
 const { activeOperationIdsForSessionState, validateCapabilitySessionState } = require("../direct-transport-capability-view");
 const { installProductiveTempAuthBoundary } = require("../productive-temp-auth-boundary");
-const { installHttpContainment } = require("../http-containment");
 
 function record(overrides = {}) {
   return {
@@ -99,44 +94,6 @@ function capabilityRouteRequest(body, overrides = {}) {
     ...overrides,
   };
 }
-
-test("operation kinds are deny-by-default", () => {
-  assert.equal(normalizeOperationKind("download"), "download");
-  assert.throws(() => normalizeOperationKind("data"), /DIRECT_CAPABILITY_DENIED/);
-  assert.throws(() => normalizeOperationKind("admin_anything"), /DIRECT_CAPABILITY_DENIED/);
-});
-
-test("STEP 4 transport writes require the same installation owner boundary as INDEX commit", () => {
-  const routes = new Map();
-  const express = { application: {
-    post(route, ...handlers) { routes.set(route, handlers); return this; },
-    get() { return this; },
-  } };
-  installHttpContainment(express);
-  for (const route of ["/transport/index/commit", "/transport/index/publish", "/transport/index/bootstrap-state",
-    "/transport/quota/reserve", "/transport/quota/renew", "/transport/quota/cancel",
-    "/transport/project/authorize", "/transport/project/upload"]) {
-    express.application.post(route, () => {});
-  }
-  const ownerBoundary = routes.get("/transport/index/commit")[0];
-  for (const route of ["/transport/index/publish", "/transport/index/bootstrap-state", "/transport/quota/reserve", "/transport/quota/renew",
-    "/transport/quota/cancel", "/transport/project/authorize", "/transport/project/upload"]) {
-    assert.equal(routes.get(route)[0], ownerBoundary, `${route} must bind the installation before capability checks`);
-  }
-});
-
-test("scope requires an explicit allowlisted object and rejects wildcard ids", () => {
-  assert.deepEqual(normalizeScope("download", { objectType: "message", objectIds: [102, 101, 101] }), {
-    object_type: "message", object_ids: ["101", "102"],
-  });
-  assert.throws(() => normalizeScope("download", null), /SCOPE_REQUIRED/);
-  assert.throws(() => normalizeScope("download", { objectType: "beat", objectIds: ["beat-a"] }), /SCOPE_DENIED/);
-  assert.throws(() => normalizeScope("download", { objectType: "message", objectIds: ["*"] }), /SCOPE_INVALID/);
-  assert.throws(() => normalizeScope("get_index", { objectType: "index", objectIds: ["old"] }), /canonical pinned index/);
-  assert.deepEqual(normalizeScope("get_index", { objectType: "index", objectIds: ["pinned"] }), {
-    object_type: "index", object_ids: ["pinned"],
-  });
-});
 
 test("authorize is one-shot and finish consumes only an authorized capability", async () => {
   const store = createMemoryStore({ now: () => 2_000, maxActivePerTenant: 4 });
@@ -247,122 +204,6 @@ test("renewal rejects mismatched, revoked, consumed and expired capabilities", a
   const expired = await store.renew(expiredInput);
   assert.equal(expired.ok, false);
   assert.equal(expired.reason, "expired");
-});
-
-test("boundary renews public capabilities without exposing internal operation ids", async () => {
-  const previousValidate = directTransport.validateCapabilitySession;
-  directTransport.validateCapabilitySession = () => ({ ok: true });
-  try {
-    let now = 2_000;
-    const store = createMemoryStore({ now: () => now, maxActivePerTenant: 4 });
-    const fakeExpress = createFakeExpress();
-    installDirectCapabilityBoundary(fakeExpress, {
-      store,
-      now: () => now,
-      env: { BEATGALER_DIRECT_CAPABILITY_TTL_MS: "30000" },
-    });
-    const renewedOperationIds = [];
-    const endedOperationIds = [];
-    fakeExpress.application.post("/transport/operation/begin", (_req, res) => res.json({
-      ok: true,
-      operation_id: "op_internal_renew",
-      internal_operation_id: "op_internal_renew",
-    }));
-    fakeExpress.application.post("/transport/operation/renew", (req, res) => {
-      renewedOperationIds.push(req.body.operationId);
-      return res.json({ ok: true, operation_id: req.body.operationId, liveness_timeout_ms: 15_000 });
-    });
-    fakeExpress.application.post("/transport/operation/end", (req, res) => {
-      endedOperationIds.push(req.body.operationId);
-      return res.json({ ok: true, operation_id: req.body.operationId });
-    });
-    fakeExpress.application.post("/transport/session/stop", (_req, res) => res.json({ ok: true }));
-
-    const beginRequest = capabilityRouteRequest({
-      sessionId: "session-a",
-      generation: 1,
-      kind: "commit_import",
-      scope: { objectType: "beat", objectIds: ["beat-a"] },
-    });
-    const begin = await runRoute(fakeExpress.routes.get("/transport/operation/begin"), beginRequest);
-    assert.equal(begin.statusCode, 200);
-    const capability = begin.payload.operation_id;
-    assert.match(capability, /^cap_/);
-    assert.equal(begin.payload.capability.token, capability);
-    assert.doesNotMatch(JSON.stringify(begin.payload), /op_internal_renew/);
-
-    const authorize = await runRoute(fakeExpress.routes.get("/transport/capability/authorize"), capabilityRouteRequest({
-      sessionId: "session-a", generation: 1, operationId: capability, kind: "commit_import",
-      scope: { objectType: "beat", objectIds: ["beat-a"] },
-    }));
-    assert.equal(authorize.statusCode, 200);
-    assert.equal(authorize.payload.operation_id, capability);
-
-    const publicationRequest = capabilityRouteRequest({
-      sessionId: "session-a", generation: 1, operationId: capability, kind: "commit_import",
-      scope: { objectType: "beat", objectIds: ["beat-a"] },
-    });
-    assert.equal((await verifyAuthorizedCapability(publicationRequest)).operation_id, capability);
-    await assert.rejects(
-      verifyAuthorizedCapability(capabilityRouteRequest({
-        sessionId: "session-a", generation: 1, operationId: capability, kind: "commit_import",
-        scope: { objectType: "beat", objectIds: ["beat-b"] },
-      })),
-      error => error?.code === "DIRECT_CAPABILITY_SCOPE_DENIED",
-    );
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      now += 5_000;
-      const renewed = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest({
-        sessionId: "session-a", generation: 1, operationId: capability,
-      }));
-      assert.equal(renewed.statusCode, 200);
-      assert.equal(renewed.payload.operation_id, capability);
-      assert.doesNotMatch(JSON.stringify(renewed.payload), /op_internal_renew/);
-    }
-    assert.deepEqual(renewedOperationIds, ["op_internal_renew", "op_internal_renew"]);
-    assert.equal(store.__records.get(authHash(capability)).status, "AUTHORIZED");
-
-    for (const change of [
-      { body: { sessionId: "session-b", generation: 1, operationId: capability } },
-      { body: { sessionId: "session-a", generation: 2, operationId: capability } },
-      { beatgalerAuthorizedInstallationId: "install-b", body: { sessionId: "session-a", generation: 1, operationId: capability } },
-    ]) {
-      const rejected = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest(change.body, change));
-      assert.equal(rejected.statusCode, 403);
-      assert.match(rejected.payload.code, /DIRECT_CAPABILITY_(SCOPE_DENIED|REPLAY_OR_EXPIRED)/);
-    }
-
-    const ended = await runRoute(fakeExpress.routes.get("/transport/operation/end"), capabilityRouteRequest({
-      sessionId: "session-a", generation: 1, operationId: capability,
-    }));
-    assert.equal(ended.statusCode, 200);
-    assert.equal(ended.payload.operation_id, capability);
-    assert.deepEqual(endedOperationIds, ["op_internal_renew"]);
-    const consumed = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest({
-      sessionId: "session-a", generation: 1, operationId: capability,
-    }));
-    assert.equal(consumed.statusCode, 403);
-    await assert.rejects(
-      verifyAuthorizedCapability(publicationRequest),
-      error => error?.code === "DIRECT_CAPABILITY_REPLAY_OR_EXPIRED",
-    );
-
-    const secondBegin = await runRoute(fakeExpress.routes.get("/transport/operation/begin"), beginRequest);
-    const secondCapability = secondBegin.payload.operation_id;
-    await runRoute(fakeExpress.routes.get("/transport/capability/authorize"), capabilityRouteRequest({
-      sessionId: "session-a", generation: 1, operationId: secondCapability, kind: "commit_import",
-      scope: { objectType: "beat", objectIds: ["beat-a"] },
-    }));
-    const stopped = await runRoute(fakeExpress.routes.get("/transport/session/stop"), capabilityRouteRequest({ sessionId: "session-a" }));
-    assert.equal(stopped.statusCode, 200);
-    const revoked = await runRoute(fakeExpress.routes.get("/transport/operation/renew"), capabilityRouteRequest({
-      sessionId: "session-a", generation: 1, operationId: secondCapability,
-    }));
-    assert.equal(revoked.statusCode, 403);
-  } finally {
-    directTransport.validateCapabilitySession = previousValidate;
-  }
 });
 
 test("tenant ceiling counts authorized operations as live", async () => {

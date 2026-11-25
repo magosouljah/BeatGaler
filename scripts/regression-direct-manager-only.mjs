@@ -76,8 +76,6 @@ const docs = read('cloud-server', 'TELEGRAM-DIRECT-V5-BOTAPI.md');
 const packageJson = JSON.parse(read('cloud-server', 'package.json'));
 const assignmentRuntime = parse('direct-persistent-assignment-runtime.js', read('cloud-server', 'direct-persistent-assignment-runtime.js'));
 const assignmentStore = parse('direct-vault-assignment.js', read('cloud-server', 'direct-vault-assignment.js'));
-const sessionRuntime = parse('direct-persistent-session-runtime.js', read('cloud-server', 'direct-persistent-session-runtime.js'));
-const membershipRuntime = parse('direct-persistent-membership-runtime.js', read('cloud-server', 'direct-persistent-membership-runtime.js'));
 const controlAst = parse('direct-transport-control.js', control);
 const serverAst = parse('server.js', serverEntry);
 const coreAst = parse('server-core.js', serverCore);
@@ -117,17 +115,6 @@ if (!control.includes("reason: 'index_busy'")) fail('Concurrent index writers no
 const boot = block(serverAst, 'start');
 const configure = requireCall(boot, 'directPersistentAssignments.configure');
 if (compact(configure.arguments[0]) !== '{pool}') fail('Persistent assignment runtime must receive the PostgreSQL pool.');
-const installStart = requireCall(boot, 'installPersistentDirectSessionStart');
-const installMembership = requireCall(boot, 'installPersistentDirectMembershipActivation');
-// T25 (b52649f): el arranque ya no fija ni recupera INDEX, así que la sesión Direct ya no recibe indexPinAuthority.
-for (const [install, expectedOptions] of [
-  [installStart, '{directTransport,persistentAssignments:directPersistentAssignments,}'],
-  [installMembership, '{directTransport,persistentAssignments:directPersistentAssignments,}'],
-]) {
-  if (compact(install.arguments[0]) !== expectedOptions) fail('Direct runtime wrapper is not wired to the PostgreSQL assignment runtime.');
-  before(configure, install, 'PostgreSQL assignment must be configured before installing Direct wrappers.');
-  if (!ts.isExpressionStatement(install.parent) || install.parent.parent !== boot) fail('Persistent Direct wrappers must install unconditionally during server startup.');
-}
 const requiredStore = block(assignmentRuntime, 'requiredStore');
 if (!requiredStore.getText().includes('TRANSPORT_ASSIGNMENT_POSTGRES_REQUIRED') || !nodes(branch(requiredStore, '!assignmentStore').thenStatement, ts.isThrowStatement).length) fail('Missing PostgreSQL must fail closed.');
 const resolve = block(assignmentRuntime, 'resolveForVault');
@@ -156,79 +143,17 @@ if (!expectedBotGuard.right.getText().includes('AND transport_bot_id=$') || !set
 if (!/ADD COLUMN transport_bot_id text REFERENCES transport_bots\(id\)\s*,/i.test(migration) || /UPDATE\s+vaults\s+SET\s+transport_bot_id/i.test(migration)) fail('Legacy ownership must stay nullable without a default or bulk assignment.');
 if (!migration.includes('DROP TRIGGER IF EXISTS direct_leases_active_cap_trigger') || !migration.includes('DROP FUNCTION IF EXISTS enforce_transport_bot_active_lease_cap()')) fail('The obsolete four-active-lease cap must remain retired.');
 
-// The wrapper resolves ownership, installs that exact lease, then invokes the
-// session primitive. Runtime tests also reject startup without a prepared lease.
-const wrappedStart = block(sessionRuntime, 'wrappedStartSession');
-const resolveCall = requireCall(wrappedStart, 'persistentAssignments.resolveForVault');
-const prepareCall = requireCall(wrappedStart, 'prepareAssignedLease');
-const legacyStart = one(calls(wrappedStart, 'originalStartSession').filter(call => ts.isAwaitExpression(call.parent)), 'prepared legacy start');
-const earlyStarts = calls(wrappedStart, 'originalStartSession').filter(call => call !== legacyStart);
-if (earlyStarts.length !== 2 || earlyStarts.some(call => !ts.isReturnStatement(call.parent) || !ts.isIfStatement(call.parent.parent) ||
-  !['!installationId||!chatId', '!status?.configured'].includes(compact(call.parent.parent.expression)))) fail('Legacy start may bypass PostgreSQL only for invalid input or an unconfigured pool.');
-before(resolveCall, prepareCall, 'Resolve PostgreSQL assignment before preparing a lease.');
-before(prepareCall, legacyStart, 'The assigned lease must exist before entering legacy start.');
-if (!compact(prepareCall.arguments[0]).includes('transportBotId:assignedBotId,')) fail('Session preparation must use the assigned bot.');
-const invariant = branch(wrappedStart, "String(session?.transport_id||'')!==assignedBotId");
-if (!nodes(invariant.thenStatement, ts.isThrowStatement).length) fail('Mismatched session transport must fail closed.');
-const prepareLease = block(sessionRuntime, 'prepareAssignedLease');
-requireCall(prepareLease, 'ensureAssignedBotAdmissible');
-if (!nodes(prepareLease, node => ts.isPropertyAssignment(node) && node.name.getText() === 'bot_id' && node.initializer.getText() === 'botId').length) fail('Prepared lease no longer belongs to the assigned bot.');
-const admissible = block(sessionRuntime, 'ensureAssignedBotAdmissible');
-for (const condition of ['!botState', 'botState.quarantined', 'botState.rotation_pending']) {
-  if (!nodes(branch(admissible, condition).thenStatement, ts.isThrowStatement).length) fail(`Assigned bot ${condition} must fail without fallback.`);
-}
-noCalls(wrappedStart, /leaseNextBot|waitForAssignableTransport|repairMembership|rotateManagedToken/, 'Assigned session start');
 const baseStart = block(controlAst, 'startSession');
 noLocalReachability(controlAst, baseStart, /leaseNextBot|waitForAssignableTransport/, 'Base session start');
 if (!baseStart.getText().includes('TRANSPORT_ASSIGNMENT_LEASE_REQUIRED') || !ts.isThrowStatement(baseStart.statements.at(-1))) fail('Unprepared base startup must fail closed without an allocator.');
-const installStartBody = block(sessionRuntime, 'installPersistentDirectSessionStart');
-if (compact(requireCall(installStartBody, 'directTransport.startSession.bind').arguments[0]) !== 'directTransport') fail('Persistent start must wrap the original live Direct session primitive.');
-if (!nodes(installStartBody, node => ts.isBinaryExpression(node) && compact(node) === 'directTransport.startSession=wrappedStartSession').length) fail('Persistent start wrapper is not installed on the live Direct module.');
-
-// READY is an early local return; provisioning remains behind the per-vault
-// lock. Inspect its prefix and reachable helpers, not the whole mixed function.
-const wrappedActivate = block(membershipRuntime, 'wrappedActivateSession');
-const ready = branch(wrappedActivate, "String(initial.membershipState)==='ready'");
-const readyProbe = requireCall(ready.thenStatement, 'directTransport.probeSessionMembership');
-const readyReturns = nodes(ready.thenStatement, ts.isReturnStatement);
-const positiveReturn = one(readyReturns.filter(item => compact(item.expression) ===
-  'readyResult(finalizeReadyLease({directTransport,pool:checked.pool,lease:checked.lease,}),membership)'), 'READY verified return');
-const transientReturn = one(nodes(branch(ready.thenStatement, 'transientProbeFailure(error)').thenStatement, ts.isReturnStatement)
-  .filter(item => compact(item.expression) ===
-    'readyResult(finalizeReadyLease({directTransport,pool:checked.pool,lease:checked.lease,}))'), 'READY transient fallback');
-before(readyProbe, positiveReturn, 'READY membership must be probed before the local ACTIVE lease transition.');
-if (!transientReturn) fail('READY activation must preserve the local ACTIVE lease transition on transient probe failure.');
-const forbiddenMembership = /master|Master|InviteToChannel|EditAdmin|GetParticipant|EditBanned|kickAndUnban|decommissionVaultMembership|originalActivateSession|provisionCurrentLease|withMembershipLock|markMembership|repairMembership/;
-for (const statement of wrappedActivate.statements) {
-  if (statement.pos >= ready.end) break;
-  noLocalReachability(membershipRuntime, statement === ready ? ready.thenStatement : statement, forbiddenMembership, 'READY activation');
-}
-const pendingLock = requireCall(wrappedActivate, 'persistentAssignments.withMembershipLock');
-before(ready, pendingLock, 'READY activation must return before membership provisioning lock.');
-const pendingCallback = pendingLock.arguments[1];
-requireCall(pendingCallback, 'assertAssignmentMatches');
-if (calls(pendingCallback, 'provisionCurrentLease').length !== 2) fail('Locked Direct activation must provision only pending membership or an authoritative same-bot repair.');
-const provision = block(membershipRuntime, 'provisionCurrentLease');
-before(requireCall(provision, 'originalActivateSession'), requireCall(provision, 'persistentAssignments.markMembershipReady'), 'Membership can become READY only after successful provisioning.');
-const repair = block(membershipRuntime, 'repairMembership');
-const repairLock = requireCall(repair, 'persistentAssignments.withMembershipLock');
-const repairCallback = repairLock.arguments[1];
-requireCall(repairCallback, 'assertAssignmentMatches');
-before(requireCall(repairCallback, 'persistentAssignments.markMembershipRepairNeeded'), requireCall(repairCallback, 'provisionCurrentLease'), 'Explicit same-bot repair must mark REPAIR before provisioning.');
-noCalls(repair, /assignIfMissing|resolveForVault|leaseNextBot|rotateManagedToken/, 'Explicit repair');
-if (nodes(repair, node => ts.isForStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node)).length) fail('Explicit repair must not internally retry provisioning.');
 const membershipLock = block(assignmentStore, 'withMembershipLock');
 const lockSql = querySql(membershipLock, 'client');
 if (!lockSql.includes('pg_advisory_lock(') || !lockSql.includes('pg_advisory_unlock(') || /['"`]BEGIN['"`]|pg_advisory_xact_lock/.test(lockSql)) fail('Membership network work must use a session advisory lock without an open SQL transaction.');
 requireCall(membershipLock, 'callback');
-const membershipInstall = block(membershipRuntime, 'installPersistentDirectMembershipActivation');
-if (compact(requireCall(membershipInstall, 'directTransport.activateSession.bind').arguments[0]) !== 'directTransport') fail('Persistent membership must wrap the original live provisioning primitive.');
-for (const assignment of ['directTransport.activateSession=wrappedActivateSession', 'directTransport.repairMembership=repairMembership']) {
-  if (!nodes(membershipInstall, node => ts.isBinaryExpression(node) && compact(node) === assignment).length) fail(`Missing live membership wrapper: ${assignment}.`);
-}
 const resolver = block(controlAst, 'ensureBotApiResolverChat');
 const persistedResolver = branch(resolver, 'existingId');
 if (!nodes(persistedResolver.thenStatement, node => ts.isReturnStatement(node) && node.expression?.getText() === 'existingId').length) fail('Persisted resolver must return without MASTER bootstrap.');
+const forbiddenMembership = /master|Master|InviteToChannel|EditAdmin|GetParticipant|EditBanned|kickAndUnban|decommissionVaultMembership|originalActivateSession|provisionCurrentLease|withMembershipLock|markMembership|repairMembership/;
 noLocalReachability(controlAst, persistedResolver.thenStatement, forbiddenMembership, 'Persisted resolver');
 
 // Normal cleanup keeps membership. Walk local callees to catch indirect churn;
@@ -237,7 +162,6 @@ const forbiddenCleanup = /master|Master|InviteToChannel|EditAdmin|GetParticipant
 for (const name of ['cleanupLease', 'cleanupLeaseSingleflight', 'stopSession', 'cleanupExpiredSessions']) {
   noLocalReachability(controlAst, block(controlAst, name), forbiddenCleanup, `Ephemeral cleanup ${name}`);
 }
-noLocalReachability(sessionRuntime, block(sessionRuntime, 'retireLeaseLocal'), forbiddenCleanup, 'Mismatched legacy lease retirement');
 const cleanup = block(controlAst, 'cleanupLease');
 requireCall(cleanup, 'deleteLease');
 requireCall(cleanup, 'runtimeSessions.delete');
@@ -375,7 +299,7 @@ if (nodes(transform, node => ts.isSpreadAssignment(node) && node.expression.getT
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     verifyDirectArchitecture();
-    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, assigned sessions, READY without MASTER, ephemeral cleanup, explicit same-bot repair/decommission, secret/temp-auth boundary and MASTER-only INDEX pin/delete rights.');
+    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, persisted resolver without MASTER, ephemeral cleanup, explicit decommission, secret/temp-auth boundary and MASTER-only INDEX pin/delete rights.');
   } catch (error) {
     console.error(`FAIL Direct persistent guard: ${error.message}`);
     process.exitCode = 1;

@@ -15,11 +15,6 @@ const UPLOAD_ROUTES = new Set(["/metadata/artwork", "/beats/upload", "/projects/
 const BODY_OWNER_ROUTES = new Set(["/metadata/upsert", "/library/artwork"]);
 const INSTALLATION_POST_ROUTES = new Set([
   "/events/ticket", "/telegram/connect/start", "/telegram/disconnect",
-  "/transport/session/start", "/transport/session/activate", "/transport/session/heartbeat",
-  "/transport/session/stop", "/transport/operation/begin", "/transport/capability/authorize", "/transport/operation/end", "/transport/operation/renew",
-  "/transport/index/commit", "/transport/index/publish", "/transport/index/bootstrap-state", "/transport/trash/purge", "/transport/quota/reserve", "/transport/quota/renew",
-  "/transport/quota/cancel", "/transport/project/authorize", "/transport/project/upload",
-  "/transport/routing/reconcile", "/transport/topic/ensure", "/transport/upload/confirm",
   "/beats/delete-topic", "/beats/delete-topics-batch",
 ]);
 const INSTALLATION_GET_ROUTES = new Set(["/telegram/connect/status"]);

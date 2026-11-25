@@ -13,7 +13,6 @@ const path = require('path');
 const db = require('../helpers/catalog-test-db.cjs');
 const mig = require('../../postgres-migrations.js');
 const authority = require('../../catalog/authority.js');
-const { createLegacyFence } = require('../../catalog/legacy-fence.js');
 const { deterministicId } = require('../../legacy-import-executor.js');
 const cli = require('../../catalog/native-cli.js');
 
@@ -153,16 +152,10 @@ test('rebind-chat + reset de un vault legacy sin catálogo: reset exige rebind p
   // idempotencia y protección: mismo manifiesto no-op; otro manifiesto nunca vacía la biblioteca nativa
   assert.equal((await c.run(['reset', '--manifest', write(resetManifest(sha1)), '--apply'])).result.outcome, 'ALREADY_APPLIED');
   await rejects(c.run(['reset', '--manifest', write({ ...resetManifest(sha1), run_id: 'run-reset-2' }), '--apply']), 'LIBRARY_ALREADY_NATIVE', 'STOP-DATA');
-  // la autoridad ve POSTGRES; la capa 1 cerca al usuario y al chat legacy; el chat solo cambia por rebind-chat
+  // La autoridad ve POSTGRES y el chat solo cambia por rebind-chat.
   const ctx = await authOn(pool).resolveContext({ userId: v.userId });
   assert.equal(ctx.authority, 'POSTGRES'); assert.equal(ctx.chat_id, newChat); assert.equal(ctx.generation_origin, 'RESET');
-  const fence = createLegacyFence({ pool });
-  await rejects(fence.assertLegacyEntryAllowed({ userId: v.userId, entry: 'index/publish' }), 'LEGACY_CLIENT_UNSUPPORTED');
-  await rejects(fence.assertLegacyEntryAllowed({ chatId: v.chatId, entry: 'index/publish' }), 'LEGACY_CLIENT_UNSUPPORTED');
-  // Cercado ampliado (producción 2026-11-20): un vault elegible como nativo queda cercado ANTES de provisionar (no puede publicarse INDEX
-  // entre el alta y POST /library/provision). `other` se creó tras la activación, luego es elegible y también se rechaza.
   assert.equal((await pool.query('SELECT catalog_native_eligible FROM vaults WHERE id = $1', [other.vaultId])).rows[0].catalog_native_eligible, true);
-  await rejects(fence.assertLegacyEntryAllowed({ userId: other.userId, chatId: other.chatId, entry: 'index/publish' }), 'LEGACY_CLIENT_UNSUPPORTED');
   await assert.rejects(pool.query('UPDATE vaults SET telegram_chat_id = $1 WHERE id = $2', ['-100777', v.vaultId]), (e) => e.code === 'BGR03');
   const rb2 = { environment_id: 'lab', user_id: v.userId, vault_id: v.vaultId, from_chat_id: newChat, to_chat_id: '-100777', approval_ref: 'purp-rebind-2' };
   await pool.query("INSERT INTO control_plane_flush_quarantine(user_id, field, value_sha256) VALUES ($1, 'telegram_chat_id', $2)", [v.userId, H]);
