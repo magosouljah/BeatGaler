@@ -7,7 +7,6 @@ cloud-server/tests/catalog/catalog-backup-secrets.static.test.cjs
 cloud-server/tests/catalog/catalog-contract.test.cjs
 cloud-server/tests/password-kdf.test.cjs
 cloud-server/tests/plan-dev-switch-removed.test.cjs
-cloud-server/tests/unit.test.cjs
 scripts/regression-legacy-media-upload-disable.mjs
 scripts/regression-task-5.1-hardening.mjs
 scripts/regression-web-bound-temp-rpc.mjs

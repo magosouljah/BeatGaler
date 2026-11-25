@@ -338,11 +338,14 @@ function stripPermanentSecrets(session) {
   return stripDirectPublicJson(safe, ["telegram_api_id", "credential_envelope"]);
 }
 
-async function transformSession(session, metadata) {
+// `deps` solo se inyecta en pruebas; en producción los defaults son las funciones de este módulo.
+async function transformSession(session, metadata, deps = {}) {
+  const authorize = deps.authorizePermanent || authorizePermanent;
+  const buildBinding = deps.buildBindingEnvelope || buildBindingEnvelope;
   if (!session || typeof session !== "object") return session;
   const safe = stripPermanentSecrets(session);
   if (session.ok !== true) return safe;
-  const state = await authorizePermanent(session);
+  const state = await authorize(session);
   const bootstrap = {
     version: 1,
     dc_id: state.dcId,
@@ -361,7 +364,7 @@ async function transformSession(session, metadata) {
       temp_auth: bootstrap,
     };
   }
-  const binding = await buildBindingEnvelope(state, metadata);
+  const binding = await buildBinding(state, metadata);
   return {
     ...safe,
     mode: "galer-direct-temp-mtproto",
