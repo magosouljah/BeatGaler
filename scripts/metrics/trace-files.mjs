@@ -19,7 +19,7 @@ const SC = {
     ['cloud-server/auth-abuse-controls.js', '/auth/login'],
     ['cloud-server/auth-durable-abuse-controls.js', '/auth/login'],
     ['cloud-server/auth-public-registration-hardening.js', '/auth/login'],
-    ['cloud-server/pending-signup-boundary.js', '/auth/login'],
+    ['cloud-server/pending-signup-boundary.js', 'function wrapPendingSignupPost'],
     ['cloud-server/session-security.js', '/auth/login'],
     ['cloud-server/account-lifecycle.js', '/auth/login'],
     ['cloud-server/server-core.js', 'app.post("/auth/login"'],

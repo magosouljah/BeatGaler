@@ -3,6 +3,10 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const test = require('node:test');
+const { mountAccountRouteGuards, SELF_REGISTERED_ROUTES } = require('../account-route-guards');
+const { installAuthPublicRegistrationHardening } = require('../auth-public-registration-hardening');
+const pendingSignup = require('../pending-signup-boundary');
+const { installStagedEmailChangeRoutes } = require('../staged-email-change-routes');
 const { SESSION_COOKIE } = require('../session-security');
 const { account, withCloud } = require('./helpers/composition-cloud.cjs');
 
@@ -35,9 +39,36 @@ async function checkBoundaryRegistration(app) {
   assert.equal(res.statusCode, 410);
 }
 
+async function checkInactiveRegistration() {
+  const routes = new Map();
+  const app = { post(path, ...handlers) { routes.set(path, handlers); } };
+  const express = { application: app, json: () => (_req, _res, next) => next() };
+  const env = { BEATGALER_PUBLIC_REGISTRATION: '1', BEATGALER_PENDING_SIGNUP_ENABLED: '0' };
+  installAuthPublicRegistrationHardening(express, { env });
+  const signup = pendingSignup.installPendingSignupBoundary(express, { env });
+  mountAccountRouteGuards(app);
+  app.post('/auth/register', () => assert.fail('el handler heredado no debe ejecutarse'));
+  assert.equal(signup.captured().register, true);
+
+  const handlers = routes.get('/auth/register').values();
+  const result = await new Promise(resolve => {
+    const req = { path: '/auth/register', body: {} };
+    const res = {
+      status(code) { this.statusCode = code; return this; },
+      json(body) { resolve({ status: this.statusCode, code: body.code }); },
+    };
+    const next = () => handlers.next().value(req, res, next);
+    next();
+  });
+  assert.deepEqual(result, { status: 503, code: 'AUTH_SERVICE_UNAVAILABLE' });
+}
+
 test('las guardas globales y por ruta respetan el orden efectivo de la tabla en Cloud', async () => {
   const browser = { 'x-beatgaler-client': 'web' };
   let lifecycle;
+  let coordinator;
+  const signupCalls = [];
+  const emailChanges = [];
   let restore = () => {};
 
   try {
@@ -55,10 +86,9 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
       }
       const paths = routes.map(route => route.path);
       const firstPost = paths.indexOf('/webhooks/polar');
-      assert.ok(firstPost >= 3);
-      assert.deepEqual(paths.slice(firstPost - 3, firstPost), [
-        '/auth/sessions', '/auth/sessions/revoke', '/auth/sessions/revoke-all',
-      ]);
+      assert.equal(firstPost, SELF_REGISTERED_ROUTES.length);
+      assert.deepEqual(paths.slice(0, firstPost), SELF_REGISTERED_ROUTES);
+      for (const path of SELF_REGISTERED_ROUTES) assert.equal(paths.filter(value => value === path).length, 1, path);
       await checkBoundaryRegistration(app);
 
       const health = await send('GET', '/healthz');
@@ -72,6 +102,41 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
       assert.equal(login.status, 200);
       const cookie = login.headers['set-cookie'].find(value => value.startsWith(`${SESSION_COOKIE}=`)).split(';', 1)[0];
       const token = cookie.slice(SESSION_COOKIE.length + 1);
+
+      const signupBody = { email: 'pending@example.test', username: 'pending', password: account.password };
+      const deniedSignup = await send('POST', '/auth/register', {
+        headers: browser, body: { ...signupBody, beatgalerUserId: account.beatgalerUserId },
+      });
+      assert.equal(deniedSignup.status, 403, deniedSignup.data);
+      assert.deepEqual(signupCalls, []);
+      const acceptedSignup = await send('POST', '/auth/register', {
+        headers: browser, body: { ...signupBody, beatgalerUserId: 'unclaimed-fixture' },
+      });
+      assert.equal(acceptedSignup.status, 202, acceptedSignup.data);
+      assert.equal(JSON.parse(acceptedSignup.data).signup_pending, true);
+      assert.deepEqual(signupCalls.map(input => input.installationId), ['unclaimed-fixture']);
+
+      const csrf = JSON.parse(login.data).csrf_token;
+      const authorized = {
+        ...browser,
+        cookie: login.headers['set-cookie'].map(value => value.split(';', 1)[0]).join('; '),
+        'x-beatgaler-csrf': csrf,
+      };
+      const email = 'new@example.test';
+      const staged = await send('POST', '/auth/email/change/start', { headers: authorized, body: { email } });
+      assert.equal(staged.status, 202, staged.data);
+      assert.deepEqual(emailChanges, [email]);
+      const reauth = await send('POST', '/auth/reauth', { headers: authorized, body: { password: account.password } });
+      assert.equal(reauth.status, 200, reauth.data);
+      assert.match(JSON.parse(reauth.data).reauth_token, /^reauth_/);
+
+      // Un estado D8 se resuelve antes de que la contención OAuth busque un flujo heredado.
+      coordinator._test.pending.set('reauth-fixture', { provider: 'google', flowId: 'order-fixture', expiresAt: Date.now() + 60_000 });
+      const oauth = await send('GET', '/auth/oauth/google/callback?state=reauth-fixture&error=access_denied');
+      assert.equal(oauth.status, 400);
+      assert.match(oauth.data, /BeatGaler reauthentication failed/);
+      assert.equal(coordinator._test.pending.has('reauth-fixture'), false);
+
       lifecycle._test.revokedSessionHashes.add(createHash('sha256').update(token).digest('hex'));
       const headers = { ...browser, cookie };
 
@@ -87,9 +152,25 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
       prepare() {
         const accountLifecycle = require('../account-lifecycle');
         const { installAccountLifecycle } = accountLifecycle;
-        accountLifecycle.installAccountLifecycle = (...args) => {
-          lifecycle = installAccountLifecycle(...args);
+        accountLifecycle.installAccountLifecycle = (express, options) => {
+          lifecycle = installAccountLifecycle(express, options);
+          installStagedEmailChangeRoutes(express, {
+            async start(_req, email) { emailChanges.push(email); return { ok: true }; },
+          });
           return lifecycle;
+        };
+        const { installPendingSignupBoundary } = pendingSignup;
+        pendingSignup.installPendingSignupBoundary = (express, options) =>
+          installPendingSignupBoundary(express, {
+            ...options,
+            service: { async begin(input) { signupCalls.push(input); return { created: false }; } },
+          });
+        const d8 = require('../d8-ro-resolutions');
+        const { applyD8RoResolutions } = d8;
+        d8.applyD8RoResolutions = (...args) => {
+          const config = applyD8RoResolutions(...args);
+          coordinator = config.coordinator;
+          return config;
         };
         const durable = require('../auth-durable-abuse-controls');
         const { installDurableAuthAbuseControls } = durable;
@@ -99,10 +180,13 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
         restore = () => {
           accountLifecycle.installAccountLifecycle = installAccountLifecycle;
           durable.installDurableAuthAbuseControls = installDurableAuthAbuseControls;
+          pendingSignup.installPendingSignupBoundary = installPendingSignupBoundary;
+          d8.applyD8RoResolutions = applyD8RoResolutions;
         };
       },
     });
   } finally {
     restore();
   }
+  await checkInactiveRegistration();
 });

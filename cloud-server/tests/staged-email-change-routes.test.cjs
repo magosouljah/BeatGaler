@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { mountAccountRouteGuards } = require('../account-route-guards');
 const { installStagedEmailChangeRoutes, statusForEmailChangeError, publicEmailChangeError } = require('../staged-email-change-routes');
 
 assert.equal(statusForEmailChangeError({ code: 'EMAIL_CHANGE_RESEND_COOLDOWN' }), 429);
@@ -27,7 +28,9 @@ function fakeExpress() {
     async confirm() { return { ok: true }; },
   };
   installStagedEmailChangeRoutes(express, service);
-  express.application.post('/auth/login', () => {});
+  const app = Object.create(express.application);
+  mountAccountRouteGuards(app);
+  app.post('/auth/login', () => {});
 
   assert.equal(express.routes.has('/auth/email/change/start'), true);
   assert.equal(express.routes.has('/auth/email/change/resend'), true);
@@ -41,7 +44,7 @@ function fakeExpress() {
   assert.equal(express.routes.has('/auth/login'), true);
 
   const before = express.routes.size;
-  express.application.post('/auth/session', () => {});
+  app.post('/auth/session', () => {});
   assert.equal(express.routes.size, before + 1, 'staged routes must be installed only once');
 }
 

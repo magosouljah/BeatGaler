@@ -135,7 +135,6 @@ function installPendingSignupBoundary(express, {
   if (!application) return null;
   if (application.__beatgalerPendingSignupBoundaryInstalled) return application.__beatgalerPendingSignupBoundaryRuntime || null;
   application.__beatgalerPendingSignupBoundaryInstalled = true;
-  const previousPost = application.post;
   let routesInstalled = false;
   let routesInstalling = false;
   let legacyRegisterHandler = null;
@@ -309,8 +308,9 @@ function installPendingSignupBoundary(express, {
   };
   application.__beatgalerPendingSignupBoundaryRuntime = runtimeApi;
 
-  application.post = function pendingSignupPost(routePath, ...handlers) {
-    if (!routesInstalling) ensureRoutes(this);
+  application.__beatgalerPendingSignupPost = function pendingSignupPost(routePath, handlers) {
+    const { app, next } = this;
+    if (!routesInstalling) ensureRoutes(app);
     const pathName = String(routePath || '');
     const lastHandler = [...handlers].reverse().find(handler => typeof handler === 'function') || null;
     if (pathName === '/auth/register' && lastHandler) legacyRegisterHandler = lastHandler;
@@ -321,18 +321,24 @@ function installPendingSignupBoundary(express, {
       // guardas externos (antiabuso, contención) deben ejecutarse antes.
       const chain = handlers.slice();
       chain[chain.lastIndexOf(lastHandler)] = (req, res) => { void register(req, res); };
-      return previousPost.call(this, routePath, ...chain);
+      return next(routePath, ...chain);
     }
     if (pathName === '/auth/login' && service?.loginGate) {
-      return previousPost.call(this, routePath, (req, res, next) => { void passwordLoginGate(req, res, next); }, ...handlers);
+      return next(routePath, (req, res, next) => { void passwordLoginGate(req, res, next); }, ...handlers);
     }
-    return previousPost.call(this, routePath, ...handlers);
+    return next(routePath, ...handlers);
   };
 
   return runtimeApi;
 }
 
+function wrapPendingSignupPost(routePath, handlers) {
+  const register = this.app.__beatgalerPendingSignupPost;
+  return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
+}
+
 module.exports = {
+  wrapPendingSignupPost,
   statusForError,
   publicError,
   shouldOwnRegister,

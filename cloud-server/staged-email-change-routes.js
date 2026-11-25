@@ -39,7 +39,6 @@ function installStagedEmailChangeRoutes(express, service) {
   const application = express?.application;
   if (!application || !service || application.__beatgalerStagedEmailChangeRoutesInstalled) return;
   application.__beatgalerStagedEmailChangeRoutesInstalled = true;
-  const previousPost = application.post;
   let routesInstalled = false;
   let routesInstalling = false;
 
@@ -77,13 +76,20 @@ function installStagedEmailChangeRoutes(express, service) {
     }
   }
 
-  application.post = function stagedEmailChangeRoutesPost(routePath, ...handlers) {
-    if (!routesInstalling) ensureRoutes(this);
-    return previousPost.call(this, routePath, ...handlers);
+  application.__beatgalerStagedEmailChangePost = function stagedEmailChangeRoutesPost(routePath, handlers) {
+    const { app, next } = this;
+    if (!routesInstalling) ensureRoutes(app);
+    return next(routePath, ...handlers);
   };
 }
 
+function wrapStagedEmailChangePost(routePath, handlers) {
+  const register = this.app.__beatgalerStagedEmailChangePost;
+  return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
+}
+
 module.exports = {
+  wrapStagedEmailChangePost,
   statusForEmailChangeError,
   publicEmailChangeError,
   installStagedEmailChangeRoutes,
