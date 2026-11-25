@@ -95,7 +95,7 @@ async function testSharedRevocation(clock) {
       getCapabilityStore: () => ({ async revokeAuthSession(input) { revoked.push(input); } }),
     });
 
-    assert.equal(await runtime._test.revokeUserSessions(userId, 'password_reset'), 2);
+    assert.equal(await runtime.api.session.revokeUserSessions(userId, 'password_reset'), 2);
     assert.deepEqual(revoked.map(input => input.authSessionHash).sort(), [localHash, durableOnlyHash].sort());
     assert.deepEqual(revoked.map(input => input.reason), ['password_reset', 'password_reset']);
     assert.deepEqual([...durableSessions], [[otherUserHash, otherUserId]]);
@@ -182,21 +182,21 @@ async function main() {
 
   {
     const unknownRes = makeRes();
-    await runtime._test.requestPasswordReset(req({ body: { email: 'nobody@example.com' }, pathName: '/auth/password/reset/request' }), unknownRes);
+    await runtime.api.password.requestPasswordReset(req({ body: { email: 'nobody@example.com' }, pathName: '/auth/password/reset/request' }), unknownRes);
     const existingRes = makeRes();
-    await runtime._test.requestPasswordReset(req({ body: { email: 'life@example.com' }, pathName: '/auth/password/reset/request' }), existingRes);
+    await runtime.api.password.requestPasswordReset(req({ body: { email: 'life@example.com' }, pathName: '/auth/password/reset/request' }), existingRes);
     assert.equal(unknownRes.statusCode, 202);
     assert.equal(existingRes.statusCode, 202);
     assert.equal(unknownRes.body.message, existingRes.body.message);
     assert.equal(deliveries.length, 1);
     assert.equal(deliveries[0].kind, 'password_reset');
-    assert.equal(JSON.stringify(runtime._test.stateSnapshot()).includes(deliveries[0].token), false);
+    assert.equal(JSON.stringify(runtime.api.state.stateSnapshot()).includes(deliveries[0].token), false);
   }
 
   {
     const resetToken = deliveries[0].token;
     const resetRes = makeRes();
-    await runtime._test.completePasswordReset(req({
+    await runtime.api.password.completePasswordReset(req({
       body: { token: resetToken, newPassword: 'new-password-123' },
       pathName: '/auth/password/reset/complete',
     }), resetRes);
@@ -213,32 +213,32 @@ async function main() {
     assert.equal(await passwordKdf.verifyPassword('old-password', user), false);
     passwordKdf.setPasswordAuthorityResolver(null);
     const reused = makeRes();
-    await runtime._test.completePasswordReset(req({
+    await runtime.api.password.completePasswordReset(req({
       body: { token: resetToken, newPassword: 'another-password' },
       pathName: '/auth/password/reset/complete',
     }), reused);
     assert.equal(reused.statusCode, 400);
     assert.equal(reused.body.code, 'PASSWORD_RESET_INVALID');
-    assert.equal(Object.keys(runtime._test.accountsSnapshot().sessions).length, 0);
+    assert.equal(Object.keys(runtime.api.state.accountsSnapshot().sessions).length, 0);
   }
 
   {
     const emailToken = runtime._test.issueTestToken({ kind: 'email_verification', user, email: user.email });
-    assert.equal(JSON.stringify(runtime._test.stateSnapshot()).includes(emailToken), false);
+    assert.equal(JSON.stringify(runtime.api.state.stateSnapshot()).includes(emailToken), false);
     const verifiedRes = makeRes();
-    await runtime._test.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), verifiedRes);
+    await runtime.api.email.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), verifiedRes);
     assert.equal(verifiedRes.statusCode, 200);
     assert.equal(verifiedRes.body.verified, true);
     const again = makeRes();
-    await runtime._test.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), again);
+    await runtime.api.email.confirmEmailVerification(req({ body: { token: emailToken }, pathName: '/auth/email/verification/confirm' }), again);
     assert.equal(again.statusCode, 400);
     assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, true);
-    assert.equal(runtime._test.stateSnapshot().email_verified, undefined);
+    assert.equal(runtime.api.state.stateSnapshot().email_verified, undefined);
 
     const expired = runtime._test.issueTestToken({ kind: 'email_verification', user, email: user.email });
     clock += 11 * 60 * 1000;
     const expiredRes = makeRes();
-    await runtime._test.confirmEmailVerification(req({ body: { token: expired }, pathName: '/auth/email/verification/confirm' }), expiredRes);
+    await runtime.api.email.confirmEmailVerification(req({ body: { token: expired }, pathName: '/auth/email/verification/confirm' }), expiredRes);
     assert.equal(expiredRes.statusCode, 400);
     clock -= 11 * 60 * 1000;
   }
@@ -249,7 +249,7 @@ async function main() {
     assert.equal(codes.length, 8);
     recoveryCode = codes[0];
     assert.ok(recoveryCode.startsWith(RECOVERY_PREFIX));
-    assert.equal(JSON.stringify(runtime._test.stateSnapshot()).includes(recoveryCode), false);
+    assert.equal(JSON.stringify(runtime.api.state.stateSnapshot()).includes(recoveryCode), false);
     assert.equal(runtime._test.validateRecoveryCode(userId, recoveryCode), true);
     assert.equal(runtime._test.validateRecoveryCode(userId, recoveryCode, { consume: true }), true);
     assert.equal(runtime._test.validateRecoveryCode(userId, recoveryCode), false);
@@ -265,7 +265,7 @@ async function main() {
   let reauthToken;
   {
     const reauthRes = makeRes();
-    await runtime._test.reauthenticate(req({
+    await runtime.api.session.reauthenticate(req({
       token: sessionOne,
       body: { password: 'new-password-123', recoveryCode },
       pathName: '/auth/reauth',
@@ -278,7 +278,7 @@ async function main() {
 
   {
     const exportRes = makeRes();
-    await runtime._test.exportAccount(req({ token: sessionOne, body: { reauthToken }, pathName: '/auth/account/export' }), exportRes);
+    await runtime.api.data.exportAccount(req({ token: sessionOne, body: { reauthToken }, pathName: '/auth/account/export' }), exportRes);
     assert.equal(exportRes.statusCode, 200);
     const serialized = JSON.stringify(exportRes.body);
     assert.equal(serialized.includes(passwordHash), false);
@@ -289,7 +289,7 @@ async function main() {
 
   {
     const replayRes = makeRes();
-    await runtime._test.exportAccount(req({ token: sessionOne, body: { reauthToken } }), replayRes);
+    await runtime.api.data.exportAccount(req({ token: sessionOne, body: { reauthToken } }), replayRes);
     assert.equal(replayRes.statusCode, 401);
     assert.equal(replayRes.body.code, 'REAUTH_REQUIRED');
   }
@@ -297,7 +297,7 @@ async function main() {
   {
     const codes = runtime._test.generateRecoveryCodes(userId);
     const reauthRes = makeRes();
-    await runtime._test.reauthenticate(req({
+    await runtime.api.session.reauthenticate(req({
       token: sessionOne,
       body: { password: 'new-password-123', recoveryCode: codes[0] },
       pathName: '/auth/reauth',
@@ -308,7 +308,7 @@ async function main() {
   {
     const beforeRevokes = capabilityRevokes.length;
     const deleteRes = makeRes();
-    await runtime._test.deleteAccount(req({ token: sessionOne, body: { reauthToken }, pathName: '/auth/account/delete' }), deleteRes);
+    await runtime.api.data.deleteAccount(req({ token: sessionOne, body: { reauthToken }, pathName: '/auth/account/delete' }), deleteRes);
     assert.equal(deleteRes.statusCode, 200);
     assert.equal(deleteRes.body.deleted, true);
     assert.equal(deleteRes.body.receipt.retention_days, 30);
@@ -320,7 +320,7 @@ async function main() {
     const cloud = readJson(path.join(dir, 'cloud-data.json'));
     assert.equal(Object.keys(cloud.linkedAccounts || {}).includes('install_a'), false);
     assert.equal(Object.keys(cloud.uploadedFiles || {}).includes('f1'), false);
-    const lifecycle = runtime._test.stateSnapshot();
+    const lifecycle = runtime.api.state.stateSnapshot();
     assert.ok(lifecycle.tombstones[userId]);
     assert.equal(JSON.stringify(lifecycle.tombstones[userId]).includes(user.email), false);
   }
@@ -343,12 +343,12 @@ async function main() {
     });
     assert.equal(blockedRuntime.deliveryConfigured, false);
     assert.equal(blockedRuntime.retentionConfigured, false);
-    const grant = blockedRuntime._test.issueReauth('usr_blocked', blockedHash, 'password');
+    const grant = blockedRuntime.api.session.issueReauth('usr_blocked', blockedHash, 'password');
     const blockedRes = makeRes();
-    await blockedRuntime._test.deleteAccount(req({ token: blockedToken, body: { reauthToken: grant } }), blockedRes);
+    await blockedRuntime.api.data.deleteAccount(req({ token: blockedToken, body: { reauthToken: grant } }), blockedRes);
     assert.equal(blockedRes.statusCode, 503);
     assert.equal(blockedRes.body.code, 'ACCOUNT_RETENTION_POLICY_REQUIRED');
-    assert.equal(blockedRuntime._test.accountsSnapshot().users.length, 1);
+    assert.equal(blockedRuntime.api.state.accountsSnapshot().users.length, 1);
     fs.rmSync(blockedDir, { recursive: true, force: true });
   }
 
@@ -362,7 +362,7 @@ async function main() {
     }));
     const providerRuntime = createAccountLifecycleRuntime({ dataDir: providerDir, now: () => clock, env: {} });
     const providerRes = makeRes();
-    await providerRuntime._test.reauthenticate(req({ token: providerToken, body: {} }), providerRes);
+    await providerRuntime.api.session.reauthenticate(req({ token: providerToken, body: {} }), providerRes);
     assert.equal(providerRes.statusCode, 409);
     assert.equal(providerRes.body.code, 'PROVIDER_REAUTH_REQUIRED');
     fs.rmSync(providerDir, { recursive: true, force: true });
@@ -395,19 +395,19 @@ async function main() {
     installLifecyclePasswordAuthority(authorityRuntime);
     const resetToken = authorityRuntime._test.issueTestToken({ kind: 'password_reset', user: authorityUser, email: authorityUser.email });
     const resetRes = makeRes();
-    await authorityRuntime._test.completePasswordReset(req({ body: { token: resetToken, newPassword: 'authority-reset' } }), resetRes);
+    await authorityRuntime.api.password.completePasswordReset(req({ body: { token: resetToken, newPassword: 'authority-reset' } }), resetRes);
     assert.equal(resetRes.statusCode, 200);
     const resetOverride = authorityRuntime.passwordOverrideForUser(authorityUserId);
     assert.ok(resetOverride?.passwordHash);
     assert.equal(resetOverride.previousPasswordHash, authorityOldHash);
 
-    const staleWrite = authorityRuntime._test.filterAccountsValue({ users: [{ ...authorityUser }], sessions: {} });
+    const staleWrite = authorityRuntime.api.state.filterAccountsValue({ users: [{ ...authorityUser }], sessions: {} });
     assert.equal(staleWrite.users[0].passwordHash, resetOverride.passwordHash, 'stale in-memory password cannot revert a completed reset');
     assert.ok(authorityRuntime.passwordOverrideForUser(authorityUserId));
 
     const laterSalt = '99990000aaaabbbbccccddddeeeeffff';
     const laterHash = await passwordKdf.hashPassword('authority-later', laterSalt);
-    const newerWrite = authorityRuntime._test.filterAccountsValue({
+    const newerWrite = authorityRuntime.api.state.filterAccountsValue({
       users: [{ ...authorityUser, passwordSalt: laterSalt, passwordHash: laterHash }],
       sessions: {},
     });

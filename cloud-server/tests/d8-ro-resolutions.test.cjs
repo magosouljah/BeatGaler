@@ -174,7 +174,7 @@ async function main() {
   });
   installImmediateAccountDeletion(runtime, { now: () => clock, randomBytes: size => Buffer.alloc(size, 7) });
   assert.equal(runtime.retentionConfigured, true);
-  assert.deepEqual(runtime._test.stateSnapshot().tombstones, {}, 'legacy recoverable tombstones must be purged');
+  assert.deepEqual(runtime.api.state.stateSnapshot().tombstones, {}, 'legacy recoverable tombstones must be purged');
 
   const env = {
     BEATGALER_OAUTH_PUBLIC_BASE: 'https://api.beatgaler.example',
@@ -255,7 +255,7 @@ async function main() {
   assert.equal(googlePoll.statusCode, 200);
   assert.match(googlePoll.body.reauth_token, /^reauth_/);
 
-  const consumed = runtime._test.consumeReauth(request({ token: sessionOne }), googlePoll.body.reauth_token);
+  const consumed = runtime.api.session.consumeReauth(request({ token: sessionOne }), googlePoll.body.reauth_token);
   assert.equal(consumed.ok, true);
   assert.equal(consumed.method, 'oauth:google');
 
@@ -297,9 +297,9 @@ async function main() {
   googleIdentity = 'google-subject-1';
   xIdentity = 'x-subject-1';
 
-  const deleteGrant = runtime._test.issueReauth(userId, sessionHashOne, 'oauth:google');
+  const deleteGrant = runtime.api.session.issueReauth(userId, sessionHashOne, 'oauth:google');
   const deleteRes = response();
-  await runtime._test.deleteAccount(request({
+  await runtime.api.data.deleteAccount(request({
     token: sessionOne,
     body: { reauthToken: deleteGrant },
   }), deleteRes);
@@ -308,8 +308,8 @@ async function main() {
   assert.equal(deleteRes.body.receipt.retention_days, 0);
   assert.equal(deleteRes.body.receipt.recoverable_tombstone, false);
   assert.equal(deleteRes.body.receipt.purge_at, deleteRes.body.receipt.deleted_at);
-  assert.deepEqual(runtime._test.stateSnapshot().tombstones, {});
-  assert.equal(runtime._test.accountsSnapshot().users.some(user => user.id === userId), false);
+  assert.deepEqual(runtime.api.state.stateSnapshot().tombstones, {});
+  assert.equal(runtime.api.state.accountsSnapshot().users.some(user => user.id === userId), false);
   assert.equal(Object.keys(runtime._test.cloudSnapshot().linkedAccounts || {}).includes('install_a'), false);
   assert.ok(capabilityRevokes.length >= 2);
 

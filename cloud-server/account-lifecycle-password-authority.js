@@ -16,15 +16,15 @@ function writeState(file, value) {
 }
 
 function installLifecyclePasswordAuthority(runtime) {
-  if (!runtime?._test || runtime.__beatgalerPasswordAuthoritySyncInstalled) return runtime;
+  if (!runtime?.api || runtime.__beatgalerPasswordAuthoritySyncInstalled) return runtime;
   runtime.__beatgalerPasswordAuthoritySyncInstalled = true;
-  const state = runtime._test.stateSnapshot();
-  const stateFile = runtime._test.stateFile;
+  const state = runtime.api.state.stateSnapshot();
+  const stateFile = runtime.api.state.stateFile;
 
   // After a restart the durable accounts snapshot already carries the reset
   // password authority. The compatibility override is no longer needed.
   let startupChanged = false;
-  const startup = runtime._test.accountsSnapshot();
+  const startup = runtime.api.state.accountsSnapshot();
   for (const [userId, override] of Object.entries(state.password_overrides || {})) {
     const user = startup.users.find(row => String(row?.id || '') === String(userId));
     if (user && String(user.passwordHash || '') === String(override?.passwordHash || '')) {
@@ -34,12 +34,12 @@ function installLifecyclePasswordAuthority(runtime) {
   }
   if (startupChanged) writeState(stateFile, state);
 
-  const originalComplete = runtime._test.completePasswordReset;
-  runtime._test.completePasswordReset = async function completeWithAuthorityHistory(req, res) {
+  const originalComplete = runtime.api.password.completePasswordReset;
+  async function completeWithAuthorityHistory(req, res) {
     const rawToken = String(req?.body?.token || '');
     const pending = state.tokens?.[sha256(rawToken)] || null;
     const userId = String(pending?.user_id || '');
-    const before = userId ? runtime._test.userById(userId) : null;
+    const before = userId ? runtime.api.state.userById(userId) : null;
     const previousPasswordHash = String(before?.passwordHash || '');
     await originalComplete(req, res);
     if (Number(res.statusCode || 200) >= 200 && Number(res.statusCode || 200) < 300 && userId) {
@@ -50,10 +50,10 @@ function installLifecyclePasswordAuthority(runtime) {
       }
     }
     return res;
-  };
+  }
 
-  const originalFilter = runtime._test.filterAccountsValue;
-  runtime._test.filterAccountsValue = function filterWithNewerPasswordWins(value) {
+  const originalFilter = runtime.api.state.filterAccountsValue;
+  function filterWithNewerPasswordWins(value) {
     const users = Array.isArray(value?.users) ? value.users : [];
     let changed = false;
     for (const user of users) {
@@ -71,8 +71,12 @@ function installLifecyclePasswordAuthority(runtime) {
     }
     if (changed) writeState(stateFile, state);
     return originalFilter(value);
-  };
+  }
 
+  runtime.provide({
+    completePasswordReset: completeWithAuthorityHistory,
+    filterAccountsValue: filterWithNewerPasswordWins,
+  });
   return runtime;
 }
 

@@ -63,7 +63,7 @@ const { createEmailVerificationFakePool } = require('./email-verification-fake-p
       'legacy JSON must not grant verification without a PostgreSQL row');
     let decorated;
     const response = { statusCode: 200, json(payload) { decorated = payload; return this; } };
-    runtime._test.responseDecorator('/auth/account', { body: {}, headers: {} }, response, () => {});
+    runtime.api.state.responseDecorator('/auth/account', { body: {}, headers: {} }, response, () => {});
     response.json({ user: { id: 'u1', email: 'another@example.com' } });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(decorated.user.email_verified, false);

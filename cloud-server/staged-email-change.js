@@ -46,20 +46,20 @@ function createStagedEmailChange({
   randomBytes = size => crypto.randomBytes(size),
 } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('Staged email change requires PostgreSQL.');
-  if (!runtime?._test?.sessionInfoFromRequest || !runtime?._test?.consumeReauth || !runtime?._test?.revokeUserSessions) {
+  if (!runtime?.api?.session?.sessionInfoFromRequest || !runtime?.api?.session?.consumeReauth || !runtime?.api?.session?.revokeUserSessions) {
     throw new Error('Staged email change requires account lifecycle authority.');
   }
   if (typeof commitLocalEmail !== 'function') throw new Error('Staged email change requires local identity commit callback.');
   const ttlMs = Math.max(5 * 60 * 1000, Math.min(60 * 60 * 1000, Number(env.BEATGALER_EMAIL_CHANGE_TTL_MS || DEFAULT_TTL_MS)));
 
   function session(req) {
-    const info = runtime._test.sessionInfoFromRequest(req);
+    const info = runtime.api.session.sessionInfoFromRequest(req);
     if (!info) throw coded('Session expired. Sign in again.', 'SESSION_REQUIRED');
     return info;
   }
 
   function consumeReauth(req) {
-    const result = runtime._test.consumeReauth(req, reauthToken(req));
+    const result = runtime.api.session.consumeReauth(req, reauthToken(req));
     if (!result?.ok) throw coded('Recent reauthentication is required.', result?.code || 'REAUTH_REQUIRED');
     return result;
   }
@@ -269,7 +269,7 @@ function createStagedEmailChange({
     // Revoke all existing sessions/capabilities before the identity swap. If
     // revocation fails, the old email remains authoritative and the token can
     // be retried safely.
-    await runtime._test.revokeUserSessions(String(info.userId), 'email_change');
+    await runtime.api.session.revokeUserSessions(String(info.userId), 'email_change');
     await flushAuthority();
 
     const tokenHash = sha256(token);

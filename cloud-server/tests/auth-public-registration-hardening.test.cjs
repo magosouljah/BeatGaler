@@ -206,7 +206,7 @@ const passwordChecks = (async () => {
 }
 
 {
-  const runtime = { _test: { sessionInfoFromRequest: () => ({ userId: 'usr-stable' }) } };
+  const runtime = { api: { session: { sessionInfoFromRequest: () => ({ userId: 'usr-stable' }) } } };
   assert.equal(targetIdentity({ body: { email: 'attacker@example.com' } }, runtime), 'user:usr-stable');
   assert.equal(targetIdentity({ body: { email: ' Test@Example.COM ' } }, null), 'input:test@example.com');
   const hashed = opaque('test@example.com');
@@ -262,7 +262,7 @@ const passwordChecks = (async () => {
   const info = { userId: 'usr_stable', user: { providers: { google: { id: 'g1' }, x: { id: 'x1' } } } };
   installAuthPublicRegistrationHardening({ application: app }, {
     env: { NODE_ENV: 'production', BEATGALER_PUBLIC_REGISTRATION: '0' },
-    getAccountLifecycle: () => ({ _test: { sessionInfoFromRequest: () => info } }),
+    getAccountLifecycle: () => ({ api: { session: { sessionInfoFromRequest: () => info } } }),
     getProviderIdentityAuthority: () => ({
       async prepareDisconnect(input) { calls.push(input); return { ok: true }; },
     }),
@@ -281,7 +281,7 @@ const passwordChecks = (async () => {
   const loginApp = { post(path, ...handlers) { loginRoutes.set(path, handlers); }, get() {} };
   let queries = 0;
   installAuthPublicRegistrationHardening({ application: loginApp }, {
-    getAccountLifecycle: () => ({ _test: { accountsSnapshot: () => ({ users: [{ id: 'usr_stable', email: 'old@example.com' }] }) } }),
+    getAccountLifecycle: () => ({ api: { state: { accountsSnapshot: () => ({ users: [{ id: 'usr_stable', email: 'old@example.com' }] }) } } }),
     getAuthPool: () => ({ async query() { queries += 1; return { rows: [] }; } }),
   });
   mountAccountRouteGuards(loginApp);

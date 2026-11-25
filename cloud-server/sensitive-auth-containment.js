@@ -35,7 +35,7 @@ function reauthToken(req) {
 }
 
 function consumeStrongReauth(runtime, req) {
-  try { return runtime?._test?.consumeReauth?.(req, reauthToken(req)) || { ok: false, code: 'REAUTH_REQUIRED' }; }
+  try { return runtime?.api?.session?.consumeReauth?.(req, reauthToken(req)) || { ok: false, code: 'REAUTH_REQUIRED' }; }
   catch { return { ok: false, code: 'REAUTH_REQUIRED' }; }
 }
 
@@ -45,7 +45,7 @@ function installSensitiveAuthContainment(express, runtime, { pool = null } = {})
   application.__beatgalerSensitiveAuthContainmentInstalled = true;
 
   function sessionInfo(req) {
-    try { return runtime._test.sessionInfoFromRequest(req); }
+    try { return runtime.api.session.sessionInfoFromRequest(req); }
     catch { return null; }
   }
 

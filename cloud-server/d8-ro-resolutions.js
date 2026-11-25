@@ -18,48 +18,48 @@ function atomicWriteJson(file, value) {
 }
 
 function purgeRecoverableTombstones(runtime) {
-  const state = runtime?._test?.stateSnapshot?.();
-  const deletedIds = runtime?._test?.deletedUserIds;
-  const stateFile = runtime?._test?.stateFile;
+  const state = runtime?.api?.state?.stateSnapshot?.();
+  const deletedIds = runtime?.api?.state?.deletedUserIds;
+  const stateFile = runtime?.api?.state?.stateFile;
   if (!state || !deletedIds || !stateFile) return;
   const legacyIds = Object.keys(state.tombstones || {});
   for (const userId of legacyIds) deletedIds.add(String(userId));
   state.tombstones = {};
   atomicWriteJson(stateFile, state);
-  runtime._test.scrubAccountsFile?.();
-  runtime._test.scrubCloudFile?.();
+  runtime.api.state.scrubAccountsFile?.();
+  runtime.api.state.scrubCloudFile?.();
 }
 
 function installImmediateAccountDeletion(runtime, { randomBytes = size => crypto.randomBytes(size), now = () => Date.now() } = {}) {
-  if (!runtime?._test || runtime.__beatgalerD8ImmediateDeleteInstalled) return runtime;
+  if (!runtime?.api || runtime.__beatgalerD8ImmediateDeleteInstalled) return runtime;
   runtime.__beatgalerD8ImmediateDeleteInstalled = true;
   purgeRecoverableTombstones(runtime);
   runtime.retentionConfigured = true;
 
-  runtime._test.deleteAccount = async function deleteAccountImmediate(req, res) {
-    const grant = runtime._test.consumeReauth(req, String(req?.body?.reauthToken || req?.headers?.['x-beatgaler-reauth'] || ''));
+  async function deleteAccountImmediate(req, res) {
+    const grant = runtime.api.session.consumeReauth(req, String(req?.body?.reauthToken || req?.headers?.['x-beatgaler-reauth'] || ''));
     if (!grant.ok) return res.status(401).json({ error: 'Recent reauthentication is required.', code: grant.code });
     const userId = grant.info.userId;
     try {
-      await runtime._test.revokeUserSessions(userId, 'account_delete');
+      await runtime.api.session.revokeUserSessions(userId, 'account_delete');
     } catch {
       return res.status(503).json({ error: 'Account deletion could not safely revoke active sessions.', code: 'DIRECT_CAPABILITY_REVOKE_FAILED' });
     }
 
     const deletedAt = now();
     const receiptId = `delete_${randomBytes(12).toString('hex')}`;
-    await runtime._test.clearEmailVerificationForUser(userId);
-    runtime._test.deletedUserIds.add(userId);
-    const state = runtime._test.stateSnapshot();
+    await runtime.api.email.clearEmailVerificationForUser(userId);
+    runtime.api.state.deletedUserIds.add(userId);
+    const state = runtime.api.state.stateSnapshot();
     delete state.tombstones[userId];
     delete state.recovery[userId];
     delete state.password_overrides[userId];
     delete state.notifications[userId];
     for (const [hash, entry] of Object.entries(state.reauth || {})) if (entry?.user_id === userId) delete state.reauth[hash];
     for (const [hash, entry] of Object.entries(state.tokens || {})) if (entry?.user_id === userId) delete state.tokens[hash];
-    atomicWriteJson(runtime._test.stateFile, state);
-    runtime._test.scrubAccountsFile();
-    runtime._test.scrubCloudFile();
+    atomicWriteJson(runtime.api.state.stateFile, state);
+    runtime.api.state.scrubAccountsFile();
+    runtime.api.state.scrubCloudFile();
 
     const timestamp = new Date(deletedAt).toISOString();
     return res.json({
@@ -74,7 +74,9 @@ function installImmediateAccountDeletion(runtime, { randomBytes = size => crypto
         provider_cleanup: 'local_credentials_removed',
       },
     });
-  };
+  }
+
+  runtime.provide({ deleteAccount: deleteAccountImmediate });
   return runtime;
 }
 
@@ -165,7 +167,7 @@ function createProviderReauthCoordinator(runtime, {
   function start(req, res, next) {
     if (String(req?.body?.purpose || '').toLowerCase() !== 'reauth') return next();
     cleanup();
-    const info = runtime._test.sessionInfoFromRequest(req);
+    const info = runtime.api.session.sessionInfoFromRequest(req);
     if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
     const provider = normalizeProvider(req?.body?.provider);
     const providerRecord = provider ? info.user?.providers?.[provider] : null;
@@ -233,7 +235,7 @@ function createProviderReauthCoordinator(runtime, {
       }
       const tokenBody = await postForm(fetchImpl, cfg.tokenUrl, form, headers);
       const identity = await fetchIdentity(fetchImpl, provider, cfg, String(tokenBody.access_token || ''));
-      const user = runtime._test.userById(flow.userId);
+      const user = runtime.api.state.userById(flow.userId);
       const currentProviderId = String(user?.providers?.[provider]?.id || '');
       if (!user || !currentProviderId || currentProviderId !== flow.expectedProviderId || identity.id !== flow.expectedProviderId) {
         throw Object.assign(new Error('Provider identity did not match the account.'), { code: 'PROVIDER_REAUTH_MISMATCH' });
@@ -264,7 +266,7 @@ function createProviderReauthCoordinator(runtime, {
     if (!result) return next();
     completed.delete(flowId);
     if (!result.ok) return res.status(401).json({ error: 'Provider reauthentication failed.', code: result.code || 'PROVIDER_REAUTH_FAILED' });
-    const info = runtime._test.sessionInfoFromRequest(req);
+    const info = runtime.api.session.sessionInfoFromRequest(req);
     if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
     if (info.userId !== result.userId || info.sessionHash !== result.sessionHash) {
       return res.status(401).json({ error: 'Provider reauthentication belongs to a different session.', code: 'REAUTH_SCOPE_DENIED' });
@@ -273,7 +275,7 @@ function createProviderReauthCoordinator(runtime, {
     if (!currentProviderId || currentProviderId !== result.providerIdentityId) {
       return res.status(401).json({ error: 'Provider identity no longer matches this account.', code: 'PROVIDER_REAUTH_MISMATCH' });
     }
-    const grant = runtime._test.issueReauth(info.userId, info.sessionHash, `oauth:${result.provider}`);
+    const grant = runtime.api.session.issueReauth(info.userId, info.sessionHash, `oauth:${result.provider}`);
     return res.json({ ok: true, purpose: 'reauth', provider: result.provider, reauth_token: grant, expires_in_ms: reauthTtlMs });
   }
 

@@ -177,17 +177,17 @@ function installAuthPublicRegistrationHardening(express, {
   }
 
   function accountsSnapshot() {
-    try { return lifecycle()?._test?.accountsSnapshot?.() || { users: [], sessions: {} }; }
+    try { return lifecycle()?.api?.state?.accountsSnapshot?.() || { users: [], sessions: {} }; }
     catch { return { users: [], sessions: {} }; }
   }
 
   function deletedUserIds() {
-    try { return lifecycle()?._test?.deletedUserIds || new Set(); }
+    try { return lifecycle()?.api?.state?.deletedUserIds || new Set(); }
     catch { return new Set(); }
   }
 
   function sessionInfo(req) {
-    try { return lifecycle()?._test?.sessionInfoFromRequest?.(req) || null; }
+    try { return lifecycle()?.api?.session?.sessionInfoFromRequest?.(req) || null; }
     catch { return null; }
   }
 
