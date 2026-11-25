@@ -9,6 +9,7 @@ import { browserFirstBlockCache, identityOf, type FirstBlockCache } from "./cata
 import { parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
 import { playbackSetKey, resolveReadyQuerySet } from "./catalogPlaybackSets";
 import { chooseLibraryComposition, isCatalogClientEnabled, type LibraryComposition } from "./catalogComposition";
+import { isMp3Master } from "./catalogFileKinds";
 import { createCatalogCommandsApi } from "./catalogCommandsApi";
 import { createCatalogInteractionStore, type CatalogInteractionStore } from "./catalogInteractionStore";
 import { createCatalogMediaClient, type CatalogMediaClient } from "./catalogMediaClient";

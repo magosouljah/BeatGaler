@@ -9,6 +9,7 @@
 import type { Beat } from "../../../types";
 import type { BeatAssets, GalerCloudObjectRef } from "../../../domain/beat";
 import { CatalogApiError, type CatalogBeatDto } from "./catalogApi";
+import { dataUrlToFile, isMp3Master } from "./catalogFileKinds";
 import { assertBeatNameWithinLimit } from "./catalogCommandsApi";
 import { BATCH_MAX, type CatalogBeatDetail, type CatalogCommandsApi, type CatalogMetadataPatch, type CatalogPurgeOperation, type CatalogVersionedItem } from "./catalogCommandsApi";
 import { describePart, type CatalogTransfer, type CommitResult, type TransferIntent, type TransferOperationDto, type TransferPartSpec, type TransferRole, type UploadPartResult } from "./catalogTransfer";
@@ -90,15 +91,6 @@ export function metadataPatch(original: Pick<Beat, "name" | "bpm" | "key" | "tag
   return patch;
 }
 
-const dataUrlToFile = (dataUrl: string, name: string): File | null => {
-  const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl);
-  if (!m) return null;
-  const mime = m[1] || "image/png"; const ext = mime.includes("jpeg") ? "jpg" : mime.includes("webp") ? "webp" : "png";
-  try {
-    const bytes = m[2] ? Uint8Array.from(atob(m[3]), (c) => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]));
-    return new File([bytes], `${name.replace(/[\\/:*?"<>|]+/g, "_") || "artwork"}.${ext}`, { type: mime });
-  } catch { return null; }
-};
 const INFLIGHT = new Set(["PREPARED", "TRANSFERRING", "VERIFYING", "READY"]);
 /** Estados en los que una transferencia AÚN puede confirmarse en el servidor (RECONCILE vuelve a READY al reconciliar): no se reenvía. */
 const UNRESOLVED = new Set([...INFLIGHT, "RECONCILE"]);
