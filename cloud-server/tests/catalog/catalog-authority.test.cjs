@@ -129,8 +129,8 @@ test('stripDirectCredentials: la sesión catalog-v1 serializada no contiene bot_
   process.env.TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH || 'test-only-hash';
   const dtc = require('../../direct-transport-control.js');
   const runtime = { id: 's1', bot: { id: 'Bot20', telegram_user_id: '7', telegram_username: 'bot' }, chatId: '-1001', token: 'secret-token', generation: 1, credentialVersion: 1, startedAt: 0, resolverChatId: null };
-  const legacy = JSON.stringify(dtc.__test.sessionPublic(runtime, 'ACTIVE'));
-  const native = JSON.stringify(dtc.__test.sessionPublic(runtime, 'ACTIVE', { protocol: authority.CATALOG_SESSION_PROTOCOL }));
+  const legacy = JSON.stringify(dtc.__testing.sessionPublic(runtime, 'ACTIVE'));
+  const native = JSON.stringify(dtc.__testing.sessionPublic(runtime, 'ACTIVE', { protocol: authority.CATALOG_SESSION_PROTOCOL }));
   assert.equal(authority.containsDirectCredentials(legacy), true, 'el modo legacy sigue igual');
   assert.equal(authority.containsDirectCredentials(native), false);
   assert.equal(native.includes('secret-token'), false);

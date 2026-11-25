@@ -7,7 +7,7 @@ process.env.BEATGALER_DIRECT_TRANSPORT = 'false';
 const direct = require('../direct-transport-control.js');
 
 async function main() {
-  const inviteAndPromote = direct?.__test?.inviteAndPromote;
+  const inviteAndPromote = direct?.__testing?.inviteAndPromote;
   assert.equal(typeof inviteAndPromote, 'function', 'real Direct provisioning primitive must be testable');
 
   // Telegram can report USER_ALREADY_PARTICIPANT when repair races propagation

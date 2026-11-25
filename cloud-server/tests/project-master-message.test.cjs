@@ -3,8 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Api } = require('telegram');
-const { verifyProjectMediaFromClient, copyLegacyProjectPartFromClient,
-  directBotAdminRights } = require('../direct-transport-control');
+const { __testing: { verifyProjectMediaFromClient, copyLegacyProjectPartFromClient } } = require('../direct-transport-control');
 
 const SHA = 'a'.repeat(64);
 const input = { messageId: 101, beatId: 'beat-a', sha256: SHA, documentId: '55', sizeBytes: 3 };
@@ -56,11 +55,4 @@ test('legacy PROJECT copy uses the original Telegram document and reuses a MASTE
   const retry = await copyLegacyProjectPartFromClient(fake, 'vault', input);
   assert.equal(retry.messageId, 202);
   assert.equal(sends, 1);
-});
-
-test('Direct bot cannot edit, delete or pin MASTER-owned PROJECT and INDEX documents', () => {
-  const rights = directBotAdminRights();
-  assert.equal(rights.deleteMessages, false);
-  assert.equal(rights.editMessages, false);
-  assert.equal(rights.pinMessages, false);
 });

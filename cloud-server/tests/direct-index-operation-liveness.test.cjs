@@ -36,13 +36,13 @@ function context(tab, generation) { return { tab_id: tab, document_id: `${tab}-d
 (async () => {
   const direct = require('../direct-transport-control.js');
   let clockA = 100;
-  direct.__test.setMonotonicNow(() => clockA);
+  direct.__testing.setMonotonicNow(() => clockA);
   const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
   const pool = [{ id: 'Bot01' }];
   const chatId = '-1007000000777';
   const first = prepareAssignedLease({ directTransport: direct, status: direct.poolStatus(), transportBotId: 'Bot01', installationId: 'live-device', chatId }).lease;
   const second = prepareAssignedLease({ directTransport: direct, status: direct.poolStatus(), transportBotId: 'Bot01', installationId: 'next-device', chatId }).lease;
-  const begin = (lease, tab, kind = 'get_index') => direct.beginOperation({
+  const begin = (lease, tab, kind = 'get_index') => direct.__testing.beginOperation({
     installationId: lease.installation_id, sessionId: lease.session_id, generation: lease.generation,
     credentialVersion: lease.credential_version, kind, documentContext: context(tab, 1),
   });
@@ -53,19 +53,19 @@ function context(tab, generation) { return { tab_id: tab, document_id: `${tab}-d
 
   // A different installation does not own A's session and cannot extend its
   // lease. This must not alter the persisted liveness record.
-  const livenessBeforeHijack = direct.__test.stateSnapshot(pool).operations[active.operation_id].last_liveness_monotonic_ms;
-  const hijack = await direct.renewOperation({
+  const livenessBeforeHijack = direct.__testing.stateSnapshot(pool).operations[active.operation_id].last_liveness_monotonic_ms;
+  const hijack = await direct.__testing.renewOperation({
     installationId: second.installation_id, sessionId: second.session_id, generation: second.generation, operationId: active.operation_id,
   });
   assert.deepEqual(hijack, { ok: false, expired: true }, 'B cannot renew A\'s operation');
   assert.equal(
-    direct.__test.stateSnapshot(pool).operations[active.operation_id].last_liveness_monotonic_ms,
+    direct.__testing.stateSnapshot(pool).operations[active.operation_id].last_liveness_monotonic_ms,
     livenessBeforeHijack,
     'a rejected renewal never updates A\'s liveness',
   );
 
   // A paused-but-live worker renews the lock and remains exclusive.
-  const renewal = await direct.renewOperation({
+  const renewal = await direct.__testing.renewOperation({
     installationId: first.installation_id, sessionId: first.session_id, generation: first.generation, operationId: active.operation_id,
   });
   assert.equal(renewal.ok, true);
@@ -79,8 +79,8 @@ function context(tab, generation) { return { tab_id: tab, document_id: `${tab}-d
   delete require.cache[directPath];
   const restarted = require('../direct-transport-control.js');
   let clockB = 1_000;
-  restarted.__test.setMonotonicNow(() => clockB);
-  const beginAfterRestart = (lease, tab) => restarted.beginOperation({
+  restarted.__testing.setMonotonicNow(() => clockB);
+  const beginAfterRestart = (lease, tab) => restarted.__testing.beginOperation({
     installationId: lease.installation_id, sessionId: lease.session_id, generation: lease.generation,
     credentialVersion: lease.credential_version, kind: 'get_index', documentContext: context(tab, 1),
   });
@@ -89,7 +89,7 @@ function context(tab, generation) { return { tab_id: tab, document_id: `${tab}-d
   // A genuine owner request routed to B re-confirms A's persisted operation;
   // only A's session/generation can do this. The renewed record remains
   // exclusive through B's liveness bound.
-  const reconfirmed = await restarted.renewOperation({
+  const reconfirmed = await restarted.__testing.renewOperation({
     installationId: first.installation_id, sessionId: first.session_id, generation: first.generation, operationId: active.operation_id,
   });
   assert.equal(reconfirmed.ok, true);
@@ -105,9 +105,9 @@ function context(tab, generation) { return { tab_id: tab, document_id: `${tab}-d
   try {
     const recovered = await beginAfterRestart(second, 'second-tab');
     assert.equal(recovered.ok, true, 'a dead owner is reclaimed after the short liveness bound');
-    const state = restarted.__test.stateSnapshot(pool);
+    const state = restarted.__testing.stateSnapshot(pool);
     assert.equal(state.operations[active.operation_id], undefined);
-    await restarted.endOperation({ installationId: second.installation_id, sessionId: second.session_id, generation: second.generation, operationId: recovered.operation_id });
+    await restarted.__testing.endOperation({ installationId: second.installation_id, sessionId: second.session_id, generation: second.generation, operationId: recovered.operation_id });
   } finally {
     Date.now = originalNow;
   }

@@ -50,7 +50,7 @@ test('downloadMessageBuffer preserves missing, media, and download failure disti
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
 
   messages = [new Api.MessageEmpty({ id: 250 })];
-  await assert.rejects(direct.downloadMessageBuffer('-100123', 250), error => {
+  await assert.rejects(direct.__testing.downloadMessageBuffer('-100123', 250), error => {
     assert.equal(error.code, 'TELEGRAM_MESSAGE_MISSING');
     assert.equal(error.messageId, 250);
     assert.match(error.message, /250/);
@@ -58,12 +58,12 @@ test('downloadMessageBuffer preserves missing, media, and download failure disti
   });
 
   messages = [];
-  await assert.rejects(direct.downloadMessageBuffer('-100123', 250), {
+  await assert.rejects(direct.__testing.downloadMessageBuffer('-100123', 250), {
     code: 'TELEGRAM_MESSAGE_MISSING', messageId: 250,
   });
 
   messages = [{ id: 250 }];
-  await assert.rejects(direct.downloadMessageBuffer('-100123', 250), error => {
+  await assert.rejects(direct.__testing.downloadMessageBuffer('-100123', 250), error => {
     assert.equal(error.code, 'TELEGRAM_MESSAGE_NO_MEDIA');
     assert.equal(error.messageId, 250);
     assert.match(error.message, /250/);
@@ -73,7 +73,7 @@ test('downloadMessageBuffer preserves missing, media, and download failure disti
 
   messages = [{ id: 250, media: { document: {} } }];
   downloadResult = undefined;
-  await assert.rejects(direct.downloadMessageBuffer('-100123', 250), error => {
+  await assert.rejects(direct.__testing.downloadMessageBuffer('-100123', 250), error => {
     assert.notEqual(error.code, 'TELEGRAM_MESSAGE_MISSING');
     assert.notEqual(error.code, 'TELEGRAM_MESSAGE_NO_MEDIA');
     assert.match(error.message, /returned no buffer/);
@@ -81,6 +81,6 @@ test('downloadMessageBuffer preserves missing, media, and download failure disti
   });
 
   downloadResult = Buffer.from('INDEX');
-  assert.deepEqual(await direct.downloadMessageBuffer('-100123', 250), downloadResult);
+  assert.deepEqual(await direct.__testing.downloadMessageBuffer('-100123', 250), downloadResult);
   assert.equal(downloadCalls, 2);
 });
