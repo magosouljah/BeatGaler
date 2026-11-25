@@ -38,7 +38,7 @@ async function main() {
   const returnUrl = requiredEnv(REQUIRED_SMOKE_ENV.returnUrl);
   const webhookSecret = requiredEnv(ENV.webhookSecret);
 
-  const adapter = createPolarSandboxAdapter();
+  const adapter = createPolarSandboxAdapter({ env: process.env });
 
   const paidEntry = await adapter.validateOfferMapping('paid_entry_monthly_v1');
   const highestPaid = await adapter.validateOfferMapping('highest_paid_monthly_v1');

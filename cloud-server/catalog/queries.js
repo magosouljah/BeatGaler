@@ -9,7 +9,6 @@
 //  - Conjuntos de consulta (C12-r4 §3): create/step/cancel/release con lotes ≤ 240 invocables por el arnés; T10 los programa.
 // Sin importar transporte: solo SQL + crypto.
 
-const { requiredEnv } = require('../runtime-env');
 const crypto = require('crypto');
 const { canonicalJson } = require('./authority');
 const { CatalogQueryError, createCursorSigner, keysFromEnv } = require('./cursor');
