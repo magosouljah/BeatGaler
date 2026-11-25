@@ -80,7 +80,7 @@ function installLegacyJsonCompatibility({ fsModule, runtime, authPath, persisten
     current.set(newResolved, raw);
     staged.delete(oldResolved);
     if (isAuthCommit) {
-      identity.commit(parsed, raw);
+      identity.commit(parsed);
       runtime.saveAuthSnapshot(parsed);
     } else runtime.savePersistentSnapshot(parsed);
     return undefined;
