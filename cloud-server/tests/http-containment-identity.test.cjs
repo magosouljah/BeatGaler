@@ -123,8 +123,18 @@ for (const virtual of [true, false]) {
     assert.equal(res.statusCode, 403);
     assert.equal(nexted, false);
 
+    // Con el dueño presente, registrar la instalación se rechaza.
+    res = response(); nexted = false;
+    await f.containment.guardRegisterInstallation({ body: { beatgalerUserId: INSTALLATION, email: 'n@example.test' } }, res, () => { nexted = true; });
+    assert.equal(res.statusCode, 403);
+    assert.equal(nexted, false);
+
     f.commit(store('usr_c', 'c@example.test'))();
     assert.equal(f.containment.authorizeSessionInstallation(request(), response()), null);
+    // Enlace huérfano (su dueño ya no existe): no bloquea un registro nuevo.
+    res = response(); nexted = false;
+    await f.containment.guardRegisterInstallation({ body: { beatgalerUserId: INSTALLATION, email: 'n@example.test' } }, res, () => { nexted = true; });
+    assert.equal(nexted, true);
   });
 
   test(`bindSessionInstallation exige sesión del propietario esperado (${mode})`, t => {
