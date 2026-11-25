@@ -1,5 +1,5 @@
 // Composición del AppShell PostgreSQL. La sesión del catálogo decide qué suena y useAudio reproduce la URL arrendada.
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Beat } from "../../../types";
 import type { WebDrawerSave } from "../../../components/Drawer";
 import { useGalleryAudio } from "./useGalleryAudio";
@@ -15,9 +15,7 @@ import { createGalleryBeatEditor, dispatchWebDrawerSave } from "./catalogBeatEdi
 import { appAlert, appConfirm } from "../../../lib/dialog";
 import { createGalleryDownloadsStore, saveBlobWithBrowser, type GalleryDownloadsPorts } from "./catalogDownloads";
 import { setBeatCloudUpdateBusy } from "../../cloud/beatCloudUpdateBusy";
-import type { CatalogStoreSnapshot } from "./catalogQueryStore";
-import { createHistoryWriter } from "./catalogNavigation";
-import { createCatalogQuerySession, playbackFiltersKey } from "./catalogQuerySession";
+import { createGalleryQuerySession } from "./catalogQuerySession";
 import { useAppShortcuts } from "../../../app/useAppShortcuts";
 
 import { createImportSession, importFailureMessage, importLandsAtTop, projectPendingCards } from "./catalogImportSession";
@@ -38,7 +36,11 @@ const handleWarm = () => {};
 
 export function useCatalogGalleryScope({ services, accountId, context }: CatalogGalleryScopeOptions) {
   const { store, interaction: interactionStore, playback: session, media, mutations } = services;
-  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot) as CatalogStoreSnapshot;
+  const [galleryQuery] = useState(() => createGalleryQuerySession(store.getSnapshot().filters));
+  const querySession = useMemo(() => galleryQuery.bind({ store, interaction: interactionStore, playback: session }),
+    [galleryQuery, store, interactionStore, session]);
+  const queryView = useSyncExternalStore(querySession.subscribe, querySession.getSnapshot, querySession.getSnapshot);
+  const { catalog: snapshot, draft: { search, includedTags, excludedTags }, facets } = queryView;
   const interaction = useCatalogInteraction(interactionStore);
   const playback = useCatalogPlayback(session);
   const tagColors = useTagColors();
@@ -46,17 +48,6 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const [knownCards] = useState(createKnownGalleryCards);
   const [artworkUrls, setArtworkUrls] = useState<Record<string, string>>({});
   const snapshotRef = useRef(snapshot); snapshotRef.current = snapshot;
-  const history = useMemo(() => createHistoryWriter(), []);
-  const querySession = useMemo(() => createCatalogQuerySession({
-    store,
-    interaction: interactionStore,
-    playback: session,
-    history,
-    schedule(callback, ms) {
-      const timer = setTimeout(callback, ms);
-      return () => clearTimeout(timer);
-    },
-  }), [store, interactionStore, session, history]);
   const { refreshAfterMutation, reloadLibrary } = querySession;
   const importPorts = useRef({ mutations, refreshLibrary: refreshAfterMutation });
   importPorts.current = { mutations, refreshLibrary: refreshAfterMutation };
@@ -83,57 +74,13 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const onMountCard = useMemo(() => knownCards.bindArtworkLoader(media, setArtworkUrls), [knownCards, media]);
 
   // ---- query global (búsqueda, tags, orden) → store / selección / sesión ----
-  const [search, setSearchState] = useState(snapshot.filters.q);
-  const setSearch: (value: string) => void = setSearchState;
-  const [includedTags, setIncluded] = useState<Set<string>>(() => new Set(snapshot.filters.includeTags));
-  const [excludedTags, setExcluded] = useState<Set<string>>(() => new Set(snapshot.filters.excludeTags));
   const sortBy = snapshot.sort;
   const revision = snapshot.revision ?? context.revision;
   const query = useMemo<InteractionQuery>(() => ({ filters: snapshot.filters, sort: snapshot.sort, revision }), [snapshot.filters, snapshot.sort, revision]);
-  const filtersKey = playbackFiltersKey(snapshot.filters);
-  const navInit = useRef(false);
-  useEffect(() => {
-    if (navInit.current) return;
-    navInit.current = true;
-    querySession.start({
-      snapshot,
-      readSearch: () => typeof window !== "undefined" ? window.location.search : "",
-      readHistoryState: () => typeof window !== "undefined" ? window.history.state : null,
-      setDraft(filters) {
-        setSearchState(filters.q);
-        setIncluded(new Set(filters.includeTags));
-        setExcluded(new Set(filters.excludeTags));
-      },
-      setNotice,
-    });
-  }, [querySession, snapshot, setNotice]);
-  const queryRender = useRef({ querySession, snapshot, query });
-  // Las claves de cada efecto siguen siendo las del trigger original. Sus datos vienen del render confirmado.
-  useLayoutEffect(() => { queryRender.current = { querySession, snapshot, query }; });
-  const lastQueryKey = useRef<string | null>(null);
-  useEffect(() => {
-    const current = queryRender.current;
-    lastQueryKey.current = current.querySession.syncQueryHistory(current.snapshot, lastQueryKey.current);
-  }, [snapshot.queryKey, snapshot.status]);
-  useEffect(() => {
-    const current = queryRender.current;
-    current.querySession.syncAnchor(current.snapshot);
-  }, [snapshot.resumeCursor, snapshot.status]);
-  useEffect(() => () => history.cancelPending(), [history]);
-  useEffect(() => querySession.deferFilters({ search, includedTags, excludedTags }, context.revision),
-    [search, includedTags, excludedTags, querySession, context.revision]);
-  useEffect(() => { queryRender.current.querySession.syncPlayback(queryRender.current.query); }, [filtersKey, snapshot.sort, revision]);
-  useEffect(() => { querySession.syncRevision(snapshot.revision); }, [snapshot.revision, querySession]);
-  const handleTagClick = useCallback((tag: string, e: { altKey?: boolean }) => {
-    if (e?.altKey) { setExcluded((s) => { const n = new Set(s); if (n.has(tag)) n.delete(tag); else n.add(tag); return n; }); setIncluded((s) => { if (!s.has(tag)) return s; const n = new Set(s); n.delete(tag); return n; }); }
-    else { setIncluded((s) => { const n = new Set(s); if (n.has(tag)) n.delete(tag); else n.add(tag); return n; }); setExcluded((s) => { if (!s.has(tag)) return s; const n = new Set(s); n.delete(tag); return n; }); }
-  }, []);
-  const clearTagFilters = useCallback(() => { setIncluded(new Set()); setExcluded(new Set()); }, []);
-
-  // ---- facetas globales (T06) → Tag Bar ----
-  const [facets, setFacets] = useState<{ revision: string; tags: string[]; freq: Map<string, number> }>({ revision: "", tags: [], freq: new Map() });
-  useEffect(() => querySession.loadFacets(queryRender.current.snapshot, setFacets),
-    [snapshot.revision, snapshot.status, snapshot.provisional, querySession]);
+  const { setSearch, handleTagClick, clearTagFilters } = galleryQuery;
+  useEffect(() => galleryQuery.dispose, [galleryQuery]);
+  useEffect(() => { querySession.commit(queryView, query, context.revision, setNotice); },
+    [querySession, queryView, query, context.revision, setNotice]);
 
   // ---- selección global (servidor) ----
   const [selectMode, setSelectMode] = useState(false);
@@ -142,10 +89,6 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
       store: interactionStore, query, ordinalOf,
       setSelectMode, setNotice, refreshAfterMutation,
     }), [interactionStore, query, ordinalOf, setNotice, refreshAfterMutation]);
-  const residentKey = `${snapshot.firstOrdinal}:${snapshot.endOrdinal}:${snapshot.queryGeneration}`;
-  useEffect(() => {
-    querySession.syncResidentFlags(queryRender.current.snapshot.blocks);
-  }, [residentKey, querySession]);
   const isSelected = useMemo(() => interactionStore.isSelected.bind(null), [interactionStore, interaction.selection]);
 
   // ---- reproducción: la sesión decide, el motor aprobado suena ----
