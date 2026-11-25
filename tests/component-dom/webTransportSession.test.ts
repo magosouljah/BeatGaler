@@ -5,7 +5,7 @@ vi.mock("../../src/lib/webClientId", () => ({
   getWebClientId: () => "beatgaler-web-browser-test",
 }));
 
-vi.mock("../../src/components/AccountGate", () => ({
+vi.mock("../../src/features/auth/webSession", () => ({
   getBeatGalerAuthToken: () => "test-token",
   getResolvedCloudApiBase: () => "https://cloud.test",
   restoreBeatGalerSession: vi.fn(async () => ({ id: 'test-user' })),

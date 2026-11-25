@@ -3,25 +3,22 @@ import React, { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   getBeatGalerInstallationId,
-  loginBeatGalerAccount,
   registerBeatGalerAccount,
   verifyBeatGalerSignup,
   resendBeatGalerSignup,
   resumeBeatGalerSignup,
   resolveBeatGalerCloudApi,
   restoreBeatGalerSession,
+  storeWebCookieSession,
   type BeatGalerAccount,
   type OAuthProvider,
-} from "../../components/AccountGate";
+} from "./webSession";
+import { loginBeatGalerAccount } from "./webSignIn";
 import { UiButton, UiFeedback, UiField, UiSpinner } from "../../components/ui/DesignPrimitives";
 import { sanitizeUserVisibleText } from "../../lib/userVisibleError";
 import { platform } from "../../platform";
-import { getWebAccountGeneration, setActiveWebAccountId } from "./activeWebAccount";
+import { setActiveWebAccountId } from "./activeWebAccount";
 import { formatSignupVerificationCode } from "./signupVerificationCode";
-
-const WEB_SESSION_MARKER_KEY = "beatgaler:web-session-present:v1";
-const TOKEN_KEY = "beatgaler:account-session:v1";
-const CSRF_KEY = "beatgaler:web-csrf:v1";
 
 type Phase = "login" | "register" | "signup-verify" | "mfa" | "reset-request" | "reset-complete" | "offline";
 type OAuthState = "idle" | "opening" | "polling" | "blocked" | "cancelled" | "error";
@@ -64,21 +61,6 @@ async function publicAuthRequest(path: string, body: Record<string, unknown>) {
     }) as PublicAuthError;
   }
   return payload;
-}
-
-async function storeWebCookieSession(result: any): Promise<BeatGalerAccount> {
-  const user = result?.user as BeatGalerAccount;
-  if (!user?.id) throw new Error("Cloud did not confirm an account identity.");
-  setActiveWebAccountId(user.id);
-  const confirmedGeneration = getWebAccountGeneration();
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.setItem(WEB_SESSION_MARKER_KEY, "1");
-  if (result?.csrf_token) sessionStorage.setItem(CSRF_KEY, String(result.csrf_token));
-  const base = await resolveBeatGalerCloudApi();
-  await platform.cloudAuth.syncSession(null, base);
-  if (confirmedGeneration !== getWebAccountGeneration()) throw new Error("Sign-in was cancelled by an account change.");
-  window.dispatchEvent(new CustomEvent("beatgaler:account-updated", { detail: user }));
-  return user;
 }
 
 async function startWebOAuth(provider: OAuthProvider) {

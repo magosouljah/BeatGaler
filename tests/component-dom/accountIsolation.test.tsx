@@ -26,7 +26,8 @@ import AuthExperienceGate from "../../src/features/auth/AuthExperienceGate";
 import { getActiveWebAccountId, setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
 import { loadCachedBeats, saveCachedBeats } from "../../src/features/library/libraryPresentationCache";
 import { useLibraryState } from "../../src/features/library/useLibraryState";
-import { loginBeatGalerAccount, logoutBeatGalerAccount } from "../../src/components/AccountGate";
+import { loginBeatGalerAccount } from "../../src/features/auth/webSignIn";
+import { logoutBeatGalerAccount } from "../../src/features/auth/webSession";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

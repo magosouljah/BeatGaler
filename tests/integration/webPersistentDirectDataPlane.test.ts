@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/components/AccountGate", () => ({
+vi.mock("../../src/features/auth/webSession", () => ({
   getBeatGalerAuthToken: () => "test-token",
   getResolvedCloudApiBase: () => "https://cloud.test",
 }));

@@ -27,7 +27,7 @@ vi.mock("../../src/platform", () => ({
   platform: { kind: "web", capabilities: { reviewBeatCloudCommit: true }, cloudData: { commitImportedBeat: mocks.commitImportedBeat } },
 }));
 
-vi.mock("../../src/components/AccountGate", () => ({
+vi.mock("../../src/features/auth/webSession", () => ({
   getBeatGalerAuthToken: () => "token",
   getResolvedCloudApiBase: () => "http://cloud.test",
 }));

@@ -8,10 +8,10 @@ function source(path: string): string {
 
 describe("Issue #97 runtime trace contract", () => {
   it("keeps the definitive startup/playback timeline observable", () => {
-    const accountGate = source("src/components/AccountGate.tsx");
+    const webSession = source("src/features/auth/webSession.ts");
     const worker = source("src/features/cloud/webTransport.worker.ts");
 
-    expect(accountGate).toContain("DIRECT_SIGN_IN_PRECONNECT_BEGIN");
+    expect(webSession).toContain("DIRECT_SIGN_IN_PRECONNECT_BEGIN");
     expect(worker).toContain("DIRECT_MTPROTO_READY");
     expect(worker).toContain("DIRECT_BACKGROUND_GET_ME_OK");
     expect(worker).toContain("DIRECT_BACKGROUND_GET_CHAT_OK");

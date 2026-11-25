@@ -1,6 +1,6 @@
 import { observePlayStep } from "../playback/playTrace";
 import { reportDirectStartupDiagnostics } from "../perf/directStartupDiagnostics";
-import { getBeatGalerAuthToken, getResolvedCloudApiBase, restoreBeatGalerSession } from "../../components/AccountGate";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase, restoreBeatGalerSession } from "../auth/webSession";
 import { readWebCsrfToken } from "../auth/webSessionBootstrap";
 import { getWebClientId } from "../../lib/webClientId";
 import { updatePlaybackRoutingCacheFromManifest } from "../playback/webPlaybackRoutingCache";

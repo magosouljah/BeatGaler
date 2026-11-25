@@ -14,7 +14,7 @@ const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const OUT = path.join(ROOT, 'tmp', 'e71-mse');
 fs.mkdirSync(OUT, { recursive: true });
 await build({ entryPoints: [path.join(ROOT, 'scripts/catalog-lab/mse-probe-entry.ts')], bundle: true, format: 'iife', outfile: path.join(OUT, 'bundle.js'), platform: 'browser', target: 'es2020', logLevel: 'error',
-  plugins: [{ name: 'stub-account', setup(b) { b.onResolve({ filter: /components\/AccountGate$/ }, () => ({ path: path.join(ROOT, 'scripts/catalog-lab/mse-probe-accountgate-stub.ts') })); } }] });
+  plugins: [{ name: 'stub-account', setup(b) { b.onResolve({ filter: /auth\/webSession$/ }, () => ({ path: path.join(ROOT, 'scripts/catalog-lab/mse-probe-accountgate-stub.ts') })); } }] });
 
 // MP3 sintético CBR 128 kbps estéreo, 40 s (tono + ruido para que el codificador no colapse frames).
 function synth(seconds = 40, rate = 44100) {

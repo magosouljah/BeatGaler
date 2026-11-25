@@ -56,7 +56,7 @@ describe("Web Cloud API origin policy", () => {
       });
     }) as typeof window.fetch;
 
-    const accountGate = await import("../../src/components/AccountGate");
+    const accountGate = await import("../../src/features/auth/webSession");
     const expectedBase = `${window.location.origin}/beatgaler-api`;
 
     expect(accountGate.getResolvedCloudApiBase()).toBe(expectedBase);

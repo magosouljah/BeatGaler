@@ -1,4 +1,4 @@
-import { getBeatGalerAuthToken, resolveBeatGalerCloudApi } from "./AccountGate";
+import { getBeatGalerAuthToken, resolveBeatGalerCloudApi } from "../features/auth/webSession";
 import { syncWebCsrfSessionFromCookie } from "../features/auth/webCsrfFetchCoordinator";
 
 async function portalRequest(path: string, method: "GET" | "POST"): Promise<any> {

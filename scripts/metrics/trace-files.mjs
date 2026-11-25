@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { repoArg, tracked, read, lines, head } from './lib.mjs';
 const SC = {
   'A  POST /auth/login (Web form -> session)': [
-    ['src/components/AccountGate.tsx', '/auth/login'],
+    ['src/features/auth/webSession.ts', '/auth/login'],
     ['src/features/auth/webCsrfFetchCoordinator.ts', 'window.fetch ='],
     ['cloud-server/server.js', 'require("./server-core")'],
     ['cloud-server/server-core-auth-bridge-loader.js', 'installServerCoreAuthBridgeLoader'],

@@ -1,13 +1,22 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import AccountGate, {
+import { getActiveWebAccountId, setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
+import { platform } from "../../src/platform";
+import AccountGate from "../../src/components/AccountGate";
+import { loginBeatGalerAccount } from "../../src/features/auth/webSignIn";
+import {
   getBeatGalerAuthToken,
   getBeatGalerCurrentPlan,
+  clearDesktopSignup,
   getBeatGalerInstallationId,
-  loginBeatGalerAccount,
+  rememberedDesktopSignup,
+  storeWebCookieSession,
   restoreBeatGalerSession,
-} from "../../src/components/AccountGate";
+} from "../../src/features/auth/webSession";
+
+const playTraceCalls = vi.hoisted(() => [] as string[]);
+vi.mock("../../src/features/playback/playTrace", () => ({ playTrace: (stage: string) => { playTraceCalls.push(stage); } }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -126,6 +135,45 @@ describe("AccountGate Web adapter", () => {
     await expect(getBeatGalerCurrentPlan()).resolves.toMatchObject({ effective_plan_id: "free" });
   });
 
+  it.each(["login", "session"] as const)("confirms Web identity and storage before syncing /auth/%s", async (route) => {
+    localStorage.setItem(TOKEN_KEY, "legacy-web-token");
+    sessionStorage.setItem(CSRF_KEY, "csrf-before");
+    const user = { id: `confirmed-${route}`, username: "web#0001", storage_ready: true };
+    const steps: unknown[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      steps.push([String(input), init?.method, init?.credentials, headers.get("X-BeatGaler-Client"),
+        headers.get("X-BeatGaler-CSRF"), headers.get("Authorization")]);
+      return new Response(JSON.stringify({ user, csrf_token: "csrf-confirmed" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const sync = vi.spyOn(platform.cloudAuth, "syncSession").mockImplementationOnce(async (...args) => {
+      steps.push(["sync", ...args, getActiveWebAccountId(), localStorage.getItem(TOKEN_KEY),
+        localStorage.getItem(WEB_SESSION_MARKER_KEY), sessionStorage.getItem(CSRF_KEY), getBeatGalerAuthToken()]);
+      await Promise.resolve();
+      steps.push("sync complete");
+    });
+    const event = (value: Event) => steps.push([value.type, (value as CustomEvent).detail]);
+    window.addEventListener("beatgaler:account-updated", event);
+    try {
+      const result = route === "login"
+        ? await loginBeatGalerAccount("web@example.test", "password")
+        : await restoreBeatGalerSession();
+      expect(result).toEqual(user);
+      expect(steps).toEqual([
+        [`${SAME_ORIGIN_API}/auth/${route}`, "POST", "include", "web", "csrf-before",
+          route === "session" ? "Bearer legacy-web-token" : null],
+        ["sync", null, SAME_ORIGIN_API, user.id, null, "1", "csrf-confirmed", "browser-cookie-session"],
+        "sync complete",
+        ...(route === "login" ? [["beatgaler:account-updated", user]] : []),
+      ]);
+    } finally {
+      window.removeEventListener("beatgaler:account-updated", event);
+      sync.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("clears a saved session only for an explicit 401/expiry", async () => {
     localStorage.setItem(TOKEN_KEY, "legacy-web-token");
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -151,5 +199,72 @@ describe("AccountGate Web adapter", () => {
 
     await expect(restoreBeatGalerSession()).rejects.toMatchObject({ code: "CLOUD_UNREACHABLE", kind: "network" });
     expect(localStorage.getItem(TOKEN_KEY)).toBe("legacy-web-token");
+  });
+});
+
+describe("Desktop pending signup cleanup (SIGNUP_NOT_FOUND/EXPIRED branch of AccountGate)", () => {
+  const PENDING_SIGNUP_KEY = "beatgaler:pending-signup:v1";
+  const pending = JSON.stringify({ signup_id: "su-1", continuation_secret: "sec-1" });
+
+  it("clearDesktopSignup removes the remembered signup on non-web platforms only", () => {
+    const original = platform.kind;
+    try {
+      (platform as { kind: string }).kind = "desktop";
+      localStorage.setItem(PENDING_SIGNUP_KEY, pending);
+      expect(rememberedDesktopSignup()).toEqual({ signup_id: "su-1", continuation_secret: "sec-1" });
+      clearDesktopSignup();
+      expect(localStorage.getItem(PENDING_SIGNUP_KEY)).toBeNull();
+      expect(rememberedDesktopSignup()).toBeNull();
+
+      (platform as { kind: string }).kind = "web";
+      localStorage.setItem(PENDING_SIGNUP_KEY, pending);
+      clearDesktopSignup();
+      expect(localStorage.getItem(PENDING_SIGNUP_KEY)).toBe(pending);
+    } finally {
+      (platform as { kind: string }).kind = original;
+      localStorage.removeItem(PENDING_SIGNUP_KEY);
+    }
+  });
+});
+
+describe("OAuth popup confirmation (storeWebCookieSession)", () => {
+  const user = { id: "oauth-user", username: "oauth#0001", storage_ready: true };
+
+  async function run(csrf: unknown, changeGeneration: boolean) {
+    localStorage.setItem(TOKEN_KEY, "legacy-web-token");
+    localStorage.removeItem(API_KEY);
+    sessionStorage.setItem(CSRF_KEY, "csrf-before");
+    playTraceCalls.length = 0;
+    const steps: unknown[] = [];
+    const sync = vi.spyOn(platform.cloudAuth, "syncSession").mockImplementationOnce(async (...args) => {
+      steps.push(["sync", ...args, getActiveWebAccountId(), localStorage.getItem(TOKEN_KEY),
+        localStorage.getItem(WEB_SESSION_MARKER_KEY), sessionStorage.getItem(CSRF_KEY), localStorage.getItem(API_KEY)]);
+      if (changeGeneration) setActiveWebAccountId("someone-else");
+    });
+    const event = (value: Event) => steps.push([value.type, (value as CustomEvent).detail]);
+    window.addEventListener("beatgaler:account-updated", event);
+    try {
+      const outcome = await storeWebCookieSession({ ok: true, user, csrf_token: csrf } as never).then(v => ({ v }), e => ({ e }));
+      return { steps, outcome };
+    } finally {
+      window.removeEventListener("beatgaler:account-updated", event);
+      sync.mockRestore();
+    }
+  }
+
+  it("stores identity, String(csrf), resolves the base before sync, emits the event and no trace", async () => {
+    const { steps, outcome } = await run(12345, false);
+    expect(outcome).toEqual({ v: user });
+    expect(steps).toEqual([
+      ["sync", null, SAME_ORIGIN_API, user.id, null, "1", "12345", SAME_ORIGIN_API],
+      ["beatgaler:account-updated", user],
+    ]);
+    expect(playTraceCalls).toEqual([]);
+  });
+
+  it("fails with the cancellation error and no event when the account generation changes", async () => {
+    const { steps, outcome } = await run("csrf-x", true);
+    expect((outcome as { e: Error }).e.message).toBe("Sign-in was cancelled by an account change.");
+    expect(steps).toEqual([["sync", null, SAME_ORIGIN_API, user.id, null, "1", "csrf-x", SAME_ORIGIN_API]]);
   });
 });

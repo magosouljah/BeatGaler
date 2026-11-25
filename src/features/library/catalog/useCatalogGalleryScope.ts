@@ -5,7 +5,7 @@ import type { WebDrawerSave } from "../../../components/Drawer";
 import { useGalleryAudio } from "./useGalleryAudio";
 import { useTagColors } from "../../../lib/tagColors";
 import { platform } from "../../../platform";
-import { logoutBeatGalerAccount } from "../../../components/AccountGate";
+import { logoutBeatGalerAccount } from "../../auth/webSession";
 import { createKnownGalleryCards } from "./catalogGalleryCards";
 import type { CatalogServices } from "./catalogLibraryProvider";
 import { createGallerySelection, useCatalogInteraction, type InteractionQuery } from "./catalogInteractionStore";

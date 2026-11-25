@@ -8,7 +8,7 @@ const fail = message => { throw new Error(`Task 5.1 hardening regression: ${mess
 
 const vite = read("vite.config.ts");
 const main = read("src/main.tsx");
-const accountGate = read("src/components/AccountGate.tsx");
+const webSession = read("src/features/auth/webSession.ts");
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
 const capabilities = JSON.parse(read("src-tauri/capabilities/default.json"));
 const serverCore = read("cloud-server/server-core.js");
@@ -22,12 +22,12 @@ if (!vite.includes('"/beatgaler-api": {') || !vite.includes('target: process.env
 if (!vite.includes("safeId3Loader") || !vite.includes("unsafeId3Loader")) fail("remote ID3 loader stripping is missing");
 if (!main.includes('browserId3Reader') || !main.includes('(window as any).jsmediatags = browserId3Reader')) fail("local browser ID3 parser is not installed before app render");
 
-if (!accountGate.includes('const LOCAL_API = import.meta.env.DEV ? "http://127.0.0.1:4000" : null;')) fail("Desktop-only development Cloud fallback is no longer build-gated");
-if (!accountGate.includes('if (platform.kind === "web") return sameOriginProxyApi() || "";')) fail("synchronous Web Cloud base is not fixed to the same-origin proxy");
-if (!accountGate.includes("if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);")) fail("Web no longer discards remembered cross-origin Cloud choices");
-const resolverStart = accountGate.indexOf("export async function resolveBeatGalerCloudApi(): Promise<string> {");
-const getterStart = accountGate.indexOf("export function getResolvedCloudApiBase(): string {", resolverStart);
-const resolver = resolverStart >= 0 && getterStart > resolverStart ? accountGate.slice(resolverStart, getterStart) : "";
+if (!webSession.includes('const LOCAL_API = import.meta.env.DEV ? "http://127.0.0.1:4000" : null;')) fail("Desktop-only development Cloud fallback is no longer build-gated");
+if (!webSession.includes('if (platform.kind === "web") return sameOriginProxyApi() || "";')) fail("synchronous Web Cloud base is not fixed to the same-origin proxy");
+if (!webSession.includes("if (remembered && remembered !== sameOriginProxy) localStorage.removeItem(API_KEY);")) fail("Web no longer discards remembered cross-origin Cloud choices");
+const resolverStart = webSession.indexOf("export async function resolveBeatGalerCloudApi(): Promise<string> {");
+const getterStart = webSession.indexOf("export function getResolvedCloudApiBase(): string {", resolverStart);
+const resolver = resolverStart >= 0 && getterStart > resolverStart ? webSession.slice(resolverStart, getterStart) : "";
 if (!resolver) fail("Cloud API resolver source could not be located");
 const webStart = resolver.indexOf('if (platform.kind === "web") {');
 const desktopStart = resolver.indexOf("if (trustedRememberedApi(remembered)", webStart);

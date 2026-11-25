@@ -14,7 +14,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AuthExperienceGate from "../../src/features/auth/AuthExperienceGate";
 import { setActiveWebAccountId } from "../../src/features/auth/activeWebAccount";
-import { loginBeatGalerAccount, logoutBeatGalerAccount, restoreBeatGalerSession } from "../../src/components/AccountGate";
+import { loginBeatGalerAccount } from "../../src/features/auth/webSignIn";
+import { logoutBeatGalerAccount, restoreBeatGalerSession } from "../../src/features/auth/webSession";
 import { createWebDirectPort, discardPrewarmedDirectRuntime, prewarmDirectRuntime } from "../../src/features/library/catalog/catalogDirectPort";
 import { webAdapter } from "../../src/platform/webAdapter";
 

@@ -4,7 +4,7 @@
 // La POLÍTICA sigue en cada cliente y a la vista: qué cabeceras de escritura envía (CSRF, era/época, idempotencia, If-Match),
 // cuándo declara Content-Type, cómo lee la respuesta y qué devuelve. El CSRF del `fetch` global (webCsrfFetchCoordinator) se suma
 // a esto en producción porque el fetch por defecto es el global.
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../../components/AccountGate";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../auth/webSession";
 import { WEB_CSRF_SESSION_KEY } from "../../auth/webSessionBootstrap";
 
 export class CatalogApiError extends Error {

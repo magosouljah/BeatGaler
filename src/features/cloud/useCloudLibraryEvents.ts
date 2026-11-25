@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { AppSettings, Beat } from "../../types";
-import { getBeatGalerAuthToken, resolveBeatGalerCloudApi } from "../../components/AccountGate";
+import { getBeatGalerAuthToken, resolveBeatGalerCloudApi } from "../auth/webSession";
 import { flushOfflineTrashIntents, getCloudClientId, isTauriAvailable, pollTelegramCloudStatus } from "../../lib/tauri";
 import { getWebClientId } from "../../lib/webClientId";
 import { cloudBeatFingerprint, libraryViewFingerprint } from "../library/libraryFingerprints";

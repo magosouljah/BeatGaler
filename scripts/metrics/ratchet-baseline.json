@@ -25,8 +25,8 @@
     "E2": 35,
     "E3": 5,
     "F+M": 70,
-    "CY": 1,
-    "CYF": 9
+    "CY": 0,
+    "CYF": 0
   },
   "sourceTextTests": [
     "cloud-server/tests/account-lifecycle-request-guard.test.cjs",
