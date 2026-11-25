@@ -59,7 +59,6 @@ test('catalog/ no importa transporte ni red', () => {
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
     if (f === 'prefix-packs.js') allowed.push('./transport-gateway'); // E75: solo el marcador del paquete; verificador inyectado; sin fs, SDK ni red
     if (f === 'direct.js') allowed.push('./transport-gateway'); // E70: Direct B; solo caption/identidad del gateway (sin SDK ni red); sesión y vinculación inyectadas
-    if (f === 'session-guard.js') allowed.push('./legacy-fence'); // T16: capa 2 reutiliza el error 410 de la capa 1
     if (f === 'native-cli.js') allowed.push('fs', '../legacy-import-executor'); // T17: manifiestos en disco y el id determinista de vault del importador (R12)
     if (f === 'backup.js') allowed.push('fs', 'path'); // T19-N: almacén de backups en disco local (fake/laboratorio); journal, gateway y proveedor inyectados
     if (f === 'routes.js') allowed.push('express');

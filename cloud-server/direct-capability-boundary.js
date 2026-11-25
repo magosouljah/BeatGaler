@@ -283,13 +283,6 @@ function createPostgresStore(pool, { maxActivePerTenant = DEFAULT_TENANT_ACTIVE_
   };
 }
 
-function responseError(res, error) {
-  return res.status(Number(error?.status || 500)).json({
-    error: String(error?.message || "Direct capability boundary failed."),
-    code: error?.code || "DIRECT_CAPABILITY_ERROR",
-  });
-}
-
 async function revokeTenantCapabilities(tenantId, reason = "incident") {
   if (!installedRuntime?.store) throw codedError("DIRECT_CAPABILITY_UNAVAILABLE", "capability store is unavailable.", 503);
   return installedRuntime.store.revokeTenant({ tenantId: String(tenantId), reason: String(reason || "incident") });
@@ -303,20 +296,6 @@ function installDirectCapabilityBoundary(express, options = {}) {
   const maxActivePerTenant = Math.max(1, Math.min(16, Number(env.BEATGALER_DIRECT_TENANT_ACTIVE_CAP || DEFAULT_TENANT_ACTIVE_CAP)));
   const store = options.store || (options.pool ? createPostgresStore(options.pool, { maxActivePerTenant }) : createMemoryStore({ now, maxActivePerTenant }));
   installedRuntime = { store };
-
-  async function revokeSession(req, res, next) {
-    const installationId = String(req.beatgalerAuthorizedInstallationId || "").trim();
-    const sessionId = String(req.body?.sessionId || "").trim();
-    if (!installationId || !sessionId) {
-      return responseError(res, codedError("DIRECT_CAPABILITY_AUTHZ_REQUIRED", "canonical session binding is required before lease revocation."));
-    }
-    try {
-      await store.revokeSession({ installationId, sessionId, reason: "lease_end" });
-      next();
-    } catch {
-      return responseError(res, codedError("DIRECT_CAPABILITY_REVOKE_FAILED", "lease capability revocation could not be committed.", 503));
-    }
-  }
 
   function revokeAuthOnSuccess(reason) {
     return function revokeAuthOnSuccessResponse(req, res, next) {
@@ -346,7 +325,7 @@ function installDirectCapabilityBoundary(express, options = {}) {
     };
   }
 
-  express.application.__beatgalerDirectCapabilityHandlers = { revokeSession, revokeAuthOnSuccess };
+  express.application.__beatgalerDirectCapabilityHandlers = { revokeAuthOnSuccess };
   return installedRuntime;
 }
 
@@ -354,7 +333,6 @@ function wrapDirectCapabilityPost(routePath, handlers) {
   const { app, next } = this;
   const boundary = app.__beatgalerDirectCapabilityHandlers;
   if (!boundary) return next(routePath, ...handlers);
-  if (routePath === "/transport/session/stop") return next(routePath, boundary.revokeSession, ...handlers);
   if (routePath === "/auth/logout") return next(routePath, boundary.revokeAuthOnSuccess("logout"), ...handlers);
   if (routePath === "/auth/password/change") return next(routePath, boundary.revokeAuthOnSuccess("password_change"), ...handlers);
   if (routePath === "/auth/account/delete") return next(routePath, boundary.revokeAuthOnSuccess("account_delete"), ...handlers);
