@@ -2,6 +2,8 @@
 
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const { mountAccountRouteGuards, SELF_REGISTERED_ROUTES } = require('../account-route-guards');
 const { installAuthPublicRegistrationHardening } = require('../auth-public-registration-hardening');
@@ -66,7 +68,6 @@ async function checkInactiveRegistration() {
 test('las guardas globales y por ruta respetan el orden efectivo de la tabla en Cloud', async () => {
   const browser = { 'x-beatgaler-client': 'web' };
   let lifecycle;
-  let coordinator;
   const signupCalls = [];
   const emailChanges = [];
   let restore = () => {};
@@ -130,12 +131,17 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
       assert.equal(reauth.status, 200, reauth.data);
       assert.match(JSON.parse(reauth.data).reauth_token, /^reauth_/);
 
-      // Un estado D8 se resuelve antes de que la contención OAuth busque un flujo heredado.
-      coordinator._test.pending.set('reauth-fixture', { provider: 'google', flowId: 'order-fixture', expiresAt: Date.now() + 60_000 });
-      const oauth = await send('GET', '/auth/oauth/google/callback?state=reauth-fixture&error=access_denied');
+      // Un estado D8 real (iniciado por la ruta) se resuelve antes de que la contención OAuth busque un flujo heredado.
+      const started = await send('POST', '/auth/oauth/start', { headers: authorized, body: { purpose: 'reauth', provider: 'google' } });
+      assert.equal(started.status, 200, started.data);
+      const state = new URL(JSON.parse(started.data).authorization_url).searchParams.get('state');
+      assert.ok(state);
+      const callbackPath = `/auth/oauth/google/callback?state=${state}&error=access_denied`;
+      const oauth = await send('GET', callbackPath);
       assert.equal(oauth.status, 400);
       assert.match(oauth.data, /BeatGaler reauthentication failed/);
-      assert.equal(coordinator._test.pending.has('reauth-fixture'), false);
+      const replay = await send('GET', callbackPath);
+      assert.doesNotMatch(replay.data, /BeatGaler reauthentication failed/, 'el flujo D8 queda consumido');
 
       lifecycle._test.revokedSessionHashes.add(createHash('sha256').update(token).digest('hex'));
       const headers = { ...browser, cookie };
@@ -165,13 +171,11 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
             ...options,
             service: { async begin(input) { signupCalls.push(input); return { created: false }; } },
           });
-        const d8 = require('../d8-ro-resolutions');
-        const { applyD8RoResolutions } = d8;
-        d8.applyD8RoResolutions = (...args) => {
-          const config = applyD8RoResolutions(...args);
-          coordinator = config.coordinator;
-          return config;
-        };
+        Object.assign(process.env, {
+          BEATGALER_OAUTH_PUBLIC_BASE: 'https://oauth.example.test',
+          GOOGLE_CLIENT_ID: 'fixture-client',
+          GOOGLE_CLIENT_SECRET: 'fixture-secret',
+        });
         const durable = require('../auth-durable-abuse-controls');
         const { installDurableAuthAbuseControls } = durable;
         const pool = { async query() { return { rows: [{ request_count: 1 }] }; } };
@@ -181,8 +185,13 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
           accountLifecycle.installAccountLifecycle = installAccountLifecycle;
           durable.installDurableAuthAbuseControls = installDurableAuthAbuseControls;
           pendingSignup.installPendingSignupBoundary = installPendingSignupBoundary;
-          d8.applyD8RoResolutions = applyD8RoResolutions;
         };
+      },
+      restoreState(stateDir) {
+        const file = path.join(stateDir, 'accounts-data.json');
+        const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+        data.users[0].providers = { google: { id: 'google-fixture' } };
+        fs.writeFileSync(file, JSON.stringify(data));
       },
     });
   } finally {
