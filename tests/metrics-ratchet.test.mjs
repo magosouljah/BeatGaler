@@ -162,3 +162,59 @@ test('etiqueta por sujeto: solo-Desktop => desktop; módulo V1 o indeterminado =
     'unknown.test.ts': 'v1',
   });
 });
+
+test('una ruta de código usada solo para lanzar un proceso o pasada como dato no es lectura de texto', t => {
+  const repo = mkdtempSync(path.join(os.tmpdir(), 'metrics-notread-'));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const put = (file, text) => {
+    mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+    writeFileSync(path.join(repo, file), text);
+  };
+  const fn = ['read', 'FileSync'].join('');
+  // toda fixture lee un archivo temporal (no código) para que la ruta de código sea lo único que decide la clase
+  const head = "const path = require('node:path');\nconst { spawnSync } = require('node:child_process');\n"
+    + `require('node:fs').${fn}(path.join(process.cwd(), 'out.txt'), 'utf8');\n`;
+  const bin = "const bin = path.join(__dirname, '..', '..', 'scripts', 'tool.cjs');\n";
+  put('scripts/tool.cjs', 'console.log(1);\n');
+  put('cloud-server/tests/spawnOnly.test.cjs', `${head}${bin}spawnSync(process.execPath, [bin, '--help']);\n`);
+  put('cloud-server/tests/multiLine.test.cjs', `${head}${bin}// usa bin
+const r = spawnSync('bash', ['-c', 'x',
+  bin, 'y'], {
+  cwd: '.' });
+`);
+  put('cloud-server/tests/spawnAndRead.test.cjs', `${head}const fs = require('node:fs');\n${bin}spawnSync(process.execPath, [bin]);\nconst s = fs.${fn}(bin, 'utf8');\n`);
+  put('cloud-server/tests/readsProd.test.cjs', `${head}const fs = require('node:fs');\nspawnSync(process.execPath, ['x']);\nconst s = fs.${fn}(path.join(__dirname, '..', 'server.js'), 'utf8');\n`);
+  put('cloud-server/tests/dataToImported.test.cjs', `${head}const { assertDiff } = require('../scripts/tool.cjs');\nassertDiff(['cloud-server/billing.js']);\n`);
+  put('cloud-server/tests/dataToLocalReader.test.cjs', `${head}const fs = require('node:fs');\nconst rd = f => fs.${fn}(f, 'utf8');\nrd('cloud-server/billing.js');\nspawnSync(process.execPath, ['x']);\n`);
+  // casos negativos de la revisión L2: deben seguir siendo M
+  put('cloud-server/scripts/loader.cjs', `module.exports = { loadText: p => require('node:fs').${fn}(p, 'utf8') };\n`);
+  put('cloud-server/scripts/tool.cjs', 'module.exports = { assertDiff: () => {} };\n');
+  put('cloud-server/tests/nodePathMultiline.test.cjs', `${head}const { join } = require('node:path');\nconst fs = require('node:fs');\nspawnSync(process.execPath, ['x']);\nconst s = fs.${fn}(\n  join('cloud-server', 'server.js'), 'utf8');\n`);
+  put('tests/integration/esmResolveMultiline.test.ts', `import { resolve } from 'node:path';\nimport fs from 'node:fs';\nimport { spawnSync } from 'node:child_process';\nspawnSync('x');\nconst s = fs.${fn}(\n  resolve('src/app.ts'), 'utf8');\n`);
+  put('cloud-server/tests/localReaderAfterSpawn.test.cjs', `${head}const fs = require('node:fs');\n${bin}const rd = p => fs.${fn}(p, 'utf8');\nspawnSync(process.execPath, [bin]);\nrd(bin);\n`);
+  put('cloud-server/tests/importedReader.test.cjs', `${head}const { loadText } = require('../scripts/loader.cjs');\nspawnSync(process.execPath, ['x']);\nloadText('cloud-server/billing.js');\n`);
+  const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8' });
+  git('init', '-q');
+  git('add', '-A');
+  const run = spawnSync(process.execPath, [
+    fileURLToPath(new URL('../scripts/metrics/classify-tests.mjs', import.meta.url)), repo, 'files',
+  ], { encoding: 'utf8' });
+  assert.equal(run.status, 0, run.stderr);
+  const kind = Object.fromEntries(run.stdout.trim().split(/\r?\n/).map(l => l.split('\t')).map(c => [path.basename(c[1]), c[0]]));
+  assert.deepEqual(kind, {
+    'spawnOnly.test.cjs': 'C',
+    'multiLine.test.cjs': 'C',
+    'dataToImported.test.cjs': 'C',
+    'spawnAndRead.test.cjs': 'M',
+    'readsProd.test.cjs': 'M',
+    'dataToLocalReader.test.cjs': 'M',
+    'nodePathMultiline.test.cjs': 'M',
+    'esmResolveMultiline.test.ts': 'M',
+    'localReaderAfterSpawn.test.cjs': 'M',
+    'importedReader.test.cjs': 'M',
+    'nodePathMultiline.test.cjs': 'M',
+    'esmResolveMultiline.test.ts': 'M',
+    'localReaderAfterSpawn.test.cjs': 'M',
+    'importedReader.test.cjs': 'M',
+  });
+});
