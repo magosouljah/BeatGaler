@@ -25,13 +25,13 @@ async function main(args = process.argv.slice(2)) {
   require('dotenv').config({ path: path.resolve(__dirname, '../.env'), quiet: true });
   const config = controlPlaneAuthorityConfig(process.env);
   if (config.authority !== 'postgres') throw Object.assign(new Error('PostgreSQL authority is required.'), { code: 'BILLING_RECONCILIATION_AUTHORITY_REQUIRED' });
-  const pool = createPostgresPool(Pool);
+  const pool = createPostgresPool(Pool, process.env);
   try {
     const marker = (await pool.query("SELECT snapshot_sha256,state FROM control_plane_cutovers WHERE id='legacy-json-v1'")).rows[0];
     if (marker?.state !== 'READY' || marker.snapshot_sha256 !== config.expectedSnapshotSha256) {
       throw Object.assign(new Error('PostgreSQL cutover is not ready.'), { code: 'BILLING_RECONCILIATION_AUTHORITY_REQUIRED' });
     }
-    const billing = createWebBillingRuntime();
+    const billing = createWebBillingRuntime({ env: process.env });
     if (!(await billing.initialize()).ready) throw Object.assign(new Error('Billing is unavailable.'), { code: 'BILLING_RECONCILIATION_UNAVAILABLE' });
     const result = await reconcileManualUser({ pool, adapter: billing.provider(), userId: args[1].trim() });
     console.log(JSON.stringify({ reconciled: result.reconciled, repaired: Boolean(result.repaired),
