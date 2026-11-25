@@ -42,7 +42,7 @@ const SC = {
     ['cloud-server/catalog-assembly.js', 'catalogCommands'],
     ['cloud-server/server-core.js', 'createCatalogRouter'],
     ['cloud-server/session-security.js', 'function wrapSessionSecurityUse'],
-    ['cloud-server/http-containment.js', 'express.application.post = function'],
+    ['cloud-server/http-containment.js', 'function wrapHttpContainmentPost'],
     ['cloud-server/catalog/routes.js', '/beats/:id`'],
     ['cloud-server/catalog/authority.js', 'configureCatalogAuthority'],
     ['cloud-server/catalog/commands.js', 'libraryTx.mutate'],

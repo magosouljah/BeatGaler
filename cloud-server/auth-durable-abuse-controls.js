@@ -162,15 +162,19 @@ function installDurableAuthAbuseControls(express, options = {}) {
   if (!application || application.__beatgalerDurableAuthAbuseInstalled || !options.pool) return null;
   application.__beatgalerDurableAuthAbuseInstalled = true;
   const controls = createDurableAuthAbuseControls(options);
-  const previousPost = application.post;
-  application.post = function durableAuthAbusePost(routePath, ...handlers) {
-    const pathName = String(routePath || '');
-    if (!PROTECTED_ROUTES.has(pathName)) return previousPost.call(this, routePath, ...handlers);
-    return previousPost.call(this, routePath, (req, res, next) => {
-      void controls.middlewareFor(pathName, req, res, next);
-    }, ...handlers);
-  };
+  application.__beatgalerDurableAuthAbuseControls = controls;
   return controls;
+}
+
+function wrapDurableAuthAbusePost(routePath, handlers) {
+  const { app, next } = this;
+  const controls = app.__beatgalerDurableAuthAbuseControls;
+  if (!controls) return next(routePath, ...handlers);
+  const pathName = String(routePath || '');
+  if (!PROTECTED_ROUTES.has(pathName)) return next(routePath, ...handlers);
+  return next(routePath, function enforceDurableAuthAbuse(req, res, next) {
+    void controls.middlewareFor(pathName, req, res, next);
+  }, ...handlers);
 }
 
 module.exports = {
@@ -184,4 +188,5 @@ module.exports = {
   createDurableRateLimitStore,
   createDurableAuthAbuseControls,
   installDurableAuthAbuseControls,
+  wrapDurableAuthAbusePost,
 };

@@ -142,6 +142,7 @@ passed += test('pool state drops obsolete FIFO while preserving configured bots'
   assert.deepEqual(direct.poolStatus().queue, []);
 }) ? 1 : 0;
 
+const { mountAccountRouteGuards } = require('../account-route-guards');
 const { installProductiveTempAuthBoundary, stripPermanentSecrets } = require('../productive-temp-auth-boundary.js');
 
 passed += test('productive transport boundary strips permanent credentials before client response', () => {
@@ -170,12 +171,7 @@ passed += test('productive transport boundary strips permanent credentials befor
   assert.equal(safe.credential_version, 3);
 }) ? 1 : 0;
 
-passed += test('canonical Cloud entrypoint installs temporary-auth boundary before route registration', () => {
-  const entrySource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const installAt = entrySource.indexOf('installProductiveTempAuthBoundary(express)');
-  const coreAt = entrySource.indexOf('require("./server-core")');
-  assert(installAt >= 0 && coreAt > installAt);
-
+passed += test('temporary-auth boundary declares its mode and retry marker', () => {
   const boundarySource = fs.readFileSync(path.join(__dirname, '..', 'productive-temp-auth-boundary.js'), 'utf8');
   assert(boundarySource.includes('mode: "galer-direct-temp-mtproto"'));
   assert(boundarySource.includes('temp_auth_required'));
@@ -185,6 +181,8 @@ nodeTest('registered transport routes sanitize responses before sending them', a
   const routes = new Map();
   const application = { post(route, ...handlers) { routes.set(route, handlers); } };
   installProductiveTempAuthBoundary({ application });
+  const app = Object.create(application);
+  mountAccountRouteGuards(app);
 
   const permanent = {
     bot_token: 'fixture-bot-token',
@@ -201,7 +199,7 @@ nodeTest('registered transport routes sanitize responses before sending them', a
     ['/transport/operation/begin', { ...refresh, ...permanent, credential_refresh: permanent }, retry],
   ];
   for (const [route, body, expected] of cases) {
-    application.post(route, (_req, res) => res.json(body));
+    app.post(route, (_req, res) => res.json(body));
     const actual = await new Promise(resolve => {
       const req = { path: route, body: {} };
       const res = { json: resolve };

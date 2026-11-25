@@ -429,34 +429,39 @@ function createHttpContainment(options = {}) {
 }
 
 function installHttpContainment(express, options = {}) {
-  if (express.application.__beatgalerContainmentInstalled) return;
-  express.application.__beatgalerContainmentInstalled = true;
-  const containment = createHttpContainment(options);
-  const originalPost = express.application.post;
-  const originalGet = express.application.get;
-
-  express.application.post = function patchedPost(routePath, ...handlers) {
-    if (routePath === "/library/upsert") return originalPost.call(this, routePath, containment.legacyLibraryUpsert);
-    if (routePath === "/auth/register") return originalPost.call(this, routePath, containment.registrationGate, containment.guardRegisterInstallation, containment.bindSessionOnSuccess, ...handlers);
-    if (routePath === "/auth/login") return originalPost.call(this, routePath, containment.guardLoginInstallation, containment.bindSessionOnSuccess, ...handlers);
-    if (routePath === "/auth/session") return originalPost.call(this, routePath, containment.guardSessionRebind, containment.bindSessionOnSuccess, ...handlers);
-    if (routePath === "/auth/oauth/start") return originalPost.call(this, routePath, containment.guardOAuthStart, ...handlers);
-    if (routePath === "/auth/oauth/poll") return originalPost.call(this, routePath, containment.guardOAuthPoll, containment.bindSessionOnSuccess, ...handlers);
-    if (routePath === "/auth/logout") return originalPost.call(this, routePath, containment.logoutSession, ...handlers);
-    if (routePath === "/transport/project/upload") return originalPost.call(this, routePath,
-      containment.installationOwner, containment.preUpload, ...handlers);
-    if (UPLOAD_ROUTES.has(routePath) && handlers.length >= 2) return originalPost.call(this, routePath, containment.preUpload, handlers[0], containment.postUpload, ...handlers.slice(1));
-    if (BODY_OWNER_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.bodyOwner, ...handlers);
-    if (routePath === "/beats/delete-topic") return originalPost.call(this, routePath, containment.beatTopicOwner, ...handlers);
-    if (INSTALLATION_POST_ROUTES.has(routePath)) return originalPost.call(this, routePath, containment.installationOwner, ...handlers);
-    return originalPost.call(this, routePath, ...handlers);
-  };
-
-  express.application.get = function patchedGet(routePath, ...handlers) {
-    if (routePath === "/auth/oauth/:provider/callback") return originalGet.call(this, routePath, containment.guardOAuthCallback, ...handlers);
-    if (INSTALLATION_GET_ROUTES.has(routePath)) return originalGet.call(this, routePath, containment.installationOwner, ...handlers);
-    return originalGet.call(this, routePath, ...handlers);
-  };
+  const application = express.application;
+  if (application.__beatgalerContainmentInstalled) return;
+  application.__beatgalerContainmentInstalled = true;
+  application.__beatgalerContainment = createHttpContainment(options);
 }
 
-module.exports = { FILE_UPLOAD_LIMIT_BYTES, createHttpContainment, installHttpContainment };
+function wrapHttpContainmentPost(routePath, handlers) {
+  const { app, next } = this;
+  const containment = app.__beatgalerContainment;
+  if (!containment) return next(routePath, ...handlers);
+  if (routePath === "/library/upsert") return next(routePath, containment.legacyLibraryUpsert);
+  if (routePath === "/auth/register") return next(routePath, containment.registrationGate, containment.guardRegisterInstallation, containment.bindSessionOnSuccess, ...handlers);
+  if (routePath === "/auth/login") return next(routePath, containment.guardLoginInstallation, containment.bindSessionOnSuccess, ...handlers);
+  if (routePath === "/auth/session") return next(routePath, containment.guardSessionRebind, containment.bindSessionOnSuccess, ...handlers);
+  if (routePath === "/auth/oauth/start") return next(routePath, containment.guardOAuthStart, ...handlers);
+  if (routePath === "/auth/oauth/poll") return next(routePath, containment.guardOAuthPoll, containment.bindSessionOnSuccess, ...handlers);
+  if (routePath === "/auth/logout") return next(routePath, containment.logoutSession, ...handlers);
+  if (routePath === "/transport/project/upload") return next(routePath,
+    containment.installationOwner, containment.preUpload, ...handlers);
+  if (UPLOAD_ROUTES.has(routePath) && handlers.length >= 2) return next(routePath, containment.preUpload, handlers[0], containment.postUpload, ...handlers.slice(1));
+  if (BODY_OWNER_ROUTES.has(routePath)) return next(routePath, containment.bodyOwner, ...handlers);
+  if (routePath === "/beats/delete-topic") return next(routePath, containment.beatTopicOwner, ...handlers);
+  if (INSTALLATION_POST_ROUTES.has(routePath)) return next(routePath, containment.installationOwner, ...handlers);
+  return next(routePath, ...handlers);
+}
+
+function wrapHttpContainmentGet(routePath, handlers) {
+  const { app, next } = this;
+  const containment = app.__beatgalerContainment;
+  if (!containment) return next(routePath, ...handlers);
+  if (routePath === "/auth/oauth/:provider/callback") return next(routePath, containment.guardOAuthCallback, ...handlers);
+  if (INSTALLATION_GET_ROUTES.has(routePath)) return next(routePath, containment.installationOwner, ...handlers);
+  return next(routePath, ...handlers);
+}
+
+module.exports = { FILE_UPLOAD_LIMIT_BYTES, createHttpContainment, installHttpContainment, wrapHttpContainmentPost, wrapHttpContainmentGet };

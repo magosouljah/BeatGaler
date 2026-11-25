@@ -209,6 +209,7 @@ async function start() {
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
   installSensitiveAuthContainment(express, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
   applyD8RoResolutions(express, accountLifecycle, { env: process.env });
+  // From here the route guards are configured for the instance table.
   installSessionSecurity(express, {
     dataDir: STATE_DIR,
     pool: cutover.authority === 'postgres' ? pool : null,

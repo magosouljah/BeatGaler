@@ -303,7 +303,6 @@ function installDirectCapabilityBoundary(express, options = {}) {
   const maxActivePerTenant = Math.max(1, Math.min(16, Number(env.BEATGALER_DIRECT_TENANT_ACTIVE_CAP || DEFAULT_TENANT_ACTIVE_CAP)));
   const store = options.store || (options.pool ? createPostgresStore(options.pool, { maxActivePerTenant }) : createMemoryStore({ now, maxActivePerTenant }));
   installedRuntime = { store };
-  const originalPost = express.application.post;
 
   async function revokeSession(req, res, next) {
     const installationId = String(req.beatgalerAuthorizedInstallationId || "").trim();
@@ -320,7 +319,7 @@ function installDirectCapabilityBoundary(express, options = {}) {
   }
 
   function revokeAuthOnSuccess(reason) {
-    return (req, res, next) => {
+    return function revokeAuthOnSuccessResponse(req, res, next) {
       const token = bearerToken(req);
       const authSessionHash = token ? sha256(token) : "";
       const originalJson = res.json.bind(res);
@@ -347,14 +346,19 @@ function installDirectCapabilityBoundary(express, options = {}) {
     };
   }
 
-  express.application.post = function patchedDirectCapabilityPost(routePath, ...handlers) {
-    if (routePath === "/transport/session/stop") return originalPost.call(this, routePath, revokeSession, ...handlers);
-    if (routePath === "/auth/logout") return originalPost.call(this, routePath, revokeAuthOnSuccess("logout"), ...handlers);
-    if (routePath === "/auth/password/change") return originalPost.call(this, routePath, revokeAuthOnSuccess("password_change"), ...handlers);
-    if (routePath === "/auth/account/delete") return originalPost.call(this, routePath, revokeAuthOnSuccess("account_delete"), ...handlers);
-    return originalPost.call(this, routePath, ...handlers);
-  };
+  express.application.__beatgalerDirectCapabilityHandlers = { revokeSession, revokeAuthOnSuccess };
   return installedRuntime;
+}
+
+function wrapDirectCapabilityPost(routePath, handlers) {
+  const { app, next } = this;
+  const boundary = app.__beatgalerDirectCapabilityHandlers;
+  if (!boundary) return next(routePath, ...handlers);
+  if (routePath === "/transport/session/stop") return next(routePath, boundary.revokeSession, ...handlers);
+  if (routePath === "/auth/logout") return next(routePath, boundary.revokeAuthOnSuccess("logout"), ...handlers);
+  if (routePath === "/auth/password/change") return next(routePath, boundary.revokeAuthOnSuccess("password_change"), ...handlers);
+  if (routePath === "/auth/account/delete") return next(routePath, boundary.revokeAuthOnSuccess("account_delete"), ...handlers);
+  return next(routePath, ...handlers);
 }
 
 module.exports = {
@@ -364,4 +368,5 @@ module.exports = {
   createPostgresStore,
   revokeTenantCapabilities,
   installDirectCapabilityBoundary,
+  wrapDirectCapabilityPost,
 };
