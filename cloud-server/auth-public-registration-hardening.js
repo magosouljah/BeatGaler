@@ -1,5 +1,6 @@
 'use strict';
 
+const { normalizeEmail, validEmailAfterNormalization: validEmail, ACCOUNTS_FILE_NAME } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { AsyncLocalStorage } = require('node:async_hooks');
@@ -10,15 +11,6 @@ const FS_PATCH = Symbol.for('beatgaler.authPublicRegistration.fsPatch');
 const TRACE_PATCH = Symbol.for('beatgaler.authPublicRegistration.tracePatch');
 const ACCOUNT_HANDLER_PATCH = Symbol.for('beatgaler.authPublicRegistration.accountHandlerPatch');
 const OAUTH_FLOW_TTL_MS = 10 * 60 * 1000;
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function validEmail(value) {
-  const email = normalizeEmail(value);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
-}
 
 function normalizeUsername(value) {
   return String(value || '').trim().replace(/^@+/, '').toLowerCase();
@@ -422,7 +414,7 @@ function installAuthPublicRegistrationHardening(express, {
       let next = data;
       try {
         const name = String(file || '').replace(/\\/g, '/');
-        if (typeof data === 'string' && name.endsWith('/accounts-data.json.tmp')) {
+        if (typeof data === 'string' && name.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`)) {
           const parsed = JSON.parse(data);
           if (Array.isArray(parsed?.users)) {
             parsed.users = preserveUsersByStableId(parsed.users, accountsSnapshot().users, deletedUserIds());

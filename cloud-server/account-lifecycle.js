@@ -1,5 +1,6 @@
 'use strict';
 
+const { sha256String: sha256, normalizeEmail, bearerTokenOptionalRequest: bearerToken, ACCOUNTS_FILE_NAME, accountsDataPath } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -8,7 +9,6 @@ const { statusForUser, markVerifiedEmail, clearVerifiedEmail } = require('./emai
 
 const STATE_VERSION = 1;
 const STATE_FILE_NAME = 'account-lifecycle-state.json';
-const ACCOUNTS_FILE_NAME = 'accounts-data.json';
 const CLOUD_DATA_FILE_NAME = 'cloud-data.json';
 const DEFAULT_EMAIL_VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_PASSWORD_RESET_TTL_MS = 15 * 60 * 1000;
@@ -40,22 +40,8 @@ const NOTIFICATION_ROUTES = new Map([
   ['/auth/oauth/disconnect', 'provider_disconnected'],
 ]);
 
-function sha256(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
-}
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
 function normalizeIdentifier(value) {
   return String(value || '').trim().toLowerCase();
-}
-
-function bearerToken(req) {
-  const raw = String(req?.headers?.authorization || '');
-  const match = raw.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
 }
 
 function randomToken(prefix, randomBytes = size => crypto.randomBytes(size)) {
@@ -158,7 +144,7 @@ function createAccountLifecycleRuntime({
   getCapabilityStore = () => null,
 } = {}) {
   const stateFile = path.join(dataDir, STATE_FILE_NAME);
-  const accountsFile = path.join(dataDir, ACCOUNTS_FILE_NAME);
+  const accountsFile = accountsDataPath(dataDir);
   const cloudDataFile = path.join(dataDir, CLOUD_DATA_FILE_NAME);
   const persisted = normalizeState(readJson(stateFile, {}));
   const deletedUserIds = new Set(Object.keys(persisted.tombstones || {}));
@@ -474,10 +460,10 @@ function createAccountLifecycleRuntime({
       let nextData = data;
       try {
         const fileText = String(file || '').replace(/\\/g, '/');
-        if (typeof data === 'string' && (fileText.endsWith('/accounts-data.json.tmp') || fileText.endsWith('/cloud-data.json.tmp'))) {
+        if (typeof data === 'string' && (fileText.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`) || fileText.endsWith('/cloud-data.json.tmp'))) {
           let parsed = JSON.parse(data);
           for (const runtime of state.runtimes) {
-            parsed = fileText.endsWith('/accounts-data.json.tmp') ? runtime.api.state.filterAccountsValue(parsed) : runtime.api.state.filterCloudValue(parsed);
+            parsed = fileText.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`) ? runtime.api.state.filterAccountsValue(parsed) : runtime.api.state.filterCloudValue(parsed);
           }
           nextData = JSON.stringify(parsed, null, 2);
         }

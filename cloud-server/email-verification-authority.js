@@ -1,10 +1,7 @@
 'use strict';
 
+const { normalizeEmail } = require('./auth-helpers');
 const crypto = require('node:crypto');
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
 
 function emailHash(value) {
   return crypto.createHash('sha256').update(normalizeEmail(value)).digest('hex');

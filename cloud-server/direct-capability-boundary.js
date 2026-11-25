@@ -1,20 +1,11 @@
 "use strict";
 
-const crypto = require("crypto");
+const { sha256String: sha256, bearerTokenRequiredRequest: bearerToken } = require("./auth-helpers");
+
 const DEFAULT_CAPABILITY_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_TENANT_ACTIVE_CAP = 4;
 const LIVE_STATUSES = new Set(["ACTIVE", "AUTHORIZED"]);
 let installedRuntime = null;
-
-function sha256(value) {
-  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
-}
-
-function bearerToken(req) {
-  const raw = String(req.headers?.authorization || "");
-  const match = raw.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : "";
-}
 
 function codedError(code, message, status = 403) {
   const error = new Error(`${code}: ${message}`);

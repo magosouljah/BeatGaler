@@ -1,5 +1,6 @@
 'use strict';
 
+const { sha256WithEncoding: sha256 } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const https = require('node:https');
 
@@ -31,10 +32,6 @@ const EMAIL_TEMPLATES = Object.freeze({
     requiresToken: false,
   }),
 });
-
-function sha256(value, encoding = 'hex') {
-  return crypto.createHash('sha256').update(value).digest(encoding);
-}
 
 function hmac(key, value, encoding) {
   return crypto.createHmac('sha256', key).update(value).digest(encoding);

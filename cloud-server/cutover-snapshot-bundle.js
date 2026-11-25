@@ -1,11 +1,12 @@
 'use strict';
 
+const { ACCOUNTS_FILE_NAME } = require('./auth-helpers');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { parseLegacyJson, snapshotManifest, planLegacyImport, stableStringify, sha256 } = require('./legacy-import-plan');
 
-const SOURCE_FILES = Object.freeze(['accounts-data.json', 'cloud-data.json']);
+const SOURCE_FILES = Object.freeze([ACCOUNTS_FILE_NAME, 'cloud-data.json']);
 
 function safeReason(error) {
   const text = String(error?.message || error || 'validation failed');
@@ -14,7 +15,7 @@ function safeReason(error) {
 
 function exactSources({ authRaw, persistentRaw }) {
   return {
-    'accounts-data.json': String(authRaw),
+    [ACCOUNTS_FILE_NAME]: String(authRaw),
     'cloud-data.json': String(persistentRaw),
   };
 }
@@ -22,7 +23,7 @@ function exactSources({ authRaw, persistentRaw }) {
 function buildBundleDescriptor({ authRaw, persistentRaw }) {
   const sources = exactSources({ authRaw, persistentRaw });
   const snapshot = snapshotManifest(sources);
-  const auth = parseLegacyJson(sources['accounts-data.json'], 'accounts-data.json');
+  const auth = parseLegacyJson(sources[ACCOUNTS_FILE_NAME], ACCOUNTS_FILE_NAME);
   const persistent = parseLegacyJson(sources['cloud-data.json'], 'cloud-data.json');
   const plan = planLegacyImport(auth, persistent);
   const descriptor = {
@@ -98,7 +99,7 @@ function verifyCutoverSnapshotBundle(targetDir) {
   const expectedFiles = JSON.stringify(snapshot.files);
   if (JSON.stringify(manifest.files) !== expectedFiles) throw new Error('Cutover snapshot file metadata does not match the sealed sources.');
 
-  const auth = parseLegacyJson(sources['accounts-data.json'], 'accounts-data.json');
+  const auth = parseLegacyJson(sources[ACCOUNTS_FILE_NAME], ACCOUNTS_FILE_NAME);
   const persistent = parseLegacyJson(sources['cloud-data.json'], 'cloud-data.json');
   const plan = planLegacyImport(auth, persistent);
   if (plan.plan_sha256 !== manifest.plan_sha256) throw new Error('Cutover snapshot import plan does not match the sealed manifest.');
@@ -109,7 +110,7 @@ function verifyCutoverSnapshotBundle(targetDir) {
     bundleSha256: computedBundleSha,
     snapshot,
     plan,
-    authRaw: sources['accounts-data.json'],
+    authRaw: sources[ACCOUNTS_FILE_NAME],
     persistentRaw: sources['cloud-data.json'],
   });
 }

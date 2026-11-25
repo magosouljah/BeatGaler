@@ -1,5 +1,6 @@
 'use strict';
 
+const { normalizeEmail, validEmailAsProvided: validEmail } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const { hashPassword } = require('./password-kdf');
 const { encryptSecretForStorage, decryptSecretFromStorage } = require('./secret-envelope');
@@ -8,16 +9,8 @@ const { normalizeSecretKeyring } = require('./secret-keyring');
 const ACTIVE_PENDING_STATES = new Set(['NEW','DELIVERY_PENDING','CODE_SENT','VERIFIED','ACTIVATING','PROVISIONING','RETRYABLE']);
 const FINAL_PENDING_STATES = new Set(['ACTIVE','EXPIRED','CANCELLED']);
 
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
 function normalizeBase(value) {
   return String(value || '').trim().toLowerCase();
-}
-
-function validEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
 }
 
 function validBase(base) {

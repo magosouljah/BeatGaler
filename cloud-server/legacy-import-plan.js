@@ -1,6 +1,6 @@
 'use strict';
 
-const crypto = require('crypto');
+const { sha256Bytes: sha256 } = require('./auth-helpers');
 
 function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
@@ -8,10 +8,6 @@ function stableStringify(value) {
     return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
-}
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(value).digest('hex');
 }
 
 function assertPlainObject(value, label) {

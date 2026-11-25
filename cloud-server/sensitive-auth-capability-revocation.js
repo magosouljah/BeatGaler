@@ -1,22 +1,12 @@
 'use strict';
 
-const crypto = require('node:crypto');
+const { sha256String: sha256, bearerTokenOptionalRequest: bearerToken } = require('./auth-helpers');
 
 const SENSITIVE_ROUTES = new Map([
   ['/auth/logout', 'logout'],
   ['/auth/password/change', 'password_change'],
   ['/auth/account/delete', 'account_delete'],
 ]);
-
-function bearerToken(req) {
-  const raw = String(req?.headers?.authorization || '');
-  const match = raw.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
-}
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
-}
 
 function installSensitiveAuthCapabilityRevocation(express, { store } = {}) {
   const application = express?.application;

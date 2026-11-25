@@ -1,17 +1,9 @@
 'use strict';
 
-const crypto = require('node:crypto');
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
+const { normalizeEmail, sha256String: sha256 } = require('./auth-helpers');
 
 function normalizeUsername(value) {
   return String(value || '').trim().replace(/^@+/, '').toLowerCase();
-}
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
 }
 
 function shortFingerprint(kind, value) {

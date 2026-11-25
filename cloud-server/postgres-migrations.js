@@ -1,16 +1,12 @@
 'use strict';
 
-const crypto = require('crypto');
+const { sha256Bytes: sha256 } = require('./auth-helpers');
 const fs = require('fs');
 const path = require('path');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 const MIGRATION_NAME_RE = /^\d{4}_[a-z0-9_]+\.sql$/;
 const MIGRATION_LOCK_KEY = 'beatgaler:postgres-migrations:v1';
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
 
 function migrationChecksums(sql) {
   const lfSql = sql.replace(/\r\n/g, '\n');

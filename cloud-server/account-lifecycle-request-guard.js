@@ -1,10 +1,6 @@
 'use strict';
 
-function bearerToken(req) {
-  const raw = String(req?.headers?.authorization || '');
-  const match = raw.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
-}
+const { bearerTokenOptionalRequest: bearerToken } = require('./auth-helpers');
 
 function installLifecycleRequestGuard(express, runtime) {
   const application = express?.application;
