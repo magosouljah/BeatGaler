@@ -149,6 +149,10 @@ function main() {
     if (previous) errors.push(...compareBaselines(baseline, previous));
   }
   const measured = readMetrics(run('metrics.mjs'), baseline.metrics, errors);
+  // Métrica 7: ciclos de importación del grafo de ejecución de src (src-reach cycles): nº de ciclos y archivos dentro de ciclos.
+  const cyc = /cycles \(SCC size>1\) in src runtime graph: (\d+)\s+files inside cycles: (\d+)/.exec(run('src-reach.mjs', 'cycles'));
+  if (cyc) { measured.set('CY', Number(cyc[1])); measured.set('CYF', Number(cyc[2])); }
+  else errors.push('No se pudo leer la métrica 7 (ciclos) de src-reach.mjs cycles');
   const textTests = readTextTests(run('classify-tests.mjs', 'summary'), run('classify-tests.mjs', 'files'));
   measured.set(textMetric, textTests.count);
   for (const file of textTests.files) {
