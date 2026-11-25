@@ -85,6 +85,17 @@ Module._load = function(request, parent, isMain) {
   assert.equal(persisted.operations[operation.operation_id], undefined, 'stale operation must not reappear on disk');
   assert.equal(reapCount(), 1, 'later maintenance must not reap the same operation again');
 
+  // An operation whose lease no longer exists is removed by maintenance.
+  const { lease: orphanLease } = prepareAssignedLease({
+    directTransport: direct, status: direct.poolStatus(), transportBotId: 'Bot01',
+    installationId: 'orphan-operation-installation', chatId: '-1007000000998',
+  });
+  const orphanId = seedOperation({ directTransport: direct, pool: runtimePool, lease: orphanLease, kind: 'data' });
+  direct.__testing.mutateState(runtimePool, state => { delete state.leases[orphanLease.session_id]; });
+  assert.ok(JSON.parse(fs.readFileSync(stateFile, 'utf8')).operations[orphanId], 'orphan operation is persisted before maintenance');
+  await direct.__testing.cleanupExpiredSessions();
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).operations[orphanId], undefined, 'operation without a lease must be removed');
+
   console.log('PASS Direct stale operation cleanup: persisted once, diagnosed once, valid lease preserved');
 })().catch(error => {
   console.error(error?.stack || error);
