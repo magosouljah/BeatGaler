@@ -27,7 +27,7 @@ test('request failures emit bounded auth/API spike conditions without route secr
 
 test('PostgreSQL readiness transition emits once until recovery', () => {
   const lines = [];
-  const runtime = createOperationsRuntime({ logger: { log: line => lines.push(JSON.parse(line)) } });
+  const runtime = createOperationsRuntime({ env: process.env, logger: { log: line => lines.push(JSON.parse(line)) } });
   runtime.recordReadiness({ dependencies: { postgres: 'missing' } });
   runtime.recordReadiness({ dependencies: { postgres: 'unavailable' } });
   assert.equal(lines.filter(line => line.condition === 'postgres_unavailable').length, 1);
@@ -38,7 +38,7 @@ test('PostgreSQL readiness transition emits once until recovery', () => {
 
 test('PostgreSQL pool saturation emits once until capacity recovers', () => {
   const lines = [];
-  const runtime = createOperationsRuntime({ logger: { log: line => lines.push(JSON.parse(line)) } });
+  const runtime = createOperationsRuntime({ env: process.env, logger: { log: line => lines.push(JSON.parse(line)) } });
   const pool = { options: { max: 4 }, totalCount: 4, idleCount: 0, waitingCount: 2 };
   runtime.recordPool(pool);
   runtime.recordPool(pool);
@@ -50,7 +50,7 @@ test('PostgreSQL pool saturation emits once until capacity recovers', () => {
 
 test('request route failures and latency emit specific sanitized conditions', () => {
   const lines = [];
-  const runtime = createOperationsRuntime({ logger: { log: line => lines.push(JSON.parse(line)) } });
+  const runtime = createOperationsRuntime({ env: process.env, logger: { log: line => lines.push(JSON.parse(line)) } });
   for (const [path, condition] of [
     ['/transport/project/upload', 'project_failure'], ['/beats/upload', 'master_upload_failure'],
     ['/transport/index/publish', 'index_publish_failure'], ['/webhooks/polar', 'billing_webhook_failure'],
@@ -67,7 +67,7 @@ test('request route failures and latency emit specific sanitized conditions', ()
 });
 
 test('failed log sink cannot interrupt request completion accounting', () => {
-  const runtime = createOperationsRuntime({ logger: { log() { throw new Error('sink unavailable'); } } });
+  const runtime = createOperationsRuntime({ env: process.env, logger: { log() { throw new Error('sink unavailable'); } } });
   assert.doesNotThrow(() => runtime.recordHttp({ statusCode: 503, path: '/transport/project/upload' }));
   assert.equal(runtime.snapshot()['condition.project_failure|{}'], 1);
 });

@@ -281,6 +281,7 @@ const passwordChecks = (async () => {
   const loginApp = { post(path, ...handlers) { loginRoutes.set(path, handlers); }, get() {} };
   let queries = 0;
   installAuthPublicRegistrationHardening({ application: loginApp }, {
+    env: process.env,
     getAccountLifecycle: () => ({ api: { state: { accountsSnapshot: () => ({ users: [{ id: 'usr_stable', email: 'old@example.com' }] }) } } }),
     getAuthPool: () => ({ async query() { queries += 1; return { rows: [] }; } }),
   });

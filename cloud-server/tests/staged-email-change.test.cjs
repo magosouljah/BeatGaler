@@ -219,6 +219,7 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
 
   let randomCounter = 1;
   const service = createStagedEmailChange({
+    env: process.env,
     pool: db.pool,
     runtime,
     emailNotifier: async input => {
