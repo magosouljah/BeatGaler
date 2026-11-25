@@ -13,7 +13,6 @@ const { withTelegramFloodWait } = require('./telegram-retry');
 
 const { configureCatalogTelegramTransport } = require('./catalog-telegram-transport');
 const { noDirectStartupTrace } = require('./direct-startup-trace');
-const { CATALOG_SESSION_PROTOCOL, stripDirectCredentials } = require('./catalog/authority');
 
 const ROOT = __dirname;
 function backendPath(value, fallbackName) {
@@ -896,15 +895,7 @@ async function runtimeForLease(
   return runtime;
 }
 
-function sessionPublic(runtime, leaseState = null, { protocol = null } = {}) {
-  const session = sessionPublicLegacy(runtime, leaseState);
-  // T05-N (NATIVO r2.1 §8.5): un cliente catalog-v1 nunca recibe bot_token, api_id ni api_hash. El plano de datos
-  // nativo va por el gateway del servidor (§8.6, T11/T12); aquí solo se garantiza que la respuesta no lleva credenciales.
-  if (String(protocol || '') === CATALOG_SESSION_PROTOCOL) return { ...stripDirectCredentials(session), mode: 'catalog-v1-gateway', protocol: CATALOG_SESSION_PROTOCOL };
-  return session;
-}
-
-function sessionPublicLegacy(runtime, leaseState = null) {
+function sessionPublic(runtime, leaseState = null) {
   return {
     ok: true,
     mode: 'telegram-direct-botapi-local',

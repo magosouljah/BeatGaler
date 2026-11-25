@@ -118,23 +118,12 @@ test('provision con pool falso: orden de escrituras §3.4.5 e idempotencia por f
   assert.equal(pool.writes().length, before, 'la segunda provisión no escribe');
 });
 
-test('stripDirectCredentials: la sesión catalog-v1 serializada no contiene bot_token, api_id ni api_hash (§8.5, PASS 7b)', () => {
+test('stripDirectCredentials: la sesión serializada tras strip no contiene bot_token, api_id ni api_hash (§8.5, PASS 7b)', () => {
   const session = { ok: true, mode: 'telegram-direct-botapi-local', bot_token: '123:abc', telegram_api_id: 1, telegram_api_hash: 'h', chat_id: '-1001', generation: 2 };
   const stripped = authority.stripDirectCredentials(session);
   assert.equal(authority.containsDirectCredentials(JSON.stringify(session)), true);
   assert.equal(authority.containsDirectCredentials(JSON.stringify(stripped)), false);
   assert.deepEqual(Object.keys(stripped), ['ok', 'mode', 'chat_id', 'generation']);
-  // Valores ficticios solo para construir la respuesta en memoria: no hay red ni Telegram en esta suite.
-  process.env.TELEGRAM_API_ID = process.env.TELEGRAM_API_ID || '1';
-  process.env.TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH || 'test-only-hash';
-  const dtc = require('../../direct-transport-control.js');
-  const runtime = { id: 's1', bot: { id: 'Bot20', telegram_user_id: '7', telegram_username: 'bot' }, chatId: '-1001', token: 'secret-token', generation: 1, credentialVersion: 1, startedAt: 0, resolverChatId: null };
-  const legacy = JSON.stringify(dtc.__testing.sessionPublic(runtime, 'ACTIVE'));
-  const native = JSON.stringify(dtc.__testing.sessionPublic(runtime, 'ACTIVE', { protocol: authority.CATALOG_SESSION_PROTOCOL }));
-  assert.equal(authority.containsDirectCredentials(legacy), true, 'el modo legacy sigue igual');
-  assert.equal(authority.containsDirectCredentials(native), false);
-  assert.equal(native.includes('secret-token'), false);
-  assert.ok(JSON.parse(native).protocol === 'catalog-v1');
 });
 
 test('guardas §12: json + pool con activación/bibliotecas no arranca; re-cutover con activación se niega (PASS 13)', async () => {
