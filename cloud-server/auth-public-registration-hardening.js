@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const { normalizeEmail, validEmailAfterNormalization: validEmail, ACCOUNTS_FILE_NAME } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -17,7 +17,7 @@ function normalizeUsername(value) {
   return String(value || '').trim().replace(/^@+/, '').toLowerCase();
 }
 
-function publicRegistrationOpen(env = getRuntimeEnv()) {
+function publicRegistrationOpen(env = requiredEnv()) {
   return String(env.BEATGALER_PUBLIC_REGISTRATION || '') === '1';
 }
 
@@ -152,7 +152,7 @@ function authErrorLooksInternal(value) {
 }
 
 function installAuthPublicRegistrationHardening(express, {
-  env = getRuntimeEnv(),
+  env = requiredEnv(),
   getAccountLifecycle = () => express?.application?.__beatgalerAccountLifecycleRuntime || null,
   getProviderIdentityAuthority = () => null,
   getAuthPool = () => null,

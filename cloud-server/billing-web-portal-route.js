@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const { callbackOrigin } = require('./billing-web-checkout-runtime');
 
 class PortalError extends Error {
@@ -25,7 +25,7 @@ function portalUrl(value, environment) {
   return url.toString();
 }
 
-function createPortalService({ pool, adapter, env = getRuntimeEnv(), now = Date.now }) {
+function createPortalService({ pool, adapter, env = requiredEnv(), now = Date.now }) {
   if (!pool || typeof pool.query !== 'function' || adapter?.provider !== 'polar' ||
       !['sandbox', 'production'].includes(adapter.environment) ||
       typeof adapter.getCustomerByExternalId !== 'function' ||

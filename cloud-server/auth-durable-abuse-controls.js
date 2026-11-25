@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const crypto = require('node:crypto');
 
 const SEND_ROUTES = new Set([
@@ -47,7 +47,7 @@ function positiveInt(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function routePolicy(routePath, env = getRuntimeEnv()) {
+function routePolicy(routePath, env = requiredEnv()) {
   const route = String(routePath || '');
   const minute = positiveInt(env.BEATGALER_AUTH_DURABLE_WINDOW_MS, 60_000);
   const sendWindow = positiveInt(env.BEATGALER_AUTH_SEND_WINDOW_MS, 10 * 60_000);
@@ -125,7 +125,7 @@ function createDurableRateLimitStore(pool, { now = () => Date.now() } = {}) {
   return { consume, cleanupExpired };
 }
 
-function createDurableAuthAbuseControls({ pool, runtime = null, env = getRuntimeEnv(), now = () => Date.now() } = {}) {
+function createDurableAuthAbuseControls({ pool, runtime = null, env = requiredEnv(), now = () => Date.now() } = {}) {
   const store = createDurableRateLimitStore(pool, { now });
   let cleanupCounter = 0;
 

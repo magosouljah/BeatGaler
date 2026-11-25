@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const { sha256WithEncoding: sha256 } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const https = require('node:https');
@@ -132,7 +132,7 @@ function renderAccountEmail(kind, token, expiresAt) {
   };
 }
 
-function resolveSesConfig(env = getRuntimeEnv()) {
+function resolveSesConfig(env = requiredEnv()) {
   const region = String(env.BEATGALER_SES_REGION || env.AWS_REGION || env.AWS_DEFAULT_REGION || '').trim();
   const fromEmail = String(env.BEATGALER_SES_FROM_EMAIL || '').trim();
   return { region, fromEmail };
@@ -262,7 +262,7 @@ function sendHttps(requestImpl, input) {
 }
 
 function createSesEmailNotifier({
-  env = getRuntimeEnv(),
+  env = requiredEnv(),
   credentialsProvider = null,
   requestImpl = https.request,
   now = () => new Date(),

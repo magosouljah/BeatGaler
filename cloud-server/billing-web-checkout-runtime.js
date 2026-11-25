@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const { createPersistentCheckoutService } = require('./billing-checkout-persistent');
 // Canonical Web host from deploy/web/beatgaler.com.conf.
 const DEFAULT_WEB_ORIGIN = 'https://beatgaler.com';
@@ -22,7 +22,7 @@ function callbackOrigin(env) {
   return url.origin;
 }
 
-function configure({ pool, adapter, env = getRuntimeEnv() }) {
+function configure({ pool, adapter, env = requiredEnv() }) {
   service = null;
   callbackUrls = null;
   failureCode = 'BILLING_CHECKOUT_UNAVAILABLE';
