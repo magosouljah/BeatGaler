@@ -1349,7 +1349,7 @@ app.get("/transport/status", (req, res) => {
 });
 
 
-app.listen(PORT, "0.0.0.0", () => {
+exports.listenCloudServer = () => app.listen(PORT, "0.0.0.0", () => {
   console.log(`BeatGaler Cloud API escuchando en http://0.0.0.0:${PORT}`);
   console.log(`Transport: Telegram Direct MTProto (MASTER + managed bot pool)`);
 });

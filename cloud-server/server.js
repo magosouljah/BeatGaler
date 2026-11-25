@@ -235,7 +235,8 @@ async function start() {
   const restoreCoreAuthBridgeLoader = pendingSignupEnabled ? installServerCoreAuthBridgeLoader() : () => {};
   try {
     // Keep this literal require: regression tooling verifies contained core boot order.
-    require("./server-core");
+    const { listenCloudServer } = require("./server-core");
+    listenCloudServer();
   } finally {
     restoreCoreAuthBridgeLoader();
   }
