@@ -38,8 +38,6 @@ npm run test:unit:ts
 npm run build:web
 node scripts/test-public-operations-pages.mjs
 node scripts/test-public-operations-pages.mjs --dist
-node scripts/regression-web-startup-bridge.mjs
-node scripts/regression-web-bound-temp-rpc.mjs
 ```
 
 El workflow Web ejecuta además las 37 pruebas enfocadas de sesión, rutas, filtros, menús, arranque y navegación. El guard de arranque se actualizó para inspeccionar el listener nativo en su ubicación actual, `useBeatDownloads.ts`; el guard previo buscaba código ya extraído de `App.tsx` y fallaba en la base.

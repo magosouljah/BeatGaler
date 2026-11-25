@@ -557,3 +557,54 @@ describe("Galer Cloud single-file Web Worker", () => {
     expect(replacement.getFullChat).not.toHaveBeenCalled();
   });
 });
+
+describe("Galer Cloud Worker bound temporary session (M10: comportamiento)", () => {
+  const baseSession = {
+    chat_id: "-1001234567890",
+    transport_user_id: "4242",
+    expected_bot_id: "4242",
+    temp_api_id: 12345,
+    temp_auth_key: new Uint8Array(256).fill(7),
+    temp_session_id: { low: 123456, high: 789, unsigned: false },
+    temp_session_state: {
+      seqNo: 2,
+      lastMessageId: { low: 333, high: 444, unsigned: false },
+      timeOffset: 5,
+      serverSalt: { low: 55, high: 66, unsigned: false },
+      queuedAcks: [{ low: 77, high: 88, unsigned: false }],
+      bindMsgId: { low: 111, high: 222, unsigned: false },
+      lastSessionCreatedUid: { low: 0, high: 0, unsigned: false },
+    },
+    temp_primary_dcs: { main: { id: 2 }, media: { id: 2 } },
+  };
+
+  it("remembers the bind message id and never lets permanent secrets reach the MTProto client", async () => {
+    const ids = (set: Set<any>) => [...set].map(value => [value.low, value.high]);
+    transport.boundSession.recentOutgoingMsgIds.clear();
+    const secretSession = { ...baseSession, bot_token: "123:SECRET-BOT-TOKEN", telegram_api_hash: "SECRET-API-HASH", permanentKeyBytes: new Uint8Array(256).fill(9) };
+    await send({ requestId: "bound-secrets", op: "initialize", startupMessageIds: [], session: secretSession });
+
+    expect(ids(transport.boundSession.recentOutgoingMsgIds)).toContainEqual([111, 222]);
+    expect(ids(transport.boundSession.recentIncomingMsgIds)).toContainEqual([77, 88]);
+    const options = transport.getClientOptions();
+    expect(options).toMatchObject({ apiId: 12345, apiHash: "" });
+    expect(JSON.stringify(options, (_key, value) => value instanceof Uint8Array ? `bytes:${value.byteLength}` : value)).not.toMatch(/SECRET/);
+    const imported = transport.importSession.mock.calls.at(-1) as unknown[];
+    expect(JSON.stringify(imported, (_key, value) => value instanceof Uint8Array ? `bytes:${value.byteLength}:${value[0]}` : value)).not.toMatch(/SECRET|bytes:256:9/);
+    expect((imported[0] as { authKey: Uint8Array }).authKey).toEqual(new Uint8Array(256).fill(7));
+  });
+
+  it("refuses to open the productive socket when the bound session state is incomplete or the key is malformed", async () => {
+    transport.connect.mockClear();
+    for (const [label, patch] of [
+      ["no-state", { temp_session_state: undefined }],
+      ["no-session-id", { temp_session_id: undefined }],
+      ["no-api-id", { temp_api_id: 0 }],
+      ["short-key", { temp_auth_key: new Uint8Array(32) }],
+    ] as const) {
+      const out = await send({ requestId: `bound-bad-${label}`, op: "initialize", startupMessageIds: [], session: { ...baseSession, ...patch } });
+      expect(out.find(message => message.requestId === `bound-bad-${label}`)).toMatchObject({ ok: false, code: "SESSION_INVALID" });
+    }
+    expect(transport.connect).not.toHaveBeenCalled();
+  });
+});

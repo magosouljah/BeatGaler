@@ -14,8 +14,6 @@ on:
       - 'deploy/web/**'
       - 'scripts/deploy-web-production.ps1'
       - 'scripts/test-public-operations-pages.mjs'
-      - 'scripts/regression-web-startup-bridge.mjs'
-      - 'scripts/regression-web-bound-temp-rpc.mjs'
       - '.github/workflows/web-production-build.yml'
   workflow_dispatch:
 
@@ -35,10 +33,6 @@ jobs:
         run: npm ci
       - name: Validate public operations source
         run: node scripts/test-public-operations-pages.mjs
-      - name: Guard browser startup bridge
-        run: node scripts/regression-web-startup-bridge.mjs
-      - name: Guard bound-temp Web RPC seam
-        run: node scripts/regression-web-bound-temp-rpc.mjs
       - name: Validate Landing and Gallery integration
         run: >-
           node node_modules/vitest/vitest.mjs run
@@ -51,6 +45,10 @@ jobs:
           tests/component-dom/galleryTagPacking.test.ts
           tests/component-dom/publicStartupLoader.test.ts
           tests/component-dom/webLibraryNavigation.test.ts
+          tests/component-dom/webStartupBridge.behavior.test.tsx
+          tests/component-dom/webTempAuthBind.behavior.test.ts
+          tests/component-dom/webTransportBoundSession.behavior.test.ts
+          tests/component-dom/webTransportWorker.test.ts
           tests/integration/libraryViewSelectors.test.ts
           --environment jsdom
       - name: Build browser Web

@@ -1,9 +1,6 @@
 // static-guards.mjs <repo>
-// Statically evaluates (string/regex inclusion only) the assertions of three source-text guards that run ONLY in
-// pull_request workflows, WITHOUT executing them:
+// Statically evaluates (string/regex inclusion only) the assertions of a source-text guard that runs ONLY in pull_request workflows, WITHOUT executing it:
 //   scripts/regression-direct-manager-only.test.mjs   (mutation anchors)      -> direct-persistent-vault-assignment.yml
-//   scripts/regression-web-startup-bridge.mjs         (includes needles)      -> web-production-build.yml
-//   scripts/regression-web-bound-temp-rpc.mjs         (regex match/doesNotMatch) -> web-production-build.yml, probe-task-5.1
 // Read-only. It PARSES array/regex/string LITERALS from those tracked files (no eval/Function/vm); a non-literal is reported as "no evaluable". It never imports them.
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -81,33 +78,4 @@ console.log('HEAD ' + head(repo));
   console.log('regression-direct-manager-only.test.mjs: anchors=' + arr.length + ' missing=' + missing.length);
   for (const [label, file] of missing) console.log('  MISSING ANCHOR: ' + label + '  [' + file + ']');
   }
-}
-{ // 2) includes needles
-  const s = rd('scripts/regression-web-startup-bridge.mjs');
-  const vars = {};
-  for (const m of s.matchAll(/^const (\w+) = fs\.readFileSync\("([^"]+)"/gm)) vars[m[1]] = m[2];
-  let n = 0; const bad = [];
-  for (const m of s.matchAll(/^expect\((\w+), ('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"), /gm)) {
-    n++; let needle; try { needle = lit(m[2]); } catch (e) { bad.push('no evaluable needle: ' + m[2].slice(0, 50)); continue; } const f = vars[m[1]];
-    if (!has(f)) bad.push('file missing: ' + f); else if (!rd(f).includes(needle)) bad.push(f + ' lacks: ' + needle.slice(0, 70).replace(/\n/g, '\\n'));
-  }
-  console.log('regression-web-startup-bridge.mjs: needles=' + n + ' missing=' + bad.length + '  (checkout line endings matter: needles contain \\n)');
-  bad.forEach(x => console.log('  ' + x));
-  for (const f of Object.values(vars)) if (has(f)) console.log('  ' + f + ' CRLF=' + /\r\n/.test(rd(f)));
-}
-{ // 3) regex assertions
-  const s = rd('scripts/regression-web-bound-temp-rpc.mjs');
-  const vars = {};
-  for (const m of s.matchAll(/^const (\w+) = await readFile\(new URL\('\.\.\/([^']+)'/gm)) vars[m[1]] = m[2];
-  let n = 0; const bad = [];
-  for (const m of s.matchAll(/^assert\.(match|doesNotMatch)\((\w+), (\/.*\/[a-z]*), '/gm)) {
-    n++; let re; try { re = lit(m[3]); } catch (e) { bad.push('no evaluable regex: ' + m[3].slice(0, 50)); continue; } const f = vars[m[2]];
-    if (!has(f)) { bad.push('file missing: ' + f); continue; }
-    if ((m[1] === 'match') !== re.test(rd(f))) bad.push(m[1] + ' ' + f + ' ' + m[3].slice(0, 70));
-  }
-  const fields = /for \(const field of (\[[^\]]+\])\)/.exec(s);
-  let fl = []; if (fields) { try { fl = lit(fields[1]); } catch (e) { bad.push('no evaluable field list'); } }
-  for (const field of fl) { n++; if (!new RegExp(field + ':').test(rd(vars.tempAuth))) bad.push('tempAuth lacks ' + field); }
-  console.log('regression-web-bound-temp-rpc.mjs: assertions=' + n + ' failing=' + bad.length);
-  bad.forEach(x => console.log('  ' + x));
 }
