@@ -185,9 +185,5 @@ export function createCatalogApi(options: CatalogApiOptions = {}) {
 }
 export type CatalogApi = ReturnType<typeof createCatalogApi>;
 
-// Hash de filtros equivalente al del servidor para claves de caché del cliente (no sustituye al firmado del cursor).
-export function filtersKey(f: CatalogQueryFilters, sort: CatalogSort): string {
-  const byBytes = (a: string, b: string) => (new TextEncoder().encode(a).join(",") < new TextEncoder().encode(b).join(",") ? -1 : 1);
-  return JSON.stringify({ state: f.state, q: f.q.trim().toLowerCase(), includeMode: f.includeMode, include: [...new Set(f.includeTags)].sort(byBytes), exclude: [...new Set(f.excludeTags)].sort(byBytes), sort });
-}
+export { filtersKey } from "./catalogQueryIdentity";
 export const DEFAULT_FILTERS: CatalogQueryFilters = Object.freeze({ state: "ACTIVE", q: "", includeTags: [], excludeTags: [], includeMode: "any" });

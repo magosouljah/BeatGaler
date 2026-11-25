@@ -11,6 +11,7 @@
 //    ended; repeat-all abre otra ronda (excluyendo la actual si N > 1); Next manual permite nueva ronda; repeat-one repite tras la cola.
 //  - Startup ≤14 referencias (prefetch acotado por el llamador). Teardown explícito en logout/cambio de cuenta.
 import { useSyncExternalStore } from "react";
+import { playbackFiltersIdentity } from "./catalogQueryIdentity";
 import { CatalogApiError, type CatalogQueryFilters, type CatalogSort } from "./catalogApi";
 import type { MediaLease } from "./catalogMediaClient";
 
@@ -234,7 +235,7 @@ export function createCatalogPlaybackSession(options: PlaybackSessionOptions) {
   /** Filtros nuevos → ronda nueva (el audio actual sigue). Sort → misma ronda (Shuffle no depende del orden). Revisión → ronda stale (reconstruida al siguiente sorteo). */
   async function setQuery(query: PlaybackQuery): Promise<void> {
     const prev = snapshot.query;
-    const filtersChanged = !prev || JSON.stringify(prev.filters) !== JSON.stringify(query.filters);
+    const filtersChanged = !prev || playbackFiltersIdentity(prev.filters) !== playbackFiltersIdentity(query.filters);
     const revisionChanged = prev !== null && prev.revision !== query.revision;
     set({ query });
     if (filtersChanged && snapshot.round) { const r = snapshot.round; set({ round: null }); pendingNext = null; await api.releaseRound(r.roundId).catch(() => {}); }
