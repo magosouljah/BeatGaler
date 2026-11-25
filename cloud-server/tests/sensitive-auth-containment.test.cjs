@@ -28,16 +28,18 @@ function runtimeFor({
   return {
     pool,
     passwordOverrideForUser() { return overrideHash ? { passwordHash: overrideHash } : null; },
-    _test: {
-      sessionInfoFromRequest() { return { userId, user, sessionHash: 'session_hash' }; },
-      publicStatusForUser() { return { email_verified: verified }; },
-      accountsSnapshot() { return { users, sessions: {} }; },
-      consumeReauth(_req, raw) {
-        return reauthOk && raw === 'reauth_good'
-          ? { ok: true, info: { userId, user }, method: 'oauth:x' }
-          : { ok: false, code: 'REAUTH_REQUIRED' };
+    api: {
+      session: {
+        sessionInfoFromRequest() { return { userId, user, sessionHash: 'session_hash' }; },
+        consumeReauth(_req, raw) {
+          return reauthOk && raw === 'reauth_good'
+            ? { ok: true, info: { userId, user }, method: 'oauth:x' }
+            : { ok: false, code: 'REAUTH_REQUIRED' };
+        },
       },
+      state: { accountsSnapshot() { return { users, sessions: {} }; } },
     },
+    _test: { publicStatusForUser() { return { email_verified: verified }; } },
   };
 }
 
@@ -73,14 +75,14 @@ async function runFirst(express, route, req = {}) {
 (async () => {
   {
     const runtime = runtimeFor({ passwordHash: 'hash', verified: true });
-    const info = runtime._test.sessionInfoFromRequest({});
+    const info = runtime.api.session.sessionInfoFromRequest({});
     assert.equal(await hasVerifiedUniqueEmail(runtime, info, runtime.pool), true);
     assert.equal(await hasUsablePassword(runtime, info, runtime.pool), true);
   }
 
   {
     const runtime = runtimeFor({ passwordHash: 'hash', verified: false });
-    const info = runtime._test.sessionInfoFromRequest({});
+    const info = runtime.api.session.sessionInfoFromRequest({});
     assert.equal(await hasVerifiedUniqueEmail(runtime, info, runtime.pool), false);
     assert.equal(await hasUsablePassword(runtime, info, runtime.pool), false);
   }
@@ -88,7 +90,7 @@ async function runFirst(express, route, req = {}) {
   {
     const runtime = runtimeFor({ verified: false, reauthOk: true });
     runtime.pool.verifications.set('usr_1', { email_hash: emailHash('one@example.com'), verified_at: new Date() });
-    assert.equal(await hasVerifiedEmailShared(runtime, runtime._test.sessionInfoFromRequest({}), runtime.pool), true);
+    assert.equal(await hasVerifiedEmailShared(runtime, runtime.api.session.sessionInfoFromRequest({}), runtime.pool), true);
     const express = fakeExpress();
     installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
@@ -102,7 +104,7 @@ async function runFirst(express, route, req = {}) {
 
   {
     const runtime = runtimeFor({ passwordHash: 'hash', verified: true, duplicateEmail: true });
-    const info = runtime._test.sessionInfoFromRequest({});
+    const info = runtime.api.session.sessionInfoFromRequest({});
     assert.equal(await hasVerifiedUniqueEmail(runtime, info, runtime.pool), false);
     assert.equal(await hasUsablePassword(runtime, info, runtime.pool), false);
   }

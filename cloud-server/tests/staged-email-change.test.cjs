@@ -194,22 +194,26 @@ function harness({ nowMs = Date.parse('2026-10-21T22:30:00Z'), noticeFails = fal
 
   const user = { id: 'usr_1', email: withoutEmail ? null : 'old@example.com', username: 'tester#0001', usernameSource: 'beatgaler' };
   const runtime = {
-    _test: {
-      sessionInfoFromRequest(req) {
-        return req?.session === false ? null : { userId: user.id, user, sessionHash: 'session_hash' };
+    api: {
+      session: {
+        sessionInfoFromRequest(req) {
+          return req?.session === false ? null : { userId: user.id, user, sessionHash: 'session_hash' };
+        },
+        consumeReauth(_req, token) {
+          return token === 'reauth_good'
+            ? { ok: true, info: { userId: user.id, user }, method: providerReauth ? 'oauth:x' : 'password' }
+            : { ok: false, code: 'REAUTH_REQUIRED' };
+        },
+        async revokeUserSessions(userId, reason) {
+          revocations += 1;
+          db.events.push(['revoke', String(userId), String(reason)]);
+          return 2;
+        },
       },
-      consumeReauth(_req, token) {
-        return token === 'reauth_good'
-          ? { ok: true, info: { userId: user.id, user }, method: providerReauth ? 'oauth:x' : 'password' }
-          : { ok: false, code: 'REAUTH_REQUIRED' };
+      state: {
+        stateSnapshot() { return lifecycleState; },
+        stateFile,
       },
-      async revokeUserSessions(userId, reason) {
-        revocations += 1;
-        db.events.push(['revoke', String(userId), String(reason)]);
-        return 2;
-      },
-      stateSnapshot() { return lifecycleState; },
-      stateFile,
     },
   };
 

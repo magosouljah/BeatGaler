@@ -45,20 +45,20 @@ test('email verification retries a database failure without issuing welcome acce
     });
     const token = runtime._test.issueTestToken({ kind: 'email_verification', user, email: user.email });
     const first = response();
-    await runtime._test.confirmEmailVerification({ body: { token } }, first);
+    await runtime.api.email.confirmEmailVerification({ body: { token } }, first);
     assert.equal(first.statusCode, 503);
     assert.equal(first.body.code, 'EMAIL_VERIFICATION_RETRY');
     assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, false);
 
     const retry = response();
-    await runtime._test.confirmEmailVerification({ body: { token } }, retry);
+    await runtime.api.email.confirmEmailVerification({ body: { token } }, retry);
     assert.equal(retry.statusCode, 200);
     assert.equal(retry.body.verified, true);
     assert.equal((await runtime._test.publicStatusForUser(user)).email_verified, true);
     assert.equal(pool.statements.some(({ text }) => /\bentitlements\b|\bwelcome:v1\b/i.test(text)), false);
 
     const replay = response();
-    await runtime._test.confirmEmailVerification({ body: { token } }, replay);
+    await runtime.api.email.confirmEmailVerification({ body: { token } }, replay);
     assert.equal(replay.statusCode, 400);
     assert.equal(replay.body.code, 'EMAIL_VERIFICATION_INVALID');
   } finally {

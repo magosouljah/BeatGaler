@@ -477,7 +477,7 @@ function createAccountLifecycleRuntime({
         if (typeof data === 'string' && (fileText.endsWith('/accounts-data.json.tmp') || fileText.endsWith('/cloud-data.json.tmp'))) {
           let parsed = JSON.parse(data);
           for (const runtime of state.runtimes) {
-            parsed = fileText.endsWith('/accounts-data.json.tmp') ? runtime._test.filterAccountsValue(parsed) : runtime._test.filterCloudValue(parsed);
+            parsed = fileText.endsWith('/accounts-data.json.tmp') ? runtime.api.state.filterAccountsValue(parsed) : runtime.api.state.filterCloudValue(parsed);
           }
           nextData = JSON.stringify(parsed, null, 2);
         }
@@ -763,48 +763,68 @@ function createAccountLifecycleRuntime({
     next();
   }
 
+  const implementations = { completePasswordReset, filterAccountsValue, deleteAccount };
+  const api = Object.freeze({
+    session: Object.freeze({
+      sessionInfoFromRequest,
+      issueReauth,
+      consumeReauth,
+      revokeUserSessions,
+      reauthenticate,
+      regenerateRecovery,
+      loginRecoveryMiddleware,
+      mfaDisableRecoveryMiddleware,
+    }),
+    password: Object.freeze({
+      requestPasswordReset,
+      get completePasswordReset() { return implementations.completePasswordReset; },
+    }),
+    email: Object.freeze({
+      clearEmailVerificationForUser: userId => clearVerifiedEmail(pool, userId),
+      requestEmailVerification,
+      confirmEmailVerification,
+    }),
+    state: Object.freeze({
+      stateSnapshot,
+      accountsSnapshot,
+      userById,
+      get filterAccountsValue() { return implementations.filterAccountsValue; },
+      filterCloudValue,
+      scrubAccountsFile,
+      scrubCloudFile,
+      lifecycleStatus,
+      responseDecorator,
+      deletedUserIds,
+      stateFile,
+    }),
+    data: Object.freeze({
+      exportAccount,
+      get deleteAccount() { return implementations.deleteAccount; },
+    }),
+  });
+
   const runtimeApi = {
     installPersistenceFilter,
     passwordOverrideForUser(userId) { return persisted.password_overrides[String(userId)] || null; },
     deliveryConfigured,
     retentionConfigured,
+    api,
+    provide({ completePasswordReset, filterAccountsValue, deleteAccount }) {
+      if (completePasswordReset !== undefined) implementations.completePasswordReset = completePasswordReset;
+      if (filterAccountsValue !== undefined) implementations.filterAccountsValue = filterAccountsValue;
+      if (deleteAccount !== undefined) implementations.deleteAccount = deleteAccount;
+    },
     _test: {
-      stateSnapshot,
-      accountsSnapshot,
       cloudSnapshot,
-      userById,
       userByEmail,
       userByIdentifier,
-      sessionInfoFromRequest,
       publicStatusForUser,
-      clearEmailVerificationForUser: userId => clearVerifiedEmail(pool, userId),
       issueTestToken,
       consumeToken,
       generateRecoveryCodes,
       validateRecoveryCode,
       verifySecondFactor,
-      issueReauth,
-      consumeReauth,
-      revokeUserSessions,
-      filterAccountsValue,
-      filterCloudValue,
-      scrubAccountsFile,
-      scrubCloudFile,
-      requestEmailVerification,
-      confirmEmailVerification,
-      requestPasswordReset,
-      completePasswordReset,
-      reauthenticate,
-      regenerateRecovery,
-      exportAccount,
-      deleteAccount,
-      lifecycleStatus,
-      loginRecoveryMiddleware,
-      mfaDisableRecoveryMiddleware,
-      responseDecorator,
-      deletedUserIds,
       revokedSessionHashes,
-      stateFile,
     },
   };
 
@@ -827,26 +847,26 @@ function installAccountLifecycle(express, options = {}) {
       // Estas rutas se registran con el primer app.post(), que puede ocurrir antes del express.json() global:
       // sin su propio parser reciben el cuerpo vacío (reauth, reset de contraseña, export, borrado...).
       const bodyJson = express.json({ limit: '256kb' });
-      app.post('/auth/email/verification/request', bodyJson, (req, res) => { void runtime._test.requestEmailVerification(req, res); });
-      app.post('/auth/email/verification/confirm', bodyJson, (req, res, next) => { void runtime._test.confirmEmailVerification(req, res).catch(next); });
-      app.post('/auth/password/reset/request', bodyJson, (req, res) => { void runtime._test.requestPasswordReset(req, res); });
-      app.post('/auth/password/reset/complete', bodyJson, (req, res) => { void runtime._test.completePasswordReset(req, res); });
-      app.post('/auth/reauth', bodyJson, (req, res) => { void runtime._test.reauthenticate(req, res); });
-      app.post('/auth/mfa/recovery/regenerate', bodyJson, runtime._test.regenerateRecovery);
+      app.post('/auth/email/verification/request', bodyJson, (req, res) => { void runtime.api.email.requestEmailVerification(req, res); });
+      app.post('/auth/email/verification/confirm', bodyJson, (req, res, next) => { void runtime.api.email.confirmEmailVerification(req, res).catch(next); });
+      app.post('/auth/password/reset/request', bodyJson, (req, res) => { void runtime.api.password.requestPasswordReset(req, res); });
+      app.post('/auth/password/reset/complete', bodyJson, (req, res) => { void runtime.api.password.completePasswordReset(req, res); });
+      app.post('/auth/reauth', bodyJson, (req, res) => { void runtime.api.session.reauthenticate(req, res); });
+      app.post('/auth/mfa/recovery/regenerate', bodyJson, runtime.api.session.regenerateRecovery);
       app.post('/auth/security/notifications', bodyJson, (req, res) => {
-        const info = runtime._test.sessionInfoFromRequest(req);
+        const info = runtime.api.session.sessionInfoFromRequest(req);
         if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
-        const state = runtime._test.stateSnapshot();
+        const state = runtime.api.state.stateSnapshot();
         const rows = Array.isArray(state.notifications[info.userId]) ? state.notifications[info.userId] : [];
         return res.json({ ok: true, notifications: rows.slice(-50).reverse() });
       });
       app.post('/auth/lifecycle/status', bodyJson, (req, res, next) => {
-        const info = runtime._test.sessionInfoFromRequest(req);
+        const info = runtime.api.session.sessionInfoFromRequest(req);
         if (!info) return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
-        void runtime._test.lifecycleStatus(req, res).catch(next);
+        void runtime.api.state.lifecycleStatus(req, res).catch(next);
       });
-      app.post('/auth/account/export', bodyJson, (req, res, next) => { void runtime._test.exportAccount(req, res).catch(next); });
-      app.post('/auth/account/delete', bodyJson, (req, res, next) => { void runtime._test.deleteAccount(req, res).catch(next); });
+      app.post('/auth/account/export', bodyJson, (req, res, next) => { void runtime.api.data.exportAccount(req, res).catch(next); });
+      app.post('/auth/account/delete', bodyJson, (req, res, next) => { void runtime.api.data.deleteAccount(req, res).catch(next); });
       app.__beatgalerAccountLifecycleRoutesInstalled = true;
     } finally {
       app.__beatgalerAccountLifecycleRoutesInstalling = false;
@@ -862,15 +882,15 @@ function installAccountLifecycle(express, options = {}) {
       extras.push((req, res, next) => {
         const route = String(req?.path || req?.url || pathName).split('?')[0];
         if (SAFE_PUBLIC_AUTH_ROUTES.has(route)) return next();
-        const info = runtime._test.sessionInfoFromRequest(req);
+        const info = runtime.api.session.sessionInfoFromRequest(req);
         if (!bearerToken(req) || info) return next();
         return res.status(401).json({ error: 'Session expired. Sign in again.', code: 'SESSION_REQUIRED' });
       });
     }
-    if (pathName === '/auth/login') extras.push(runtime._test.loginRecoveryMiddleware);
-    if (pathName === '/auth/mfa/disable') extras.push(runtime._test.mfaDisableRecoveryMiddleware);
+    if (pathName === '/auth/login') extras.push(runtime.api.session.loginRecoveryMiddleware);
+    if (pathName === '/auth/mfa/disable') extras.push(runtime.api.session.mfaDisableRecoveryMiddleware);
     if (USER_DECORATION_ROUTES.has(pathName) || NOTIFICATION_ROUTES.has(pathName) || pathName === '/auth/mfa/enable') {
-      extras.push((req, res, next) => runtime._test.responseDecorator(pathName, req, res, next));
+      extras.push((req, res, next) => runtime.api.state.responseDecorator(pathName, req, res, next));
     }
     return next(routePath, ...extras, ...handlers);
   };

@@ -74,7 +74,7 @@ function routePolicy(routePath, env = process.env) {
 
 function targetIdentity(req, runtime) {
   try {
-    const info = runtime?._test?.sessionInfoFromRequest?.(req);
+    const info = runtime?.api?.session?.sessionInfoFromRequest?.(req);
     if (info?.userId) return `user:${info.userId}`;
   } catch {}
   const body = req?.body || {};

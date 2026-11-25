@@ -8,7 +8,7 @@ function bearerToken(req) {
 
 function installLifecycleRequestGuard(express, runtime) {
   const application = express?.application;
-  if (!application || !runtime?._test?.sessionInfoFromRequest || application.__beatgalerLifecycleRequestGuardRuntime) return;
+  if (!application || !runtime?.api?.session?.sessionInfoFromRequest || application.__beatgalerLifecycleRequestGuardRuntime) return;
   application.__beatgalerLifecycleRequestGuardRuntime = runtime;
 }
 
@@ -22,7 +22,7 @@ function wrapLifecycleRequestGuardUse(routePathOrHandlers, handlers) {
       // Web cookie/rotated alias back to the canonical account bearer.
       const token = bearerToken(req);
       if (!token) return proceed();
-      if (runtime._test.sessionInfoFromRequest(req)) return proceed();
+      if (runtime.api.session.sessionInfoFromRequest(req)) return proceed();
       return res.status(401).json({
         error: 'Session expired or revoked. Sign in again.',
         code: 'SESSION_REQUIRED',
