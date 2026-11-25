@@ -2,30 +2,12 @@
 
 const crypto = require('crypto');
 
-const INSTALL_MARK = Symbol.for('beatgaler.direct.persistent-session-start');
-
+// Seed the legacy Direct state for tests that exercise its lease primitives.
 function codedError(message, code, transportBotId = null) {
   const error = new Error(message);
   error.code = code;
   if (transportBotId) error.transportBotId = String(transportBotId);
   return error;
-}
-
-function publicPoolSnapshot(status) {
-  const bots = Array.isArray(status?.bots) ? status.bots : [];
-  const pool = bots
-    .map(bot => ({ id: String(bot?.id || '').trim() }))
-    .filter(bot => bot.id);
-  const state = { bots: {} };
-  for (const bot of bots) {
-    const id = String(bot?.id || '').trim();
-    if (!id) continue;
-    state.bots[id] = {
-      quarantined: Boolean(bot?.quarantined),
-      rotation_pending: Boolean(bot?.rotation_pending),
-    };
-  }
-  return { pool, state };
 }
 
 function leaseExpired(lease, heartbeatTimeoutMs) {
@@ -81,7 +63,8 @@ function prepareAssignedLease({ directTransport, status, transportBotId, install
   const botId = String(transportBotId || '').trim();
   if (!installation || !vaultId || !botId) throw new Error('installationId, chatId and transportBotId are required.');
 
-  const { pool } = publicPoolSnapshot(status);
+  const bots = Array.isArray(status?.bots) ? status.bots : [];
+  const pool = bots.map(bot => ({ id: String(bot?.id || '').trim() })).filter(bot => bot.id);
   if (!pool.some(bot => bot.id === botId)) {
     throw codedError(
       `Assigned transport bot ${botId} is not present in the configured pool.`,
@@ -142,94 +125,4 @@ function prepareAssignedLease({ directTransport, status, transportBotId, install
   return { ...prepared, pool };
 }
 
-function rollbackPreparedLease({ directTransport, pool, lease }) {
-  if (!lease?.session_id) return;
-  directTransport.__test.mutateState(pool, state => {
-    const current = state.leases?.[String(lease.session_id)];
-    if (!current) return;
-    if (
-      String(current.bot_id || '') !== String(lease.bot_id || '') ||
-      String(current.installation_id || '') !== String(lease.installation_id || '') ||
-      String(current.chat_id || '') !== String(lease.chat_id || '')
-    ) return;
-    retireLeaseLocal(state, current);
-  });
-}
-
-function installPersistentDirectSessionStart({ directTransport, persistentAssignments, indexPinAuthority = null } = {}) {
-  if (!directTransport || typeof directTransport.startSession !== 'function') {
-    throw new Error('Direct transport startSession() is required.');
-  }
-  if (!persistentAssignments || typeof persistentAssignments.resolveForVault !== 'function') {
-    throw new Error('Persistent Direct assignment resolver is required.');
-  }
-  if (directTransport[INSTALL_MARK]?.wrappedStartSession) return directTransport[INSTALL_MARK];
-
-  const originalStartSession = directTransport.startSession.bind(directTransport);
-  const wrappedStartSession = async (args = {}) => {
-    const installationId = String(args.installationId || '').trim();
-    const chatId = String(args.chatId || '').trim();
-    if (!installationId || !chatId) return originalStartSession(args);
-
-    const status = directTransport.poolStatus();
-    if (!status?.configured) return originalStartSession(args);
-
-    const { pool, state } = publicPoolSnapshot(status);
-    const resolved = await persistentAssignments.resolveForVault({ pool, state, chatId });
-    const assignedBotId = String(resolved?.assignment?.transportBotId || resolved?.bot?.id || '').trim();
-    if (!assignedBotId) {
-      throw codedError(
-        `Vault ${chatId} has no persistent transport assignment.`,
-        'TRANSPORT_ASSIGNMENT_MISSING',
-      );
-    }
-
-    // READY vaults may still have the old bot admin rights. Revoke pin before
-    // returning a temporary credential, including for a reused lease.
-    if (indexPinAuthority) {
-      await indexPinAuthority.ensure({ chatId, botId: assignedBotId,
-        membershipState: resolved?.assignment?.membershipState });
-    }
-
-    const prepared = prepareAssignedLease({
-      directTransport,
-      status,
-      transportBotId: assignedBotId,
-      installationId,
-      chatId,
-    });
-
-    try {
-      // The runtime requires this exact PostgreSQL-assigned lease. It has no
-      // allocator fallback; unavailable ownership fails without choosing a bot.
-      const session = await originalStartSession(args);
-      if (String(session?.transport_id || '') !== assignedBotId) {
-        throw codedError(
-          `Direct session used ${session?.transport_id || '<none>'} but PostgreSQL assigned ${assignedBotId}.`,
-          'TRANSPORT_ASSIGNMENT_INVARIANT_VIOLATION',
-          assignedBotId,
-        );
-      }
-      return session;
-    } catch (error) {
-      if (!prepared.reused) rollbackPreparedLease({ directTransport, pool: prepared.pool, lease: prepared.lease });
-      throw error;
-    }
-  };
-
-  directTransport.startSession = wrappedStartSession;
-  const installed = Object.freeze({ originalStartSession, wrappedStartSession });
-  Object.defineProperty(directTransport, INSTALL_MARK, {
-    configurable: true,
-    enumerable: false,
-    value: installed,
-  });
-  return installed;
-}
-
-module.exports = {
-  installPersistentDirectSessionStart,
-  publicPoolSnapshot,
-  prepareAssignedLease,
-  retireLeaseLocal,
-};
+module.exports = { prepareAssignedLease };

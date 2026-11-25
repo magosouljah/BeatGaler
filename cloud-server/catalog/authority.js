@@ -112,7 +112,7 @@ function containsDirectCredentials(value) {
 //  library_project_uploads (0017:5), library_legacy_project_copies (0017:17), library_trash_purges (0018:5),
 //  pin authority: vaults.index_pin_restricted_bot_id/index_pin_restricted_at (0016:6-7) y project_media_restricted_bot_id (0017:3),
 //  garbage_journal (0001:163), index_observations (0001:155), direct_operations no terminales (0001:139) y
-//  direct_capabilities de tipo INDEX (0005:3; tipos en direct-capability-boundary.js:21-23).
+//  direct_capabilities de tipo INDEX (0005:3; conjunto INDEX_OPERATION_TYPES).
 const VAULT_PREDICATE_SQL = (forUpdate) => `
   SELECT v.id, v.user_id, v.telegram_chat_id, v.catalog_native_eligible, v.index_bootstrap_pending, v.transport_bot_id,
     EXISTS (SELECT 1 FROM catalog_library_chats c WHERE c.provider = 'telegram' AND c.chat_id = v.telegram_chat_id) AS chat_known,
@@ -338,7 +338,7 @@ async function assertVaultRebindAllowedIfConfigured(input) {
 
 module.exports = {
   RESET_LIBRARY_SQL,
-  NATIVE_FLAG_ENV, ACCOUNT_DELETION_FLAG_ENV, CATALOG_SESSION_PROTOCOL, INDEX_OPERATION_TYPES, DIRECT_CREDENTIAL_KEYS, SQLSTATE,
+  NATIVE_FLAG_ENV, ACCOUNT_DELETION_FLAG_ENV, CATALOG_SESSION_PROTOCOL, DIRECT_CREDENTIAL_KEYS, SQLSTATE,
   CatalogAuthorityError, catalogNativeConfig, createCatalogAuthority, evaluateNativePredicate, nativeGenerationDescriptor, canonicalJson,
   stripDirectCredentials, stripDirectPublicJson, containsDirectCredentials, assertNativeStartupCompatible, assertNoNativeActivation,
   configureCatalogAuthority, currentCatalogAuthority, assertVaultRebindAllowedIfConfigured,

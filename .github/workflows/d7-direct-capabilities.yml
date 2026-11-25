@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   capability_unit:
-    name: Capability scope/replay/revoke unit contract
+    name: Capability store, revocation and temporary-auth unit checks
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -34,7 +34,7 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - name: Run Direct capability unit contract
+      - name: Run capability store, revocation and temporary-auth unit checks
         run: node cloud-server/tests/direct-capability-boundary.runner.cjs
 
   capability_postgres:

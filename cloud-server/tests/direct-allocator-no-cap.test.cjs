@@ -28,7 +28,7 @@ Module._load = function(request, parent, isMain) {
 
 try {
   const direct = require('../direct-transport-control.js');
-  const { prepareAssignedLease } = require('../direct-persistent-session-runtime');
+  const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
   const pool = [bot];
   for (let index = 0; index < 5; index += 1) {
     const result = prepareAssignedLease({

@@ -1,13 +1,11 @@
 'use strict';
-// T05-N — Autoridad nativa y cerco de capa 1 sin PostgreSQL real (pools falsos, red denegada). NATIVO r2.1 §3, §5.1, §6.2, §8.5, §12.
+// T05-N — Autoridad nativa sin PostgreSQL real (pools falsos, red denegada). NATIVO r2.1 §3, §5.1, §6.2, §8.5, §12.
 // Las pruebas contra PostgreSQL real están en catalog-authority.integration.cjs (suite T05 del runner).
 process.env.DIRECT_DIAGNOSTICS_DIR ||= require('node:path').join(require('node:os').tmpdir(), 'diag');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const authority = require('../../catalog/authority.js');
-const fence = require('../../catalog/legacy-fence.js');
 const quarantine = require('../../catalog/flush-quarantine.js');
-const { installDirectCapabilityBoundary } = require('../../direct-capability-boundary.js');
 const { mergeAuthSnapshotDelta } = require('../../postgres-auth-multiprocess-compat.js');
 const { createUserStorageLifecycle } = require('../../user-storage-lifecycle.js');
 
@@ -15,17 +13,13 @@ const ENV_ON = { BEATGALER_CATALOG_NATIVE_ENABLED: 'true' };
 const ACTIVATION_ROW = { environment_id: 'lab', run_id: 'r1', transport_bot_ids: '["Bot20"]', direct_token_exposure: 'FRESH_BOTS', activated_at: new Date() };
 
 // Pool falso: responde por patrón y registra toda sentencia que escriba.
-function fakePool({ catalogUsers = [], catalogChats = [], activation = ACTIVATION_ROW, library = null, vault = null, quarantined = false, onQuery = null } = {}) {
+function fakePool({ activation = ACTIVATION_ROW, library = null, vault = null, quarantined = false, onQuery = null } = {}) {
   const statements = [];
   const writes = () => statements.filter((s) => /^\s*(INSERT|UPDATE|DELETE|TRUNCATE)/i.test(s));
   async function query(sql, params = []) {
     statements.push(String(sql));
     if (onQuery) { const r = onQuery(String(sql), params); if (r !== undefined) return r; }
     const text = String(sql);
-    if (/catalog-legacy-fence/.test(text)) {
-      if (/catalog_library_chats/.test(text)) return { rows: catalogChats.includes(String(params[0])) ? [{ '?column?': 1 }] : [] };
-      return { rows: catalogUsers.includes(String(params[0])) ? [{ '?column?': 1 }] : [] };
-    }
     if (/FROM catalog_native_activation/.test(text)) return { rows: activation ? [activation] : [] };
     if (/FROM control_plane_flush_quarantine WHERE user_id/.test(text)) return { rows: quarantined ? [{ '?column?': 1 }] : [] };
     if (/FROM catalog_libraries l\s+LEFT JOIN catalog_generations/.test(text)) return { rows: library ? [library] : [] };
@@ -141,17 +135,6 @@ test('stripDirectCredentials: la sesión catalog-v1 serializada no contiene bot_
   assert.equal(authority.containsDirectCredentials(native), false);
   assert.equal(native.includes('secret-token'), false);
   assert.ok(JSON.parse(native).protocol === 'catalog-v1');
-});
-
-
-
-
-test('respondLegacyFence solo responde a errores del cerco', () => {
-  const sent = [];
-  const res = { status(c) { sent.push(c); return this; }, json(p) { sent.push(p.code); return this; } };
-  assert.equal(fence.respondLegacyFence(res, new Error('x')), false);
-  assert.equal(fence.respondLegacyFence(res, new fence.CatalogLegacyFenceError('fenced')), true);
-  assert.deepEqual(sent, [410, 'LEGACY_CLIENT_UNSUPPORTED']);
 });
 
 test('guardas §12: json + pool con activación/bibliotecas no arranca; re-cutover con activación se niega (PASS 13)', async () => {

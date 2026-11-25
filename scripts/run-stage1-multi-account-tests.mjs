@@ -7,7 +7,6 @@ const root = path.resolve(here, '..');
 
 const tests = [
   'cloud-server/tests/direct-vault-assignment.test.cjs',
-  'cloud-server/tests/direct-persistent-session-runtime.test.cjs',
   'cloud-server/tests/direct-persistent-cleanup.test.cjs',
   'cloud-server/tests/stage1-multi-account-concurrency.test.cjs',
 ];

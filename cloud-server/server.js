@@ -43,8 +43,6 @@ const { createPostgresInstallationClaimCoordinator } = require("./postgres-insta
 const { installRuntimeOperability, configureRuntimeDependencies } = require("./runtime-operability");
 const { operationsRuntime } = require('./operations-runtime');
 const directPersistentAssignments = require("./direct-persistent-assignment-runtime");
-const { installPersistentDirectSessionStart } = require("./direct-persistent-session-runtime");
-const { installPersistentDirectMembershipActivation } = require("./direct-persistent-membership-runtime");
 
 const { prepareControlPlaneCutover, assembleServerCatalog } = require("./catalog-assembly");
 
@@ -250,15 +248,6 @@ async function start() {
     });
   }
 
-  const directTransport = require("./direct-transport-control");
-  installPersistentDirectSessionStart({
-    directTransport,
-    persistentAssignments: directPersistentAssignments,
-  });
-  installPersistentDirectMembershipActivation({
-    directTransport,
-    persistentAssignments: directPersistentAssignments,
-  });
   lifecycleRuntime.start();
   reconciliationRuntime.start();
   authDeliveryWorker?.start?.();
