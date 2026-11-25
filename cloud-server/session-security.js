@@ -4,6 +4,7 @@ const { sha256String: sha256, bearerTokenOptionalRequest: bearerToken, accountsD
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { virtualIdentity } = require('./identity-store');
 
 const SESSION_COOKIE = '__Host-beatgaler_session';
 const CSRF_COOKIE = '__Host-beatgaler_csrf';
@@ -178,6 +179,8 @@ function createSessionSecurityRuntime({
   }
 
   function accountsSnapshot() {
+    const identity = virtualIdentity(fs, accountsFile);
+    if (identity) return identity.copy();
     const parsed = readJsonFile(accountsFile, {});
     return {
       users: Array.isArray(parsed?.users) ? parsed.users : [],
@@ -187,12 +190,13 @@ function createSessionSecurityRuntime({
     };
   }
 
-  function sessionRecord(sessionHash, snapshot = accountsSnapshot()) {
-    return snapshot.sessions?.[sessionHash] || null;
+  function sessionRecord(sessionHash) {
+    const identity = virtualIdentity(fs, accountsFile);
+    const record = identity ? identity.session(sessionHash) : accountsSnapshot().sessions?.[sessionHash];
+    return record || null;
   }
 
-  function userIdForHash(sessionHash, snapshot = accountsSnapshot()) {
-    const record = sessionRecord(sessionHash, snapshot);
+  function userIdForHash(sessionHash, record = sessionRecord(sessionHash)) {
     return String(record?.userId || record?.user_id || sessionMeta.get(sessionHash)?.user_id || '').trim();
   }
 
@@ -269,13 +273,12 @@ function createSessionSecurityRuntime({
       return { ok: false, status: 401, code: 'SESSION_ROTATED', message: 'Session was rotated. Sign in again.', source, cookies };
     }
 
-    const snapshot = accountsSnapshot();
-    const record = sessionRecord(innerHash, snapshot);
+    const record = sessionRecord(innerHash);
     if (!record || Number(record.expiresAt || record.expires_at || 0) <= now()) {
       return { ok: false, status: 401, code: 'SESSION_EXPIRED', message: 'Session expired. Sign in again.', source, cookies };
     }
 
-    const userId = userIdForHash(innerHash, snapshot);
+    const userId = userIdForHash(innerHash, record);
     if (!userId) {
       return { ok: false, status: 401, code: 'SESSION_INVALID', message: 'Session invalid. Sign in again.', source, cookies };
     }

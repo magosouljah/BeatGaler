@@ -38,9 +38,12 @@ function fixture(data = accounts(), lifecycleState = null) {
   const write = value => fs.writeFileSync(file, JSON.stringify(value));
   write(data);
   if (lifecycleState) fs.writeFileSync(path.join(dir, 'account-lifecycle-state.json'), JSON.stringify(lifecycleState));
+  fs.writeFileSync(path.join(dir, 'session-security-state.json'), JSON.stringify({
+    version: 1,
+    revoked_session_hashes: [sha(tok('revoked'))],
+    managed_session_hashes: [sha(tok('managed'))],
+  }));
   const security = createSessionSecurityRuntime({ dataDir: dir, now: () => now });
-  security._test.revokedSessionHashes.add(sha(tok('revoked')));
-  security._test.managedSessionHashes.add(sha(tok('managed')));
   const lifecycle = createAccountLifecycleRuntime({ dataDir: dir, now: () => now });
   return { dir, file, write, security, lifecycle, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }

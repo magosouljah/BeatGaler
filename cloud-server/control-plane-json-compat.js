@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const { installVirtualIdentity } = require('./identity-store');
 
 function normalize(filePath) {
   return path.resolve(String(filePath));
@@ -24,6 +25,7 @@ function installLegacyJsonCompatibility({ fsModule, runtime, authPath, persisten
     [auth, serialize(initialAuth)],
     [persistent, serialize(initialPersistent)],
   ]);
+  const identity = installVirtualIdentity(fsModule, auth, current.get(auth), () => staged.has(auth));
 
   const originals = {
     existsSync: fsModule.existsSync,
@@ -77,12 +79,15 @@ function installLegacyJsonCompatibility({ fsModule, runtime, authPath, persisten
     const parsed = JSON.parse(raw);
     current.set(newResolved, raw);
     staged.delete(oldResolved);
-    if (isAuthCommit) runtime.saveAuthSnapshot(parsed);
-    else runtime.savePersistentSnapshot(parsed);
+    if (isAuthCommit) {
+      identity.commit(parsed);
+      runtime.saveAuthSnapshot(parsed);
+    } else runtime.savePersistentSnapshot(parsed);
     return undefined;
   };
 
   return function uninstall() {
+    identity.uninstall();
     fsModule.existsSync = originals.existsSync;
     fsModule.readFileSync = originals.readFileSync;
     fsModule.writeFileSync = originals.writeFileSync;

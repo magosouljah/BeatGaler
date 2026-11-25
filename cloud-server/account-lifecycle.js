@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const passwordKdf = require('./password-kdf');
 const { statusForUser, markVerifiedEmail, clearVerifiedEmail } = require('./email-verification-authority');
+const { IdentitySnapshot, virtualIdentity } = require('./identity-store');
 
 const STATE_VERSION = 1;
 const STATE_FILE_NAME = 'account-lifecycle-state.json';
@@ -165,6 +166,11 @@ function createAccountLifecycleRuntime({
   }
 
   function accountsSnapshot() {
+    const identity = virtualIdentity(fs, accountsFile);
+    return identity ? identity.copy() : readAccountsFile();
+  }
+
+  function readAccountsFile() {
     const value = readJson(accountsFile, {});
     return {
       users: Array.isArray(value?.users) ? value.users : [],
@@ -172,16 +178,22 @@ function createAccountLifecycleRuntime({
     };
   }
 
+  function accountsRead() {
+    return virtualIdentity(fs, accountsFile) || readAccountsFile();
+  }
+
   function cloudSnapshot() {
     const value = readJson(cloudDataFile, {});
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
 
-  function userById(userId, snapshot = accountsSnapshot()) {
+  function userById(userId, snapshot = accountsRead()) {
+    if (snapshot instanceof IdentitySnapshot) return snapshot.userById(userId);
     return snapshot.users.find(user => String(user?.id || '') === String(userId)) || null;
   }
 
-  function userByEmail(email, snapshot = accountsSnapshot()) {
+  function userByEmail(email, snapshot = accountsRead()) {
+    if (snapshot instanceof IdentitySnapshot) return snapshot.userByEmail(email);
     const normalized = normalizeEmail(email);
     return snapshot.users.find(user => normalizeEmail(user?.email) === normalized) || null;
   }
@@ -193,12 +205,12 @@ function createAccountLifecycleRuntime({
     ) || null;
   }
 
-  function sessionInfoFromRequest(req, snapshot = accountsSnapshot()) {
+  function sessionInfoFromRequest(req, snapshot = accountsRead()) {
     const token = bearerToken(req);
     if (!token) return null;
     const sessionHash = sha256(token);
     if (revokedSessionHashes.has(sessionHash)) return null;
-    const session = snapshot.sessions?.[sessionHash];
+    const session = snapshot instanceof IdentitySnapshot ? snapshot.session(sessionHash) : snapshot.sessions?.[sessionHash];
     if (!session || Number(session?.expiresAt || session?.expires_at || 0) <= now()) return null;
     const userId = String(session?.userId || session?.user_id || '');
     if (!userId || deletedUserIds.has(userId)) return null;
@@ -478,7 +490,7 @@ function createAccountLifecycleRuntime({
   }
 
   async function requestEmailVerification(req, res) {
-    const snapshot = accountsSnapshot();
+    const snapshot = accountsRead();
     const email = normalizeEmail(req?.body?.email);
     const session = sessionInfoFromRequest(req, snapshot);
     const user = session?.user || userByEmail(email, snapshot);
@@ -678,8 +690,7 @@ function createAccountLifecycleRuntime({
   function loginRecoveryMiddleware(req, res, next) {
     const code = String(req?.body?.mfaCode || '');
     const identifier = String(req?.body?.email || req?.body?.identifier || '');
-    const snapshot = accountsSnapshot();
-    const user = userByEmail(identifier, snapshot);
+    const user = userByEmail(identifier);
     if (!user) return next();
     if (deletedUserIds.has(String(user.id))) return res.status(401).json({ error: 'Invalid email or password.' });
     if (!code.startsWith(RECOVERY_PREFIX) || !validateRecoveryCode(String(user.id), code)) return next();
