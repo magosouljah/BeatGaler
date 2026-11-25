@@ -37,25 +37,25 @@ const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
 /** «Add beat»: el navegador retiene el archivo y la revisión se abre (una visible). Devuelve el beat de revisión. */
 async function addForReview(name: string, over: { file?: File; slots?: Parameters<typeof fakeImporter.retain>[2]; beat?: Parameters<typeof reviewBeat>[1] } = {}) {
   const b = reviewBeat(name, over.beat); fakeImporter.retain(b.id, over.file ?? mp3(`${name}.mp3`), over.slots);
-  await act(async () => { sc().addBeatsAndReview([b]); }); return b;
+  await act(async () => { sc().imports.addBeatsAndReview([b]); }); return b;
 }
 /** «Save and finish»: resuelve cuando la revisión se cierra (primer byte enviado) o la importación se rechaza antes de subir. */
 async function save(b: ReturnType<typeof reviewBeat>) {
-  let error: unknown = null; await h.drive(sc().saveReview(b).catch((e) => { error = e; })); return error as Error | null;
+  let error: unknown = null; await h.drive(sc().imports.saveReview(b).catch((e) => { error = e; })); return error as Error | null;
 }
 /** Línea visible de la tarjeta/avisos para fijar la SECUENCIA de estados (no milisegundos). */
-const view = () => { const s = sc(); return `revisión=${s.review?.beat.name ?? "-"} subiendo=${s.uploads.map((u) => u.name).join("+") || "-"} tarjetas=${s.pendingCards.map((c) => c.beat.name).join("+") || "-"} aviso=${s.notice ?? "-"}`; };
+const view = () => { const s = sc(); return `revisión=${s.imports.review?.beat.name ?? "-"} subiendo=${s.imports.uploads.map((u) => u.name).join("+") || "-"} tarjetas=${s.imports.pendingCards.map((c) => c.beat.name).join("+") || "-"} aviso=${s.notice ?? "-"}`; };
 /** Retiene el primer envío al Puerto Direct hasta `release()` (latencia controlada: permite ver la tarjeta mientras «sube»). */
 function gateSend() { const port = h.server.directPort; const orig = port.send.bind(port); let release!: () => void; const gate = new Promise<void>((r) => { release = r; }); port.send = (async (...a: Parameters<typeof orig>) => { await gate; return orig(...a); }) as typeof port.send; return release; }
 /** Guarda sin avanzar más que lo justo (la subida sigue en segundo plano). */
-async function saveQuick(b: ReturnType<typeof reviewBeat>) { const p = sc().saveReview(b); for (let i = 0; i < 4; i++) await act(async () => { await vi.advanceTimersByTimeAsync(5); }); await p; }
+async function saveQuick(b: ReturnType<typeof reviewBeat>) { const p = sc().imports.saveReview(b); for (let i = 0; i < 4; i++) await act(async () => { await vi.advanceTimersByTimeAsync(5); }); await p; }
 const direct = () => h.server.directSent.map((d) => ({ caption: d.caption.replace(/top-\d+/, "top-N"), filename: d.filename, size: d.size }));
 
 // ============================================================================================================
 describe("I1 · añadir un beat (solo audio) con éxito", () => {
   it("la revisión se abre sin tocar el Cloud; guardar crea UNA operación IMPORT con clave de idempotencia y el archivo viaja por el Puerto Direct (nunca por el Cloud)", async () => {
     h = await mountEditHarness(); const b = await addForReview("Mi beat"); const m = h.mark();
-    expect(sc().review?.beat.id).toBe(b.id); expect(h.writes(m)).toEqual([]); expect(fakeImporter.released).toEqual([]);
+    expect(sc().imports.review?.beat.id).toBe(b.id); expect(h.writes(m)).toEqual([]); expect(fakeImporter.released).toEqual([]);
     expect(await save({ ...b, bpm: "140", key: "cm", tags: ["trap"], rating: 4 })).toBeNull(); await settle();
     const creates = opCreates(m); expect(creates).toHaveLength(1);
     expect(creates[0].body).toMatchObject({ kind: "IMPORT", metadata: { name: "Mi beat", bpm: "140", key: "cm", tags: ["trap"], rating: 4 } });
@@ -70,7 +70,7 @@ describe("I1 · añadir un beat (solo audio) con éxito", () => {
     h = await mountEditHarness(); const b = await addForReview("Mi beat"); const m = h.mark(); const r0 = h.refreshes();
     await save(b); await settle();
     expect([...h.server.beats.values()].filter((x) => x.name === "Mi beat")).toHaveLength(1);
-    expect(fakeImporter.released).toEqual([b.id]); expect(sc().review).toBeNull(); expect(sc().uploads).toEqual([]);
+    expect(fakeImporter.released).toEqual([b.id]); expect(sc().imports.review).toBeNull(); expect(sc().imports.uploads).toEqual([]);
     expect(sc().notice).toBe("«Mi beat» importado."); expect(h.refreshes() - r0).toBe(1);
     expect(h.services.mutations.pendingOperations()).toEqual([]);
     expect(h.writes(m).filter((r) => /\/commit$/.test(r.path))).toHaveLength(2); // COMPORTAMIENTO ACTUAL: primer commit 202 (recibo sin verificar) + segundo tras el sondeo
@@ -105,14 +105,14 @@ describe("I2 · con portada, PROJECT y WAV", () => {
     h = await mountEditHarness(); const b = await addForReview("Sin conv", { file: wav("x.wav"), beat: { has_wav: true } as never }); const m = h.mark();
     const err = await save(b);
     expect(err?.message).toBe("El WAV no pudo convertirse a MP3 para la reproducción."); expect(h.writes(m)).toEqual([]);
-    expect(sc().review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([]);
+    expect(sc().imports.review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([]);
   });
   it("PROJECT demasiado grande para el plan (413 del ticket): COMPORTAMIENTO ACTUAL — el error llega tras haber enviado MASTER; la revisión se reabre con el aviso y el archivo intacto", async () => {
     h = await mountEditHarness(); const zip = new File([new Uint8Array(900)], "big.zip", { type: "application/zip" });
     const b = await addForReview("Grande", { slots: { PROJECT: zip } }); h.server.setFailure({ route: /parts\/PROJECT%3A0\/send-ticket$/, status: 413, code: "PROJECT_TOO_LARGE" });
     await save(b); await settle();
     expect(h.server.directSent.map((d) => d.filename)).toEqual(["Grande.mp3"]); // el MASTER ya salió antes de rechazar el PROJECT
-    expect(sc().notice).toBe("No se pudo importar «Grande»: El PROJECT supera el tamaño máximo de tu plan. Tus cambios siguen en la revisión."); expect(sc().review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([]);
+    expect(sc().notice).toBe("No se pudo importar «Grande»: El PROJECT supera el tamaño máximo de tu plan. Tus cambios siguen en la revisión."); expect(sc().imports.review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([]);
   });
 });
 
@@ -127,8 +127,8 @@ describe("I3 · resultado incierto / bloqueado / agotado: NUNCA se reenvía a ci
     h = await mountK(k); const b = await addForReview("Dudoso"); arm(k); const m = h.mark(); const r0 = h.refreshes();
     expect(await save(b)).toBeNull(); await settle(steps(k));
     expect(opCreates(m)).toHaveLength(1); expect(h.server.directSent).toHaveLength(1);
-    expect(sc().notice).toBe(notice(k, "Dudoso")); expect(sc().uploads).toEqual([]); expect(sc().pendingCards).toEqual([]); // COMPORTAMIENTO ACTUAL: ninguna tarjeta falsa permanente (la ficha suponía «pendiente»)
-    expect(fakeImporter.released).toEqual([b.id]); expect(sc().review).toBeNull(); expect(h.refreshes() - r0).toBe(1);
+    expect(sc().notice).toBe(notice(k, "Dudoso")); expect(sc().imports.uploads).toEqual([]); expect(sc().imports.pendingCards).toEqual([]); // COMPORTAMIENTO ACTUAL: ninguna tarjeta falsa permanente (la ficha suponía «pendiente»)
+    expect(fakeImporter.released).toEqual([b.id]); expect(sc().imports.review).toBeNull(); expect(h.refreshes() - r0).toBe(1);
     expect(h.busy.filter((e) => e.beatId === b.id).map((e) => e.active)).toEqual([true, false]); // el overlay se enciende y se apaga sin «completado»
     expect(h.busy.some((e) => e.success)).toBe(false);
     expect(h.services.mutations.pendingOperations().map((r) => [r.kind, r.label, r.nameKey])).toEqual([["IMPORT", "Importar «Dudoso»", "dudoso"]]); // la referencia sigue persistida
@@ -139,7 +139,7 @@ describe("I3 · resultado incierto / bloqueado / agotado: NUNCA se reenvía a ci
     h.server.setFailure(null); const b2 = await addForReview("DUDOSO", { beat: { id: "local_file_otro" } }); const m = h.mark(); const sent = h.server.directSent.length;
     const err = await save(b2);
     expect(err?.message).toBe(DUP_PENDING); expect(opCreates(m)).toEqual([]); expect(h.server.directSent).toHaveLength(sent); expect(tickets(m)).toEqual([]);
-    expect(h.writes(m)).toEqual([]); expect(sc().review?.beat.id).toBe("local_file_otro"); expect(fakeImporter.released).toEqual([b.id]); // el segundo archivo sigue retenido
+    expect(h.writes(m)).toEqual([]); expect(sc().imports.review?.beat.id).toBe("local_file_otro"); expect(fakeImporter.released).toEqual([b.id]); // el segundo archivo sigue retenido
   });
   it("C7.8: la identidad de la operación está persistida ANTES de entregar el primer byte al Puerto Direct", async () => {
     h = await mountEditHarness(); const b = await addForReview("Orden"); const seen: Array<{ pendingAtSend: string[] }> = [];
@@ -168,7 +168,7 @@ describe("I4 · rechazo / error del Cloud", () => {
       h.server.setFailure({ route: /\/operations$/, status: 409, code });
       const err = await save(b);
       expect(err?.message).toBe(text); expect(sig(h.writes(m))).toEqual(["POST /catalog/v1/operations"]); expect(h.server.directSent).toEqual([]); // NAME_TAKEN: el doble no rellena el nombre (detail vacío)
-      expect(sc().review?.beat.id).toBe(b.id); expect(sc().uploads).toEqual([]); expect(sc().pendingCards).toEqual([]); expect(fakeImporter.released).toEqual([]); expect(h.refreshes() - r0).toBe(0);
+      expect(sc().imports.review?.beat.id).toBe(b.id); expect(sc().imports.uploads).toEqual([]); expect(sc().imports.pendingCards).toEqual([]); expect(fakeImporter.released).toEqual([]); expect(h.refreshes() - r0).toBe(0);
       expect(h.busy).toEqual([]); await h.teardown(); fakeImporter.reset();
     }
   });
@@ -177,8 +177,8 @@ describe("I4 · rechazo / error del Cloud", () => {
     h.server.setFailure({ route: /\/commit$/, status: 500, code: "BOOM" });
     const edited = { ...b, bpm: "99", tags: ["a"] }; expect(await save(edited)).toBeNull(); await settle(8);
     expect(sc().notice).toBe("No se pudo importar «Falla commit»: fake BOOM. Tus cambios siguen en la revisión.");
-    expect(sc().review?.beat).toMatchObject({ id: b.id, bpm: "99", tags: ["a"] }); expect(fakeImporter.released).toEqual([]); expect(fakeImporter.port.fileForBeat(b.id)).not.toBeNull();
-    expect(sc().uploads).toEqual([]); expect(sc().pendingCards).toEqual([]); expect(h.refreshes() - r0).toBe(0); expect(h.server.directSent).toHaveLength(1);
+    expect(sc().imports.review?.beat).toMatchObject({ id: b.id, bpm: "99", tags: ["a"] }); expect(fakeImporter.released).toEqual([]); expect(fakeImporter.port.fileForBeat(b.id)).not.toBeNull();
+    expect(sc().imports.uploads).toEqual([]); expect(sc().imports.pendingCards).toEqual([]); expect(h.refreshes() - r0).toBe(0); expect(h.server.directSent).toHaveLength(1);
     expect(h.busy.filter((e) => e.beatId === b.id).map((e) => e.active)).toEqual([true, false]);
     expect(h.writes(m).filter((r) => /\/commit$/.test(r.path))).toHaveLength(1);
     expect([...h.server.beats.values()].some((x) => x.name === "Falla commit")).toBe(false);
@@ -186,8 +186,8 @@ describe("I4 · rechazo / error del Cloud", () => {
   it("COMPORTAMIENTO ACTUAL: tras ese fallo, guardar de nuevo desde la revisión reabierta se RECHAZA por la regla de pendiente (la operación sigue sin resolver en el servidor): cero operaciones y cero bytes nuevos", async () => {
     h = await mountEditHarness(); const b = await addForReview("Falla commit"); h.server.setFailure({ route: /\/commit$/, status: 500, code: "BOOM" });
     await save(b); await settle(8); h.server.setFailure(null); const m = h.mark(); const sent = h.server.directSent.length;
-    const err = await save(sc().review!.beat); await settle(4);
-    expect(err?.message).toBe(DUP_PENDING); expect(opCreates(m)).toEqual([]); expect(h.server.directSent).toHaveLength(sent); expect(sc().review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([]);
+    const err = await save(sc().imports.review!.beat); await settle(4);
+    expect(err?.message).toBe(DUP_PENDING); expect(opCreates(m)).toEqual([]); expect(h.server.directSent).toHaveLength(sent); expect(sc().imports.review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([]);
   });
 });
 
@@ -195,25 +195,25 @@ describe("I4 · rechazo / error del Cloud", () => {
 describe("I5 · cancelación por el usuario", () => {
   it("cancelar la revisión: libera el archivo, no emite NINGUNA petición y no importa nada", async () => {
     h = await mountEditHarness(); const b = await addForReview("Cancelado"); const m = h.mark(); const r0 = h.refreshes();
-    await act(async () => { sc().cancelReview(); });
-    expect(sc().review).toBeNull(); expect(fakeImporter.released).toEqual([b.id]); expect(h.since(m)).toEqual([]); expect(h.refreshes() - r0).toBe(0); expect(sc().notice).toBeNull();
+    await act(async () => { sc().imports.cancelReview(); });
+    expect(sc().imports.review).toBeNull(); expect(fakeImporter.released).toEqual([b.id]); expect(h.since(m)).toEqual([]); expect(h.refreshes() - r0).toBe(0); expect(sc().notice).toBeNull();
   });
   it("una sola revisión visible: la segunda espera en cola y se abre al cancelar la primera (sin perder su archivo)", async () => {
     h = await mountEditHarness(); const a = await addForReview("A"); const b = await addForReview("B");
-    expect(sc().review?.beat.id).toBe(a.id); await act(async () => { sc().cancelReview(); });
-    expect(sc().review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([a.id]); expect(fakeImporter.port.fileForBeat(b.id)).not.toBeNull();
+    expect(sc().imports.review?.beat.id).toBe(a.id); await act(async () => { sc().imports.cancelReview(); });
+    expect(sc().imports.review?.beat.id).toBe(b.id); expect(fakeImporter.released).toEqual([a.id]); expect(fakeImporter.port.fileForBeat(b.id)).not.toBeNull();
   });
   it("sin archivo retenido: no se abre revisión, aviso «No se encontró el archivo…» y nada llega al Cloud", async () => {
     h = await mountEditHarness(); const m = h.mark();
-    await act(async () => { sc().addBeatsAndReview([reviewBeat("Huérfano")]); });
-    expect(sc().review).toBeNull(); expect(sc().notice).toBe("No se encontró el archivo del beat a importar."); expect(h.since(m)).toEqual([]);
+    await act(async () => { sc().imports.addBeatsAndReview([reviewBeat("Huérfano")]); });
+    expect(sc().imports.review).toBeNull(); expect(sc().notice).toBe("No se encontró el archivo del beat a importar."); expect(h.since(m)).toEqual([]);
   });
   // COMPORTAMIENTO ACTUAL: no existe cancelación de una subida EN CURSO desde la interfaz del hook (no hay `cancelUpload`; la revisión ya está cerrada y el
   // archivo retenido hasta que termine la subida). Lo único cancelable es la revisión antes de «Save and finish».
   it("no existe cancelación de una subida en curso: tras guardar, cancelReview no aborta ni libera nada", async () => {
     h = await mountEditHarness(); const b = await addForReview("En curso"); await save(b);
     expect(Object.keys(sc()).filter((k) => /cancel.*(upload|import)|abort/i.test(k))).toEqual([]);
-    await act(async () => { sc().cancelReview(); }); expect(fakeImporter.released).toEqual([]); await settle();
+    await act(async () => { sc().imports.cancelReview(); }); expect(fakeImporter.released).toEqual([]); await settle();
     expect(sc().notice).toBe("«En curso» importado."); expect(fakeImporter.released).toEqual([b.id]);
   });
 });
@@ -222,11 +222,11 @@ describe("I5 · cancelación por el usuario", () => {
 describe("I6 · dos importaciones seguidas: no se mezclan identidades", () => {
   it("la segunda revisión se abre al guardar la primera; cada beat tiene SU operación, SU clave, SU archivo y SU recibo; aviso agregado mientras ambas suben", async () => {
     h = await mountEditHarness(); const a = await addForReview("Alfa", { file: mp3("alfa.mp3") }); const bb = await addForReview("Beta", { file: mp3("beta.mp3") }); const m = h.mark();
-    expect(sc().review?.beat.id).toBe(a.id);
+    expect(sc().imports.review?.beat.id).toBe(a.id);
     await saveQuick({ ...a, bpm: "100" });
-    expect(sc().review?.beat.id).toBe(bb.id); expect(sc().notice).toBe("Subiendo «Alfa»… 100 %");
+    expect(sc().imports.review?.beat.id).toBe(bb.id); expect(sc().notice).toBe("Subiendo «Alfa»… 100 %");
     await saveQuick({ ...bb, bpm: "200" });
-    expect(sc().uploads.map((u) => u.name)).toEqual(expect.arrayContaining(["Alfa", "Beta"])); expect(sc().notice).toMatch(/^Subiendo 2 beats… \d+ %$/);
+    expect(sc().imports.uploads.map((u) => u.name)).toEqual(expect.arrayContaining(["Alfa", "Beta"])); expect(sc().notice).toMatch(/^Subiendo 2 beats… \d+ %$/);
     await settle();
     const creates = opCreates(m); expect(creates.map((r) => r.body.metadata.name)).toEqual(["Alfa", "Beta"]); expect(creates.map((r) => r.body.metadata.bpm)).toEqual(["100", "200"]);
     expect(new Set(creates.map((r) => r.headers["Idempotency-Key"])).size).toBe(2);
@@ -257,7 +257,7 @@ describe("I7 · la tarjeta de subida aparece y desaparece en la secuencia actual
   async function timeline(prepare?: () => (() => void) | void, run = 14000) {
     const tl: string[] = []; const push = () => { const v = view(); if (tl[tl.length - 1] !== v) tl.push(v); };
     const b = await addForReview("Tarjeta"); const release = prepare?.(); push();
-    const p = sc().saveReview(b); if (release) { await act(async () => { await vi.advanceTimersByTimeAsync(250); }); push(); release(); } for (let t = 0; t < run; t += 250) { await act(async () => { await vi.advanceTimersByTimeAsync(250); }); push(); } await p; push();
+    const p = sc().imports.saveReview(b); if (release) { await act(async () => { await vi.advanceTimersByTimeAsync(250); }); push(); release(); } for (let t = 0; t < run; t += 250) { await act(async () => { await vi.advanceTimersByTimeAsync(250); }); push(); } await p; push();
     return { tl, b };
   }
   it("éxito: revisión abierta → (se cierra y aparece la tarjeta con aviso «Subiendo»; overlay ocupado) → sube al 100 % → aviso «importado» con la tarjeta aún → la tarjeta se retira", async () => {
@@ -273,8 +273,8 @@ describe("I7 · la tarjeta de subida aparece y desaparece en la secuencia actual
   });
   it("COMPORTAMIENTO ACTUAL: la tarjeta provisional se retira por la red de seguridad de 5 s cuando la real no llega a la vista (el doble de la Gallery no conoce el beat nuevo); el traspaso ocurre UNA sola vez", async () => {
     h = await mountEditHarness(); const b = await addForReview("Traspaso"); await save(b);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); }); expect(sc().pendingCards.map((c) => c.beat.name)).toEqual(["Traspaso"]); // commit hecho (~1,5 s) pero la tarjeta sigue
-    await act(async () => { await vi.advanceTimersByTimeAsync(4000); }); expect(sc().pendingCards).toEqual([]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); }); expect(sc().imports.pendingCards.map((c) => c.beat.name)).toEqual(["Traspaso"]); // commit hecho (~1,5 s) pero la tarjeta sigue
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); }); expect(sc().imports.pendingCards).toEqual([]);
     expect(h.busy.filter((e) => e.success)).toHaveLength(1); await settle(); expect(h.busy.filter((e) => e.success)).toHaveLength(1);
   });
   it("incierto (envío en vuelo): revisión → tarjeta con «Subiendo… 0 %» → la tarjeta desaparece SIN «completado» y queda el aviso persistente", async () => {
@@ -296,9 +296,9 @@ describe("I7 · la tarjeta de subida aparece y desaparece en la secuencia actual
   });
   it("con una búsqueda activa la tarjeta NO se dibuja (no encajaría en la vista): solo queda el aviso de progreso, y el beat se importa igual", async () => {
     h = await mountEditHarness(); const b = await addForReview("Tarjeta");
-    await act(async () => { sc().setSearch("beat"); await vi.advanceTimersByTimeAsync(600); }); await settle(1, 300);
+    await act(async () => { sc().filters.setSearch("beat"); await vi.advanceTimersByTimeAsync(600); }); await settle(1, 300);
     expect(await save(b)).toBeNull();
-    expect(sc().pendingCards).toEqual([]); expect(sc().uploads.map((u) => u.name)).toEqual(["Tarjeta"]); expect(sc().notice).toBe("Subiendo «Tarjeta»… 100 %");
+    expect(sc().imports.pendingCards).toEqual([]); expect(sc().imports.uploads.map((u) => u.name)).toEqual(["Tarjeta"]); expect(sc().notice).toBe("Subiendo «Tarjeta»… 100 %");
     await settle(); expect(sc().notice).toBe("«Tarjeta» importado."); expect(h.busy.some((e) => e.beatId === b.id)).toBe(false);
   });
   it("un aviso «importado» anterior no tapa el avance de la siguiente subida; un error o incierto anterior SÍ permanece", async () => {

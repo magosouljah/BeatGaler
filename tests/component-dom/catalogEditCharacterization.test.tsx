@@ -46,15 +46,15 @@ async function openDrawer(ids: string[], props: Omit<Partial<React.ComponentProp
   saveReview?: React.ComponentProps<typeof Drawer>["onSaved"];
 } = {}) {
   const sc = () => h.scope();
-  for (const id of ids.length > 1 ? ids : []) await act(async () => { sc().toggleSelection(sc().toBeat(h.dto(id)), false); });
+  for (const id of ids.length > 1 ? ids : []) await act(async () => { sc().selection.toggleSelection(sc().toBeat(h.dto(id)), false); });
   const beat = sc().toBeat(h.dto(ids[0]));
-  const selected = ids.length > 1 ? sc().selectedBeats : undefined;
+  const selected = ids.length > 1 ? sc().selection.selectedBeats : undefined;
   const onClose = vi.fn(); const host = document.createElement("div"); document.body.appendChild(host); const root = createRoot(host); roots.push(root);
   const { saveReview, ...drawerProps } = props;
   await act(async () => { root.render(<Drawer beat={beat} mode="edit" onClose={onClose} onReleaseAudio={() => {}} tagSuggestions={[]}
     selectedBeats={selected} mutationAllowed onWebSave={(request) => request.kind === "review" && saveReview
       ? saveReview(request.updated, request.onProgress)
-      : sc().saveWebDrawer(request)} {...drawerProps} />); });
+      : sc().editor.saveWebDrawer(request)} {...drawerProps} />); });
   const buttons = () => Array.from(host.querySelectorAll("button"));
   const find = (re: RegExp) => buttons().find((b) => re.test(b.textContent?.trim() ?? ""));
   return {
@@ -227,7 +227,7 @@ describe("S2 · guardar el Drawer con archivos (REPLACE) — éxito / incierto /
   });
   it("quitar portada + archivo en el mismo guardado: dos pasos (PATCH artwork:null con expectedVersion y luego REPLACE con la versión confirmada)", async () => {
     h = await mountFor("success"); const sc = h.scope(); const beat = sc.toBeat(h.dto("g0")); const m = h.mark();
-    await h.drive(sc.saveDrawerToCatalog({ original: { ...beat, image_base64: "data:image/png;base64,AAAA" }, updated: { ...beat, image_base64: null }, files: { MASTER: mp3() }, artworkRemoved: true }));
+    await h.drive(sc.editor.saveDrawerToCatalog({ original: { ...beat, image_base64: "data:image/png;base64,AAAA" }, updated: { ...beat, image_base64: null }, files: { MASTER: mp3() }, artworkRemoved: true }));
     const w = h.writes(m);
     expect(w[0]).toMatchObject({ method: "PATCH", path: "/catalog/v1/beats/g0", body: { expectedVersion: "1", patch: { artwork: null } } });
     const op = w.find((r) => r.path === "/catalog/v1/operations")!; expect(op.body).toMatchObject({ kind: "REPLACE", expectedVersion: "2" });
@@ -235,14 +235,14 @@ describe("S2 · guardar el Drawer con archivos (REPLACE) — éxito / incierto /
   });
   it("quitar portada sin archivos: un solo PATCH con artwork:null", async () => {
     h = await mountFor("success"); const sc = h.scope(); const beat = sc.toBeat(h.dto("g0")); const m = h.mark();
-    await h.drive(sc.saveDrawerToCatalog({ original: { ...beat, image_base64: "data:image/png;base64,AAAA" }, updated: { ...beat, image_base64: null }, files: {}, artworkRemoved: true }));
+    await h.drive(sc.editor.saveDrawerToCatalog({ original: { ...beat, image_base64: "data:image/png;base64,AAAA" }, updated: { ...beat, image_base64: null }, files: {}, artworkRemoved: true }));
     expect(h.writes(m).map((r) => [r.method, r.body])).toEqual([["PATCH", { expectedVersion: "1", patch: { artwork: null } }]]);
   });
   // FALLO CONOCIDO (X03): se conserva hasta M9. La vía `commitDrawerCloudMutation` (solo la alcanza el Drawer en Desktop) da un error genérico y NO refresca ante incierto;
   // `createBeatEditor().saveDrawer` (la vía Web) da el aviso «pendiente» y refresca. Se fija la vía genérica llamándola como lo hace el Drawer.
   it("X03 · commitDrawerCloudMutation ante incierto: error genérico «La operación quedó en estado uncertain…», sin refresco", async () => {
     h = await mountFor("uncertain"); arm("uncertain", "g0"); const sc = h.scope(); const beat = sc.toBeat(h.dto("g0")); const r0 = h.refreshes();
-    const err = await h.drive(sc.commitDrawerCloudMutation({ ...beat, image_base64: "data:image/png;base64,iVBORw0KGgo=" }).then(() => null, (e: Error) => e));
+    const err = await h.drive(sc.editor.commitDrawerCloudMutation({ ...beat, image_base64: "data:image/png;base64,iVBORw0KGgo=" }).then(() => null, (e: Error) => e));
     expect(err?.message).toBe("La operación quedó en estado uncertain; el servidor conserva el resultado."); expect(h.refreshes() - r0).toBe(0);
   });
 });
@@ -268,25 +268,25 @@ describe("S2 · guardado en lote del Drawer (varios beats seleccionados)", () =>
   // (Drawer.tsx, rama isBulk) pero `applyBulkUpdate` en sí envía lo que recibe, y el guardado individual (`saveDrawerToCatalog`) tampoco normaliza.
   it("X06 · por debajo del Drawer: applyBulkUpdate y saveDrawerToCatalog envían los tags tal cual, sin pasar a minúsculas", async () => {
     h = await mountFor("success"); const sc = h.scope(); const beat = sc.toBeat(h.dto("g0"));
-    await h.drive(sc.saveDrawerToCatalog({ original: beat, updated: { ...beat, tags: ["Rock"] }, files: {}, artworkRemoved: false }));
+    await h.drive(sc.editor.saveDrawerToCatalog({ original: beat, updated: { ...beat, tags: ["Rock"] }, files: {}, artworkRemoved: false }));
     expect(h.writes()[h.writes().length - 1].body.patch.tags).toEqual(["Rock"]);
-    await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g1")), false); }); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g2")), false); });
-    const m = h.mark(); await act(async () => { h.scope().applyBulkUpdate({ tags: ["Rock"] }, { tagsMode: "add" }); }); await settle();
+    await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g1")), false); }); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g2")), false); });
+    const m = h.mark(); await act(async () => { h.scope().selection.applyBulkUpdate({ tags: ["Rock"] }, { tagsMode: "add" }); }); await settle();
     expect(h.writes(m).find((r) => r.path === "/catalog/v1/operations")!.body.tagsOp).toEqual({ op: "add", tags: ["Rock"] });
   });
   it("reemplazar tags en lote viaja como patch.tags (no como tagsOp)", async () => {
-    h = await mountFor("success"); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g1")), false); });
-    const m = h.mark(); await act(async () => { h.scope().applyBulkUpdate({ tags: ["x1"] }, { tagsMode: "replace" }); }); await settle();
+    h = await mountFor("success"); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g1")), false); });
+    const m = h.mark(); await act(async () => { h.scope().selection.applyBulkUpdate({ tags: ["x1"] }, { tagsMode: "replace" }); }); await settle();
     const body = h.writes(m).find((r) => r.path === "/catalog/v1/operations")!.body; expect(body.patch).toEqual({ tags: ["x1"] }); expect(body.tagsOp).toBeUndefined();
   });
   it("modo de tags no soportado: aviso y ninguna petición de escritura", async () => {
-    h = await mountFor("success"); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); const m = h.mark();
-    await act(async () => { h.scope().applyBulkUpdate({ tags: ["x"] }, { tagsMode: "bogus" as unknown as "add" }); }); await settle(2);
+    h = await mountFor("success"); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); const m = h.mark();
+    await act(async () => { h.scope().selection.applyBulkUpdate({ tags: ["x"] }, { tagsMode: "bogus" as unknown as "add" }); }); await settle(2);
     expect(h.scope().notice).toBe("En el catálogo, «añadir» o «quitar» tags en lote aún no está disponible: usa «reemplazar»."); expect(h.writes(m)).toEqual([]);
   });
   it("conflicto (la biblioteca cambió tras seleccionar): el lote no se aplica y el aviso lo cuenta", async () => {
-    h = await mountFor("success"); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g1")), false); });
-    h.server.externalEdit("g3"); await act(async () => { h.scope().applyBulkUpdate({ rating: 4 }); }); await settle();
+    h = await mountFor("success"); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g1")), false); });
+    h.server.externalEdit("g3"); await act(async () => { h.scope().selection.applyBulkUpdate({ rating: 4 }); }); await settle();
     expect(h.server.beats.get("g0")!.rating).not.toBe(4); expect(h.scope().notice).toMatch(/SELECTION_CONFLICT|library revision changed|conflict/i);
   });
 });
@@ -296,7 +296,7 @@ describe("S3 · reemplazar audio soltando un archivo sobre la tarjeta", () => {
   const PEND = "No se pudo reemplazar el audio: El reemplazo sigue confirmándose en el servidor; no lo repitas. El archivo se actualizará si se recibió.";
   it("éxito: confirma antes de tocar nada; REPLACE con expectedVersion; tarjeta ocupada → completada; aviso y refresco", async () => {
     h = await mountFor("success"); const m = h.mark(); const r0 = h.refreshes();
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3()));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()));
     expect(confirmMock).toHaveBeenCalledOnce(); expect(confirmMock.mock.calls[0][0].title).toBe("Replace MP3?");
     const w = h.writes(m); const op = w.find((r) => r.path === "/catalog/v1/operations")!;
     expect(op.body).toMatchObject({ kind: "REPLACE", beatId: "g0", expectedVersion: "1", metadata: null }); expect(op.headers["Idempotency-Key"]).toBeTruthy();
@@ -306,51 +306,51 @@ describe("S3 · reemplazar audio soltando un archivo sobre la tarjeta", () => {
   });
   it("WAV nuevo: «Add WAV?», parte WAV, aviso «WAV añadido.»", async () => {
     h = await mountFor("success"); const m = h.mark();
-    await h.drive(h.scope().replaceAudioByDrop("g0", wav()));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", wav()));
     expect(confirmMock.mock.calls[0][0].title).toBe("Add WAV?");
     expect(h.writes(m).find((r) => r.path === "/catalog/v1/operations")!.body.parts.map((p: { role: string }) => p.role)).toEqual(["WAV"]); expect(h.scope().notice).toBe("WAV añadido.");
   });
   it("cancelar la confirmación: no hay escrituras, la tarjeta no se marca ocupada, sin aviso", async () => {
     h = await mountFor("success"); confirmMock.mockResolvedValueOnce(false); const m = h.mark(); const r0 = h.refreshes();
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3()));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()));
     expect(h.writes(m)).toEqual([]); expect(h.busy).toEqual([]); expect(h.scope().notice).toBeNull(); expect(h.refreshes() - r0).toBe(0);
   });
   it("archivo no soportado: aviso y ni siquiera se lee el beat", async () => {
     h = await mountFor("success"); const m = h.mark();
-    await h.drive(h.scope().replaceAudioByDrop("g0", new File(["x"], "nota.txt", { type: "text/plain" })));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", new File(["x"], "nota.txt", { type: "text/plain" })));
     expect(h.since(m)).toEqual([]); expect(confirmMock).not.toHaveBeenCalled(); expect(h.busy).toEqual([]); expect(h.scope().notice).toBe("Solo se pueden soltar archivos MP3 o WAV.");
   });
   // FALLO CONOCIDO (X04): se conserva hasta M9. «Pendiente» (incierto/bloqueado/agotado): el aviso dice que se actualizará si se recibió, pero la tarjeta
   // termina como NO completada y la biblioteca NO se refresca (el Drawer y la importación sí refrescan en pendiente).
   it.each<[Kind]>([["uncertain"], ["blocked"], ["timeout"]])("X04 · %s: aviso «no lo repitas», tarjeta NO completada y SIN refresco", async (kind) => {
     h = await mountFor(kind); arm(kind, "g0"); const r0 = h.refreshes();
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3()), 1500, 500);
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()), 1500, 500);
     expect(h.scope().notice).toBe(PEND); expect(h.busy).toEqual([{ beatId: "g0", active: true, success: false }, { beatId: "g0", active: false, success: false }]);
     expect(h.refreshes() - r0).toBe(0); expect(h.server.directSent).toHaveLength(1);
   });
   it("conflicto de versión al confirmar: «Este beat cambió en otro dispositivo; no se reemplazó nada», tarjeta no completada, sin refresco", async () => {
     h = await mountFor("conflict"); arm("conflict", "g0"); const r0 = h.refreshes();
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3()));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()));
     expect(h.scope().notice).toBe("No se pudo reemplazar el audio: Este beat cambió en otro dispositivo; no se reemplazó nada. Vuelve a intentarlo.");
     expect(h.busy.at(-1)).toEqual({ beatId: "g0", active: false, success: false }); expect(h.refreshes() - r0).toBe(0);
   });
   it("conflicto al CREAR la operación (versión ya vieja): el error llega como aviso de fallo, sin bytes enviados", async () => {
     h = await mountFor("success"); confirmMock.mockImplementationOnce(async () => { h.server.externalEdit("g0"); return true; }); // la otra sesión edita entre leer el beat y confirmar
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3()));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()));
     expect(h.scope().notice).toMatch(/^No se pudo reemplazar el audio: /); expect(h.server.directSent).toHaveLength(0); expect(h.busy.at(-1)).toEqual({ beatId: "g0", active: false, success: false });
   });
   it.each<[Kind]>([["uncertain"], ["blocked"], ["timeout"]])("tras %s, soltar otra vez NO reenvía (C7.8): cero operaciones y cero bytes nuevos, aviso de subida anterior", async (kind) => {
     h = await mountFor(kind); arm(kind, "g0");
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3()), 1500, 500);
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()), 1500, 500);
     const m = h.mark(); const sent = h.server.directSent.length;
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3("otra.mp3")));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3("otra.mp3")));
     expect(h.writes(m).filter((r) => r.method === "POST")).toEqual([]); expect(h.server.directSent).toHaveLength(sent);
     expect(h.scope().notice).toBe("No se pudo reemplazar el audio: Una subida anterior de este beat todavía se está confirmando en el servidor. No se vuelve a enviar para no duplicarla: espera a que termine (el beat aparecerá si se recibió).");
   });
   it("tras un conflicto, soltar otra vez procede con la versión releída (la operación anterior terminó sin efecto)", async () => {
     h = await mountFor("conflict"); arm("conflict", "g0");
-    await h.drive(h.scope().replaceAudioByDrop("g0", mp3()));
-    const m = h.mark(); await h.drive(h.scope().replaceAudioByDrop("g0", mp3()));
+    await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()));
+    const m = h.mark(); await h.drive(h.scope().editor.replaceAudioByDrop("g0", mp3()));
     const op = h.writes(m).find((r) => r.path === "/catalog/v1/operations")!; expect(op.body.expectedVersion).toBe("2"); expect(h.scope().notice).toBe("MP3 reemplazado.");
   });
 });
@@ -361,7 +361,7 @@ describe("S4 · reemplazar portada soltando una imagen sobre la tarjeta", () => 
   const PEND = "No se pudo cambiar la portada: El cambio sigue confirmándose en el servidor; no lo repitas. La portada se actualizará si se recibió.";
   it("éxito: sin confirmación; tarjeta ocupada desde el inicio → completada; REPLACE solo con la parte ARTWORK; aviso y refresco", async () => {
     h = await mountFor("success"); const m = h.mark(); const r0 = h.refreshes();
-    await h.drive(h.scope().replaceArtworkByDrop("g0", src(png())));
+    await h.drive(h.scope().editor.replaceArtworkByDrop("g0", src(png())));
     expect(confirmMock).not.toHaveBeenCalled();
     const op = h.writes(m).find((r) => r.path === "/catalog/v1/operations")!; expect(op.body).toMatchObject({ kind: "REPLACE", beatId: "g0", expectedVersion: "1", metadata: null }); expect(op.body.parts.map((p: { role: string }) => p.role)).toEqual(["ARTWORK"]);
     expect(h.busy).toEqual([{ beatId: "g0", active: true, success: false }, { beatId: "g0", active: false, success: true }]);
@@ -369,32 +369,32 @@ describe("S4 · reemplazar portada soltando una imagen sobre la tarjeta", () => 
   });
   it("sin imagen utilizable: aviso con el motivo, tarjeta ocupada → no completada, ninguna petición", async () => {
     h = await mountFor("success"); const m = h.mark();
-    await h.drive(h.scope().replaceArtworkByDrop("g0", src(new File(["x"], "a.txt", { type: "text/plain" }))));
+    await h.drive(h.scope().editor.replaceArtworkByDrop("g0", src(new File(["x"], "a.txt", { type: "text/plain" }))));
     expect(h.since(m)).toEqual([]); expect(h.scope().notice).toBe("No se pudo cambiar la portada: file: formato de imagen no compatible");
     expect(h.busy).toEqual([{ beatId: "g0", active: true, success: false }, { beatId: "g0", active: false, success: false }]);
   });
   // FALLO CONOCIDO (X04): se conserva hasta M9 (misma regla que S3: pendiente ⇒ tarjeta no completada y sin refresco).
   it.each<[Kind]>([["uncertain"], ["blocked"], ["timeout"]])("X04 · %s: aviso «no lo repitas», tarjeta NO completada y SIN refresco", async (kind) => {
     h = await mountFor(kind); arm(kind, "g0"); const r0 = h.refreshes();
-    await h.drive(h.scope().replaceArtworkByDrop("g0", src(png())), 1500, 500);
+    await h.drive(h.scope().editor.replaceArtworkByDrop("g0", src(png())), 1500, 500);
     expect(h.scope().notice).toBe(PEND); expect(h.busy.at(-1)).toEqual({ beatId: "g0", active: false, success: false }); expect(h.refreshes() - r0).toBe(0); expect(h.server.directSent).toHaveLength(1);
   });
   it("conflicto de versión al confirmar: «la portada no se cambió», tarjeta no completada, sin refresco", async () => {
     h = await mountFor("conflict"); arm("conflict", "g0"); const r0 = h.refreshes();
-    await h.drive(h.scope().replaceArtworkByDrop("g0", src(png())));
+    await h.drive(h.scope().editor.replaceArtworkByDrop("g0", src(png())));
     expect(h.scope().notice).toBe("No se pudo cambiar la portada: Este beat cambió en otro dispositivo; la portada no se cambió. Vuelve a intentarlo."); expect(h.busy.at(-1)?.success).toBe(false); expect(h.refreshes() - r0).toBe(0);
   });
   it.each<[Kind]>([["uncertain"], ["blocked"], ["timeout"]])("tras %s, soltar otra imagen NO reenvía (C7.8)", async (kind) => {
     h = await mountFor(kind); arm(kind, "g0");
-    await h.drive(h.scope().replaceArtworkByDrop("g0", src(png())), 1500, 500);
+    await h.drive(h.scope().editor.replaceArtworkByDrop("g0", src(png())), 1500, 500);
     const m = h.mark(); const sent = h.server.directSent.length;
-    await h.drive(h.scope().replaceArtworkByDrop("g0", src(png("otra.png"))));
+    await h.drive(h.scope().editor.replaceArtworkByDrop("g0", src(png("otra.png"))));
     expect(h.writes(m).filter((r) => r.method === "POST")).toEqual([]); expect(h.server.directSent).toHaveLength(sent);
     expect(h.scope().notice).toContain("Una subida anterior de este beat todavía se está confirmando en el servidor.");
   });
   it("la primera fuente inutilizable no impide usar la siguiente", async () => {
     h = await mountFor("success"); const m = h.mark();
-    await h.drive(h.scope().replaceArtworkByDrop("g0", [{ kind: "file", file: new File(["x"], "a.txt", { type: "text/plain" }) }, { kind: "file", file: png() }]));
+    await h.drive(h.scope().editor.replaceArtworkByDrop("g0", [{ kind: "file", file: new File(["x"], "a.txt", { type: "text/plain" }) }, { kind: "file", file: png() }]));
     expect(h.writes(m).find((r) => r.path === "/catalog/v1/operations")!.body.parts[0].role).toBe("ARTWORK"); expect(h.scope().notice).toBe("Portada actualizada.");
   });
 });
@@ -403,30 +403,30 @@ describe("S4 · reemplazar portada soltando una imagen sobre la tarjeta", () => 
 describe("S5 · papelera (tarjeta y lote; el Drawer del catálogo no tiene acción de papelera)", () => {
   it("tarjeta · éxito: POST /beats/trash con expectedVersion e idempotencia; refresca; sin aviso", async () => {
     h = await mountFor("success"); const beat = h.scope().toBeat(h.dto("g0")); const m = h.mark(); const r0 = h.refreshes();
-    await act(async () => { h.scope().deleteBeat(beat); }); await settle(2);
+    await act(async () => { h.scope().editor.deleteBeat(beat); }); await settle(2);
     const w = h.writes(m); expect(sig(w)).toEqual(["POST /catalog/v1/beats/trash"]);
     expect(w[0].body).toEqual({ items: [{ beatId: "g0", expectedVersion: "1" }] }); expect(w[0].headers["Idempotency-Key"]).toMatch(/\S{8,}/);
     expect(h.server.beats.get("g0")!.state).toBe("TRASH"); expect(h.refreshes() - r0).toBe(1); expect(h.scope().notice).toBeNull();
   });
   it("tarjeta · conflicto de versión: nada se aplica, aviso de «la biblioteca cambió» y refresca igualmente; un solo intento", async () => {
     h = await mountFor("success"); const beat = h.scope().toBeat(h.dto("g0")); h.server.externalEdit("g0"); const m = h.mark(); const r0 = h.refreshes();
-    await act(async () => { h.scope().deleteBeat(beat); }); await settle(2);
+    await act(async () => { h.scope().editor.deleteBeat(beat); }); await settle(2);
     expect(sig(h.writes(m))).toEqual(["POST /catalog/v1/beats/trash"]); expect(h.server.beats.get("g0")!.state).toBe("ACTIVE");
     expect(h.scope().notice).toBe("La biblioteca cambió en otro dispositivo; revisa antes de borrar."); expect(h.refreshes() - r0).toBe(1);
   });
   it("tarjeta · cualquier error de API (503) se presenta con el MISMO aviso de conflicto (se conserva tal cual)", async () => {
     h = await mountFor("success"); const beat = h.scope().toBeat(h.dto("g0")); h.server.setFailure({ route: /\/beats\/trash$/, status: 503, code: "UNAVAILABLE" });
-    await act(async () => { h.scope().deleteBeat(beat); }); await settle(2);
+    await act(async () => { h.scope().editor.deleteBeat(beat); }); await settle(2);
     expect(h.scope().notice).toBe("La biblioteca cambió en otro dispositivo; revisa antes de borrar."); expect(h.server.beats.get("g0")!.state).toBe("ACTIVE");
   });
   it("tarjeta · beat desconocido para la ventana: no se emite nada", async () => {
     h = await mountFor("success"); const m = h.mark();
-    await act(async () => { h.scope().deleteBeat({ ...h.scope().toBeat(h.dto("g0")), id: "no-existe" }); }); await settle(2);
+    await act(async () => { h.scope().editor.deleteBeat({ ...h.scope().toBeat(h.dto("g0")), id: "no-existe" }); }); await settle(2);
     expect(h.writes(m)).toEqual([]);
   });
   it("lote · éxito: BULK_TRASH sobre la selección; aviso con recuento y refresco", async () => {
-    h = await mountFor("success"); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); await act(async () => { h.scope().toggleSelection(h.scope().toBeat(h.dto("g1")), false); });
-    const m = h.mark(); const r0 = h.refreshes(); await act(async () => { h.scope().handleRemoveBulk(); }); await settle();
+    h = await mountFor("success"); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g0")), false); }); await act(async () => { h.scope().selection.toggleSelection(h.scope().toBeat(h.dto("g1")), false); });
+    const m = h.mark(); const r0 = h.refreshes(); await act(async () => { h.scope().selection.handleRemoveBulk(); }); await settle();
     const op = h.writes(m).find((r) => r.path === "/catalog/v1/operations")!; expect(op.body.kind).toBe("BULK_TRASH"); expect(op.headers["Idempotency-Key"]).toBeTruthy();
     expect(h.scope().notice).toBe("Papelera en lote: 2/2 confirmados."); expect(h.refreshes() - r0).toBeGreaterThanOrEqual(1);
     expect(h.server.beats.get("g0")!.state).toBe("TRASH"); expect(h.server.beats.get("g1")!.state).toBe("TRASH");

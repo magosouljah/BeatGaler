@@ -46,7 +46,9 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   useEffect(() => { void platform.preferences.load().then((p) => setIncompleteWarnings(p.incomplete_warnings_enabled ?? true)).catch(() => {}); }, []);
   const trashSource = useMemo(() => createCatalogTrashSource({ api: services.api, mutations: services.mutations }), [services]);
   const [tagColorMenu, setTagColorMenu] = useState<{ tag: string; x: number; y: number } | null>(null);
-  const { snapshot, interaction, playback, audio, currentBeat, selectMode, selectedCount, drawer, setDrawer, notice } = scope;
+  const { snapshot, interaction, playback, audio, currentBeat, notice } = scope;
+  const { selectMode, selectedCount } = scope.selection;
+  const { drawer, setDrawer } = scope.editor;
   const tenantKey = `${accountId}:${context.authority_era}:${context.authority_epoch}`;
   // V09 hallazgo: el overlay de arranque (#beatgaler-startup-loader) solo lo retiraba el pipeline LEGACY; en POSTGRES bloqueaba los clics.
   useEffect(() => { dismissBeatGalerStartupLoader(); }, []);
@@ -54,41 +56,41 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
   // imagen sobre cualquier zona de una BeatCard → portada; MP3/WAV sobre una BeatCard → reemplazo de audio con confirmación; MP3/WAV fuera → beat nuevo (AddBeatModal con `initialFile`).
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const { active: dropActive, targetId: dropTargetId } = useCatalogFileDrop({
-    enabled: !droppedFile && !scope.showAdd && !drawer && !scope.review && !snapshot.provisional,
+    enabled: !droppedFile && !scope.imports.showAdd && !drawer && !scope.imports.review && !snapshot.provisional,
     onDrop: (event) => {
       const action = routeDrop(event);
       if (action.type === "alert") { void appAlert({ title: action.title, message: action.message }); return; }
       if (scope.rejectOfflineMutation(action.type === "import" ? "Importing beats" : "Updating a beat")) return;
-      if (action.type === "import") { setDroppedFile(action.file); scope.setShowAdd(true); }
-      else if (action.type === "replace-audio") void scope.replaceAudioByDrop(action.beatId, action.file);
-      else if (action.type === "artwork-file") void scope.replaceArtworkByDrop(action.beatId, [{ kind: "file", file: action.file }]);
-      else void scope.replaceArtworkByDrop(action.beatId, action.sources);
+      if (action.type === "import") { setDroppedFile(action.file); scope.imports.setShowAdd(true); }
+      else if (action.type === "replace-audio") void scope.editor.replaceAudioByDrop(action.beatId, action.file);
+      else if (action.type === "artwork-file") void scope.editor.replaceArtworkByDrop(action.beatId, [{ kind: "file", file: action.file }]);
+      else void scope.editor.replaceArtworkByDrop(action.beatId, action.sources);
     },
   });
-  const closeAdd = () => { setDroppedFile(null); scope.setShowAdd(false); };
+  const closeAdd = () => { setDroppedFile(null); scope.imports.setShowAdd(false); };
   // B11: cerrar «Añadir» por cualquier vía (Escape incluido) libera el archivo soltado y reabre el arrastre.
-  useEffect(() => { if (!scope.showAdd) setDroppedFile(null); }, [scope.showAdd]);
-  const openAdd = () => { if (!scope.rejectOfflineMutation("Adding a beat")) scope.setShowAdd(true); };
+  useEffect(() => { if (!scope.imports.showAdd) setDroppedFile(null); }, [scope.imports.showAdd]);
+  const openAdd = () => { if (!scope.rejectOfflineMutation("Adding a beat")) scope.imports.setShowAdd(true); };
   // Scope para GalleryChrome (misma forma que el legacy; `displayedBeats` no existe en POSTGRES: la selección es global en el servidor).
   const chromeScope: GalleryChromeScope = {
-    includedTags: scope.includedTags, excludedTags: scope.excludedTags, allTags: scope.allTags, tagColors: scope.tagColors, handleTagClick: scope.handleTagClick, clearTagFilters: scope.clearTagFilters, openTagRename: scope.openTagRename,
-    search: scope.search, setSearch: scope.setSearch, sortBy: scope.sortBy, setSortBy: scope.setSortBy, selectMode, displayedBeats: [] as Beat[],
-    finishSelection: scope.finishSelection, toggleSelection: (b: Beat | null) => scope.toggleSelection(b, false),
-    rejectOfflineMutation: scope.rejectOfflineMutation, setShowAdd: scope.setShowAdd, reloadLibrary: scope.reloadLibrary, loading: scope.loading, libraryRefreshing: false,
-    setShowSettings: scope.setShowSettings, handleDisconnectTelegramAccount: scope.handleDisconnectTelegramAccount,
+    includedTags: scope.filters.includedTags, excludedTags: scope.filters.excludedTags, allTags: scope.filters.allTags, tagColors: scope.filters.tagColors, handleTagClick: scope.filters.handleTagClick, clearTagFilters: scope.filters.clearTagFilters, openTagRename: scope.rename.open,
+    search: scope.filters.search, setSearch: scope.filters.setSearch, sortBy: scope.filters.sortBy, setSortBy: scope.filters.setSortBy, selectMode, displayedBeats: [] as Beat[],
+    finishSelection: scope.selection.finishSelection, toggleSelection: (b: Beat | null) => scope.selection.toggleSelection(b, false),
+    rejectOfflineMutation: scope.rejectOfflineMutation, setShowAdd: scope.imports.setShowAdd, reloadLibrary: scope.reloadLibrary, loading: scope.loading, libraryRefreshing: false,
+    setShowSettings: scope.settings.setShowSettings, handleDisconnectTelegramAccount: scope.settings.handleDisconnectTelegramAccount,
   };
   const renderCard = (item: CatalogBeatDto, ordinal: number) => {
     scope.noteOrdinal(item.id, ordinal);
     const beat = scope.toBeat(item);
     return (
       <CatalogBeatCard
-        beat={beat} playbackInteractive={Boolean(item.playback)} tagFrequency={scope.tagFrequency} showIncompleteWarnings={incompleteWarnings}
+        beat={beat} playbackInteractive={Boolean(item.playback)} tagFrequency={scope.filters.tagFrequency} showIncompleteWarnings={incompleteWarnings}
         playing={audio.playingId === beat.id && audio.isPlaying} selected={scope.isSelected(beat.id)} selectedCount={selectedCount} selectMode={selectMode}
-        networkOnline={scope.connectionState === "online"} onBulkEdit={scope.handleEditBulk} onBulkDelete={scope.handleRemoveBulk}
-        onPlay={scope.handlePlay} onWarm={scope.handleWarm}
+        networkOnline={scope.connectionState === "online"} onBulkEdit={scope.selection.handleEditBulk} onBulkDelete={scope.selection.handleRemoveBulk}
+        onPlay={scope.transport.handlePlay} onWarm={scope.transport.handleWarm}
         onDetail={(b) => setDrawer({ beat: b, mode: "detail" })} onEdit={(b) => { if (!scope.rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}
-        onDelete={scope.deleteBeat} onAddToQueue={scope.addToQueue} onCloudFiles={scope.openDownloads}
-        onToggleSelect={(b, e) => scope.toggleSelection(b, e.shiftKey)}
+        onDelete={scope.editor.deleteBeat} onAddToQueue={scope.transport.addToQueue} onCloudFiles={scope.downloads.open}
+        onToggleSelect={(b, e) => scope.selection.toggleSelection(b, e.shiftKey)}
       />
     );
   };
@@ -106,34 +108,34 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
       {(selectedCount > 0 || selectMode) && (
         <div className="bg-gallery-selection-actions" style={{ padding: "0 24px", height: 40, display: "flex", alignItems: "center", gap: 12, background: "#111", borderBottom: "1px solid #1a1a1a", flexShrink: 0 }}>
           <span style={{ fontSize: 12, color: "#888" }} data-selection-count={selectedCount} data-selection-status={interaction.selection.status}>{selectedCount} selected</span>
-          <button type="button" onClick={scope.toggleSelectAll}>Select All</button>
-          <button onClick={scope.handleEditBulk} disabled={selectedCount === 0 || interaction.selection.status !== "active"} style={{ padding: "5px 14px", background: "#1e1e1e", border: "1px solid #2a2a2a", borderRadius: 6, color: "#ccc", fontSize: 12, cursor: "pointer" }}>Edit all</button>
-          <button onClick={scope.handleRemoveBulk} disabled={selectedCount === 0 || interaction.selection.status !== "active"} style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>Remove all</button>
-          <button onClick={scope.finishSelection} style={{ marginLeft: "auto", background: "none", border: "none", color: "#444", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+          <button type="button" onClick={scope.selection.toggleSelectAll}>Select All</button>
+          <button onClick={scope.selection.handleEditBulk} disabled={selectedCount === 0 || interaction.selection.status !== "active"} style={{ padding: "5px 14px", background: "#1e1e1e", border: "1px solid #2a2a2a", borderRadius: 6, color: "#ccc", fontSize: 12, cursor: "pointer" }}>Edit all</button>
+          <button onClick={scope.selection.handleRemoveBulk} disabled={selectedCount === 0 || interaction.selection.status !== "active"} style={{ padding: "5px 14px", background: "transparent", border: "1px solid #3d0000", borderRadius: 6, color: "#f87171", fontSize: 12, cursor: "pointer" }}>Remove all</button>
+          <button onClick={scope.selection.finishSelection} style={{ marginLeft: "auto", background: "none", border: "none", color: "#444", fontSize: 12, cursor: "pointer" }}>Cancel</button>
         </div>
       )}
       {tagColorMenu && (
-        <TagColorMenu x={tagColorMenu.x} y={tagColorMenu.y} current={scope.tagColors[tagColorMenu.tag.trim().toLowerCase()] ?? null}
-          onSelect={(hex) => { setTagColor(tagColorMenu.tag, hex); setTagColorMenu(null); }} onRename={() => { scope.openTagRename(tagColorMenu.tag); setTagColorMenu(null); }} onClose={() => setTagColorMenu(null)} />
+        <TagColorMenu x={tagColorMenu.x} y={tagColorMenu.y} current={scope.filters.tagColors[tagColorMenu.tag.trim().toLowerCase()] ?? null}
+          onSelect={(hex) => { setTagColor(tagColorMenu.tag, hex); setTagColorMenu(null); }} onRename={() => { scope.rename.open(tagColorMenu.tag); setTagColorMenu(null); }} onClose={() => setTagColorMenu(null)} />
       )}
-      {scope.tagRename && (
-        <TagRenameDialog rename={scope.tagRename} busy={scope.tagRenameBusy} error={scope.tagRenameError} affectedCount={scope.tagRenameAffectedCount} mp3Count={0} wavCount={0}
-          onNewTagChange={scope.setTagRenameNewTag} onContinue={scope.continueTagRename} onBack={scope.backTagRename} onCancel={scope.cancelTagRename} onConfirm={scope.confirmTagRename} />
+      {scope.rename.tagRename && (
+        <TagRenameDialog rename={scope.rename.tagRename} busy={scope.rename.busy} error={scope.rename.error} affectedCount={scope.rename.affectedCount} mp3Count={0} wavCount={0}
+          onNewTagChange={scope.rename.setNewTag} onContinue={scope.rename.onContinue} onBack={scope.rename.back} onCancel={scope.rename.cancel} onConfirm={scope.rename.confirm} />
       )}
       <div ref={scrollerRef} className="lab-gallery-main" data-library-scroll="true" aria-busy={scope.loading}
         style={{ flex: 1, position: "relative", overflowY: "auto", paddingBottom: currentBeat ? 140 : 90 }}>
-        <div className="bg-catalog-shell-status" role="status" aria-live="polite" data-uploads={scope.uploads.length} data-selection-count={selectedCount} data-selection-status={interaction.selection.status} data-playback-status={playback.status} data-store-status={snapshot.status}>
+        <div className="bg-catalog-shell-status" role="status" aria-live="polite" data-uploads={scope.imports.uploads.length} data-selection-count={selectedCount} data-selection-status={interaction.selection.status} data-playback-status={playback.status} data-store-status={snapshot.status}>
           {/* Los avisos son flotantes (FloatingNotice, fixed): no ocupan espacio aquí ni desplazan la Gallery. */}
         </div>
         <div className="bg-catalog-grid-host" onPointerOver={tagPeek.onPointerOver} onPointerOut={tagPeek.onPointerOut} onPointerDown={tagPeek.onPointerDown} onFocusCapture={tagPeek.onFocusCapture} onBlurCapture={tagPeek.onBlurCapture}>
           {/* E79: los beats que están subiendo no tienen tarjeta; la Gallery solo dibuja lo que PostgreSQL confirma (una representación por beat). */}
           <CatalogVirtualGallery store={services.store} scrollerRef={scrollerRef} tenantKey={tenantKey} renderCard={renderCard} viewportHeightFallback={viewportHeightFallback}
             onMountCard={scope.onMountCard} onUnmountCard={scope.onUnmountCard}
-            leadCards={scope.pendingCards.map(({ id, beat }) => ({ id, node: (
+            leadCards={scope.imports.pendingCards.map(({ id, beat }) => ({ id, node: (
               // E83: la BeatCard original de una subida en curso (logo de BeatGaler girando sobre la portada, sin reproducción): ocupa el primer hueco de la rejilla.
-              <ProvisionalBeatCard beat={beat} tagFrequency={scope.tagFrequency} networkOnline={scope.connectionState === "online"} />) }))}
+              <ProvisionalBeatCard beat={beat} tagFrequency={scope.filters.tagFrequency} networkOnline={scope.connectionState === "online"} />) }))}
             cardAttributes={(item, ordinal) => ({ "data-card": item.id, "data-ordinal": String(ordinal), "data-selected": scope.isSelected(item.id) ? "true" : "false", "data-playing": playback.current?.beatId === item.id ? "true" : "false" })}
-            onGoToStart={() => { void services.store.loadFirst(); }} onAddBeat={openAdd} onClearFilters={() => { scope.setSearch(""); scope.clearTagFilters(); }} />
+            onGoToStart={() => { void services.store.loadFirst(); }} onAddBeat={openAdd} onClearFilters={() => { scope.filters.setSearch(""); scope.filters.clearTagFilters(); }} />
         </div>
       </div>
       {!currentBeat && (
@@ -153,37 +155,37 @@ export function CatalogAppShell({ services, accountId, context, viewportHeightFa
           </div>
         </div>
       )}
-      {scope.cloudFiles && (
-        <CloudFilesModal beat={scope.cloudFiles.beat}
-          files={scope.cloudFiles.files.map((f) => ({ cloud_file_id: f.fileId, beat_id: scope.cloudFiles!.beat.id, file_type: f.role as never, filename: f.filename ?? "", original_size: Number(f.sizeBytes), part_count: f.partCount, status: f.status }))}
-          busyId={scope.downloadBusy} downloadedIds={scope.downloaded} onDownload={scope.downloadKind} onClose={scope.closeDownloads} />
+      {scope.downloads.cloudFiles && (
+        <CloudFilesModal beat={scope.downloads.cloudFiles.beat}
+          files={scope.downloads.cloudFiles.files.map((f) => ({ cloud_file_id: f.fileId, beat_id: scope.downloads.cloudFiles!.beat.id, file_type: f.role as never, filename: f.filename ?? "", original_size: Number(f.sizeBytes), part_count: f.partCount, status: f.status }))}
+          busyId={scope.downloads.busyId} downloadedIds={scope.downloads.downloaded} onDownload={scope.downloads.download} onClose={scope.downloads.close} />
       )}
-      {scope.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.addBeatsAndReview} existingBeats={[]} />}
-      {scope.review && !drawer && (
-        <Drawer beat={scope.review.beat} mode="edit" tagSuggestions={scope.tagSuggestions} reviewInfo={{ current: 1, total: 1 }} closeAfterSave={false}
-          onClose={scope.cancelReview} onSkipCurrent={scope.cancelReview} onSkipAll={scope.cancelReview} isReviewNameTaken={() => false}
-          mutationAllowed={scope.connectionState === "online"} maxNameChars={BEAT_NAME_MAX} onWebSave={scope.saveWebDrawer} onReleaseAudio={() => {}} />
+      {scope.imports.showAdd && <AddBeatModal key={droppedFile ? "drop" : "pick"} initialFile={droppedFile ?? undefined} onClose={closeAdd} onAdd={scope.imports.addBeatsAndReview} existingBeats={[]} />}
+      {scope.imports.review && !drawer && (
+        <Drawer beat={scope.imports.review.beat} mode="edit" tagSuggestions={scope.filters.tagSuggestions} reviewInfo={{ current: 1, total: 1 }} closeAfterSave={false}
+          onClose={scope.imports.cancelReview} onSkipCurrent={scope.imports.cancelReview} onSkipAll={scope.imports.cancelReview} isReviewNameTaken={() => false}
+          mutationAllowed={scope.connectionState === "online"} maxNameChars={BEAT_NAME_MAX} onWebSave={scope.editor.saveWebDrawer} onReleaseAudio={() => {}} />
       )}
-      {scope.showSettings && (
+      {scope.settings.showSettings && (
         <SettingsPanel currentFolder={null} showIncompleteWarnings={incompleteWarnings} onIncompleteWarningsChanged={setIncompleteWarnings} customCursorEnabled onCustomCursorChanged={() => {}}
-          telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.handleDisconnectTelegramAccount}
-          onClose={() => scope.setShowSettings(false)} onFolderChanged={() => {}} hideCustomCursor trashSource={trashSource} localCaches={services.localCaches} onBeatRestored={() => { void scope.reloadLibrary(); }} />
+          telegramConnected={false} networkOnline={scope.connectionState === "online"} telegramUsername={null} onDisconnectTelegram={scope.settings.handleDisconnectTelegramAccount}
+          onClose={() => scope.settings.setShowSettings(false)} onFolderChanged={() => {}} hideCustomCursor trashSource={trashSource} localCaches={services.localCaches} onBeatRestored={() => { void scope.reloadLibrary(); }} />
       )}
       {drawer && (
-        <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.tagSuggestions} onClose={() => { setDrawer(null); }}
-          onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) scope.releaseFile(); }}
-          selectedBeats={scope.selectedCount > 1 ? scope.selectedBeats : undefined}
-          selectedCount={scope.selectedCount > 1 ? scope.selectedCount : undefined}
-          mutationAllowed={scope.connectionState === "online"} onWebSave={scope.saveWebDrawer} />
+        <Drawer beat={drawer.beat} mode={drawer.mode} tagSuggestions={scope.filters.tagSuggestions} onClose={() => { setDrawer(null); }}
+          onReleaseAudio={() => { if (audio.playingId === drawer.beat.id) scope.transport.releaseFile(); }}
+          selectedBeats={scope.selection.selectedCount > 1 ? scope.selection.selectedBeats : undefined}
+          selectedCount={scope.selection.selectedCount > 1 ? scope.selection.selectedCount : undefined}
+          mutationAllowed={scope.connectionState === "online"} onWebSave={scope.editor.saveWebDrawer} />
       )}
       {currentBeat && (
-        <Player beat={currentBeat} playing={audio.isPlaying} progress={audio.progress} duration={audio.duration} volume={audio.volume} queue={scope.queuedBeats} currentIndex={-1}
-          showQueue={scope.showQueue} shuffleEnabled={scope.shuffleEnabled} repeatMode={scope.repeatMode} canShowQueue={scope.queuedBeats.length > 0}
-          onToggle={scope.togglePause} onSeek={scope.seek} onPrev={scope.handlePrev} onNext={scope.handleNext} onVolumeChange={scope.setVolume}
-          onToggleShuffle={scope.toggleShuffle} onCycleRepeat={scope.cycleRepeat} onToggleQueue={scope.toggleQueue} onPlayQueueIndex={scope.playQueueIndex}
+        <Player beat={currentBeat} playing={audio.isPlaying} progress={audio.progress} duration={audio.duration} volume={audio.volume} queue={scope.queue.queuedBeats} currentIndex={-1}
+          showQueue={scope.queue.showQueue} shuffleEnabled={scope.transport.shuffleEnabled} repeatMode={scope.transport.repeatMode} canShowQueue={scope.queue.queuedBeats.length > 0}
+          onToggle={scope.transport.togglePause} onSeek={scope.transport.seek} onPrev={scope.transport.handlePrev} onNext={scope.transport.handleNext} onVolumeChange={scope.transport.setVolume}
+          onToggleShuffle={scope.transport.toggleShuffle} onCycleRepeat={scope.transport.cycleRepeat} onToggleQueue={scope.queue.toggleQueue} onPlayQueueIndex={scope.queue.playQueueIndex}
           canAddBeat={platform.capabilities.browserFileImport || platform.capabilities.nativeFilesystemDrop} onAddBeat={openAdd}
           onDetail={(b) => setDrawer({ beat: b, mode: "detail" })} onEdit={(b) => { if (!scope.rejectOfflineMutation("Editing metadata")) setDrawer({ beat: b, mode: "edit" }); }}
-          onDelete={scope.deleteBeat} onAddToQueue={scope.addToQueue} />
+          onDelete={scope.editor.deleteBeat} onAddToQueue={scope.transport.addToQueue} />
       )}
       <FloatingNotice notice={notice} onDismiss={scope.dismissNotice} lifted={Boolean(currentBeat)} />
       <BeatTagPeekLayer peek={tagPeek.peek} />
