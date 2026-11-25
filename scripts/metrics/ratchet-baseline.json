@@ -24,8 +24,8 @@
     "E1": 45,
     "E2": 35,
     "E3": 5,
-    "F+M": 67,
-    "F+M:v1": 56,
+    "F+M": 66,
+    "F+M:v1": 55,
     "F+M:desktop": 11,
     "CY": 0,
     "CYF": 0
@@ -33,7 +33,6 @@
   "sourceTextTests": [
     "cloud-server/tests/account-lifecycle-request-guard.test.cjs",
     "cloud-server/tests/billing-polar-daily.test.cjs",
-    "cloud-server/tests/catalog/catalog-backup-infra.test.cjs",
     "cloud-server/tests/catalog/catalog-contract.test.cjs",
     "cloud-server/tests/password-kdf.test.cjs",
     "cloud-server/tests/plan-dev-switch-removed.test.cjs",

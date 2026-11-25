@@ -62,8 +62,12 @@ function notRead(l, ls) {
   const decl = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(l);
   if (decl) {
     const id = new RegExp('(?<![\\w$.])' + esc(decl[1]) + '(?![\\w$])');
-    const uses = ls.filter(x => x !== l && id.test(x));
-    if (uses.length && uses.every(x => SPAWN_LINE.test(x))) return true;
+    // a use is a launch when its line, or one of the two lines above (multi-line call), holds the spawn call
+    // (another declaration of the same name is a different scope: ignored)
+    const redecl = new RegExp('^\\s*(?:const|let|var)\\s+' + esc(decl[1]) + '\\s*=');
+    const idx = ls.map((x, i) => (x !== l && !/^\s*\/\//.test(x) && id.test(x.replace(/'[^'\n]*'|"[^"\n]*"/g, "''")) && !redecl.test(x) ? i : -1)).filter(i => i >= 0);
+    const launched = i => !READ_CALL.test(ls[i]) && [i, i - 1, i - 2].some(j => j >= 0 && SPAWN_LINE.test(ls[j]));
+    if (idx.length && idx.every(launched)) return true;
   }
   const call = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(\s*\[?\s*['"`]/.exec(l);
   if (call && !READ_CALL.test(l)) {

@@ -177,6 +177,11 @@ test('una ruta de código usada solo para lanzar un proceso o pasada como dato n
   const bin = "const bin = path.join(__dirname, '..', '..', 'scripts', 'tool.cjs');\n";
   put('scripts/tool.cjs', 'console.log(1);\n');
   put('cloud-server/tests/spawnOnly.test.cjs', `${head}${bin}spawnSync(process.execPath, [bin, '--help']);\n`);
+  put('cloud-server/tests/multiLine.test.cjs', `${head}${bin}// usa bin
+const r = spawnSync('bash', ['-c', 'x',
+  bin, 'y'], {
+  cwd: '.' });
+`);
   put('cloud-server/tests/spawnAndRead.test.cjs', `${head}const fs = require('node:fs');\n${bin}spawnSync(process.execPath, [bin]);\nconst s = fs.${fn}(bin, 'utf8');\n`);
   put('cloud-server/tests/readsProd.test.cjs', `${head}const fs = require('node:fs');\nspawnSync(process.execPath, ['x']);\nconst s = fs.${fn}(path.join(__dirname, '..', 'server.js'), 'utf8');\n`);
   put('cloud-server/tests/dataToImported.test.cjs', `${head}const { assertDiff } = require('../scripts/tool.cjs');\nassertDiff(['cloud-server/billing.js']);\n`);
@@ -191,6 +196,7 @@ test('una ruta de código usada solo para lanzar un proceso o pasada como dato n
   const kind = Object.fromEntries(run.stdout.trim().split(/\r?\n/).map(l => l.split('\t')).map(c => [path.basename(c[1]), c[0]]));
   assert.deepEqual(kind, {
     'spawnOnly.test.cjs': 'C',
+    'multiLine.test.cjs': 'C',
     'dataToImported.test.cjs': 'C',
     'spawnAndRead.test.cjs': 'M',
     'readsProd.test.cjs': 'M',
