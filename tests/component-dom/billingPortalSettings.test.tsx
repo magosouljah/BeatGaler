@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const api = vi.hoisted(() => ({
   account: vi.fn(), plan: vi.fn(), catalog: vi.fn(), available: vi.fn(), open: vi.fn(),
 }));
-vi.mock("../../src/components/AccountGate", () => ({
+vi.mock("../../src/features/auth/webSession", () => ({
   beginMfaSetup: vi.fn(), changeBeatGalerEmail: vi.fn(), changeBeatGalerPassword: vi.fn(),
   disableMfa: vi.fn(), disconnectOAuthProvider: vi.fn(), enableMfa: vi.fn(),
   getBeatGalerAccountInfo: api.account, getBeatGalerCurrentPlan: api.plan,

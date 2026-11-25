@@ -1,4 +1,4 @@
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../auth/webSession";
 
 export async function fetchInternetArtworkDataUrl(url: string): Promise<string> {
   const token = getBeatGalerAuthToken();

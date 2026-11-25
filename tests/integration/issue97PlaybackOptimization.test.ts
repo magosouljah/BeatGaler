@@ -63,7 +63,7 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     const galleryEntry = source("src/app/WebGalleryEntry.tsx");
     const workspace = source("src/app/WebGalleryWorkspace.tsx");
     const authGate = source("src/features/auth/AuthExperienceGate.tsx");
-    const accountGate = source("src/components/AccountGate.tsx");
+    const webSignIn = source("src/features/auth/webSignIn.ts");
 
     expect(main).not.toContain("preconnectRememberedWebDirect();");
     expect(main).not.toContain("prewarmDirectRuntime");
@@ -74,8 +74,8 @@ describe("Issue #97 definitive Web startup + playback architecture", () => {
     expect(workspace).not.toContain("preconnectRememberedWebDirect");
     expect(workspace).not.toContain("prewarmDirectRuntime");
 
-    expect(accountGate).not.toContain("webRememberedDirectPreconnect");
-    expect(accountGate).not.toContain("webStartupPlaybackCoordinator");
+    expect(webSignIn).not.toContain("webRememberedDirectPreconnect");
+    expect(webSignIn).not.toContain("webStartupPlaybackCoordinator");
   });
 
   it("keeps startup routing local-only and makes late candidate configuration impossible", () => {

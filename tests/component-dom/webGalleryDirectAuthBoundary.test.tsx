@@ -17,7 +17,7 @@ vi.mock("../../src/platform", () => ({
   },
 }));
 
-vi.mock("../../src/components/AccountGate", () => ({
+vi.mock("../../src/features/auth/webSession", () => ({
   restoreBeatGalerSession: mocks.restore,
   resumeBeatGalerSignup: mocks.resumeSignup,
   getBeatGalerInstallationId: vi.fn(async () => "test-web-installation"),

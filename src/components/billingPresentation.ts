@@ -1,4 +1,4 @@
-import type { BeatGalerAccount, BeatGalerPlanDefinition, BeatGalerPlanId } from "./AccountGate";
+import type { BeatGalerAccount, BeatGalerPlanDefinition, BeatGalerPlanId } from "../features/auth/webSession";
 
 export type CurrentPlan = NonNullable<BeatGalerAccount["plan"]>;
 

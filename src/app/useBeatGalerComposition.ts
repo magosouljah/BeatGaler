@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { Beat } from "../types";
-import { logoutBeatGalerAccount } from "../components/AccountGate";
+import { logoutBeatGalerAccount } from "../features/auth/webSession";
 import { useAudio } from "../hooks/useAudio";
 import { discardImportReviewBatch, isTauriAvailable } from "../lib/tauri";
 import { platform } from "../platform";

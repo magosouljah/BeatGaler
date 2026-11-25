@@ -88,7 +88,7 @@ describe("Issue #97 reload/temp-auth resilience", () => {
 
   it("retries invalid nonce with a fresh temp-auth object while preserving the lease identity", async () => {
     vi.resetModules();
-    vi.doMock("../../src/components/AccountGate", () => ({
+    vi.doMock("../../src/features/auth/webSession", () => ({
       getBeatGalerAuthToken: () => "session-token",
       getResolvedCloudApiBase: () => "/beatgaler-api",
       restoreBeatGalerSession: vi.fn(async () => ({ id: "account-97" })),

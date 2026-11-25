@@ -26,7 +26,7 @@ const appShell = read("src/app/AppShell.tsx");
 const beatEditing = read("src/features/edit/useBeatEditing.ts");
 const beatAssetUpdates = read("src/features/edit/useBeatAssetUpdates.ts");
 const cloudUploadQueue = read("src/features/cloud/useCloudUploadQueue.ts");
-const accountGate = read("src/components/AccountGate.tsx");
+const webSession = read("src/features/auth/webSession.ts");
 const settingsPanel = read("src/components/SettingsPanel.tsx");
 const desktopAdapter = read("src/platform/desktopAdapter.ts");
 const drawer = read("src/components/Drawer.tsx");
@@ -97,7 +97,7 @@ ok(commands.includes('"direct-bot-api-{}-{}"') && commands.includes("random_urls
 ok(cargo.includes('tauri-plugin-single-instance = "=2.4.3"'), "desktop uses the pinned Mac-safe single-instance plugin release");
 ok(libRs.indexOf("tauri_plugin_single_instance::init") < libRs.indexOf("tauri_plugin_wdio::init"), "single-instance plugin is registered first");
 
-ok(accountGate.includes("platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase())") && desktopAdapter.includes('invoke("set_cloud_auth_token", { token, cloudApiBase })'), "React passes the resolved Galer Cloud base through the Desktop auth adapter");
+ok(webSession.includes("platform.cloudAuth.syncSession(result.token, getResolvedCloudApiBase())") && desktopAdapter.includes('invoke("set_cloud_auth_token", { token, cloudApiBase })'), "React passes the resolved Galer Cloud base through the Desktop auth adapter");
 ok(commands.includes("cloud_api_base: Option<String>") && commands.includes("cloud_api_base_slot"), "Rust Direct uses the frontend-selected Galer Cloud origin");
 
 const artworkSync = section(beatEditing, "const handleDropArtwork", "const applyBulkUpdate");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { planFeatures, planPrice, planStatus } from "../../src/components/billingPresentation";
-import type { BeatGalerAccount, BeatGalerPlanDefinition } from "../../src/components/AccountGate";
+import type { BeatGalerAccount, BeatGalerPlanDefinition } from "../../src/features/auth/webSession";
 
 const catalog: BeatGalerPlanDefinition[] = [
   { id: "free", label: "Free", price: { amount_minor: 0, currency: "usd", interval: null, offer_id: null }, entitlements: { upload_project: false, early_access: false }, quotas: { max_beats: 20, max_project_zip_bytes: 0 } },

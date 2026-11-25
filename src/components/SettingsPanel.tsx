@@ -13,7 +13,7 @@ import {
   enableMfa, getBeatGalerAccountInfo, getBeatGalerCurrentPlan, getBeatGalerPlanCatalog, startBeatGalerCheckout, oauthBeatGalerAccount,
   reauthenticateBeatGalerPassword, reauthenticateBeatGalerProvider, resendBeatGalerEmailChange, startBeatGalerEmailChange,
   type BeatGalerAccount, type BeatGalerPlanDefinition, type BeatGalerPlanId, type OAuthProvider,
-} from "./AccountGate";
+} from "../features/auth/webSession";
 import { planFeatures, planPrice, planStatus } from "./billingPresentation";
 import { beatGalerPortalAvailable, openBeatGalerPortal } from "./billingPortal";
 

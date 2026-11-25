@@ -3,7 +3,7 @@ import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/components/AccountGate", () => ({
+vi.mock("../../src/features/auth/webSession", () => ({
   beginMfaSetup: vi.fn(async () => ({ secret: "TEST" })),
   changeBeatGalerEmail: vi.fn(),
   changeBeatGalerPassword: vi.fn(),

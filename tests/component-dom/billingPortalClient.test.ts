@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 
 const cookieSync = vi.hoisted(() => vi.fn(() => "csrf-cookie-old"));
-vi.mock("../../src/components/AccountGate", () => ({
+vi.mock("../../src/features/auth/webSession", () => ({
   getBeatGalerAuthToken: () => "browser-cookie-session",
   resolveBeatGalerCloudApi: async () => "https://app.example.test/beatgaler-api",
 }));

@@ -25,10 +25,11 @@ describe("Issue #97 production runtime follow-up", () => {
     );
     expect(experienceGate).toContain("setActiveWebAccountId(null);");
 
-    expect(accountGate).toContain("let restoreBeatGalerSessionInFlight: Promise<BeatGalerAccount | null> | null = null;");
-    expect(accountGate).toContain("if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;");
-    expect(accountGate).toContain("restoreBeatGalerSessionInFlight = pending;");
-    expect(accountGate).toContain("pending.then(clear, clear);");
+    const webSession = source("src/features/auth/webSession.ts");
+    expect(webSession).toContain("let restoreBeatGalerSessionInFlight: Promise<BeatGalerAccount | null> | null = null;");
+    expect(webSession).toContain("if (restoreBeatGalerSessionInFlight) return restoreBeatGalerSessionInFlight;");
+    expect(webSession).toContain("restoreBeatGalerSessionInFlight = pending;");
+    expect(webSession).toContain("pending.then(clear, clear);");
     expect(accountGate.indexOf("if (account?.id) return <>{children}")).toBeLessThan(
       accountGate.indexOf('if (checking) return <div className="bg-account-loading"'),
     );
@@ -41,7 +42,8 @@ describe("Issue #97 production runtime follow-up", () => {
     const galleryEntry = source("src/app/WebGalleryEntry.tsx");
     const galleryWorkspace = source("src/app/WebGalleryWorkspace.tsx");
     const experienceGate = source("src/features/auth/AuthExperienceGate.tsx");
-    const accountGate = source("src/components/AccountGate.tsx");
+    const webSignIn = source("src/features/auth/webSignIn.ts");
+    const webSession = source("src/features/auth/webSession.ts");
     const workerClient = source("src/features/cloud/webTransportWorkerClient.ts");
     const controller = source("src/features/cloud/webTransportController.ts");
     const sessionControl = source("src/features/cloud/webTransportSession.ts");
@@ -61,14 +63,15 @@ describe("Issue #97 production runtime follow-up", () => {
     expect(galleryWorkspace).not.toContain("preconnectRememberedWebDirect");
     expect(galleryWorkspace).not.toContain("<App />");
 
-    expect(accountGate).toContain('import("../features/library/catalog/catalogDirectPort")');
-    expect(accountGate).not.toContain("webRememberedDirectPreconnect");
+    expect(webSignIn).toContain('import("../library/catalog/catalogDirectPort")');
+    expect(webSignIn).not.toContain("webRememberedDirectPreconnect");
 
     expect(sessionBootstrap).toContain('WEB_CSRF_COOKIE_NAME = "__Host-beatgaler_csrf"');
     expect(sessionBootstrap).toContain("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)");
     expect(sessionBootstrap).toContain("readWebCookieValue(document.cookie, WEB_CSRF_COOKIE_NAME)");
 
-    expect(accountGate).toContain("await platform.cloudAuth.syncSession(null, getResolvedCloudApiBase());");
+    expect(webSession).toContain("sync: (base = getResolvedCloudApiBase()) => platform.cloudAuth.syncSession(null, base)");
+    expect(webSession).toContain("await confirmation.sync();");
 
     expect(workerClient).toContain("prewarm(): void {");
     expect(workerClient).toContain('playTrace("WORKER_PREWARM_BEGIN")');

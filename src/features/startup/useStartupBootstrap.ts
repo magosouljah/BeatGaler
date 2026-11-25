@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import type { AppSettings, Beat } from "../../types";
-import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../../components/AccountGate";
+import { getBeatGalerAuthToken, getResolvedCloudApiBase } from "../auth/webSession";
 import { libraryStateManager } from "../../lib/libraryStateManager";
 import {
   flushOfflineTrashIntents,
