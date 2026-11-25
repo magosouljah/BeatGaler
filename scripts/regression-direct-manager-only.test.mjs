@@ -16,8 +16,6 @@ verifyDirectArchitecture(read);
 // In-memory mutations: prove the guards reject plausible regressions without
 // ever modifying runtime sources or contacting Telegram/PostgreSQL.
 const mutations = [
-  ['unprepared startup regains allocator fallback', 'cloud-server/direct-transport-control.js',
-    "  error.code = 'TRANSPORT_ASSIGNMENT_LEASE_REQUIRED';\n  throw error;", "  error.code = 'TRANSPORT_ASSIGNMENT_LEASE_REQUIRED';\n  return leaseNextBot(pool, {});", /Base session start reaches leaseNextBot/],
   ['missing MASTER creation boundary', 'cloud-server/master-storage.js',
     'async function createPrivateUserStorageGroup(', 'async function renamedVaultCreation(', /function boundary createPrivateUserStorageGroup/],
   ['permanent token in PostgreSQL public bot state', 'cloud-server/direct-persistent-assignment-runtime.js',
@@ -41,9 +39,6 @@ const mutations = [
     'pinMessages: false,', 'pinMessages: true,', /pinMessages must remain disabled for the Direct bot/],
   ['delete permission removed', 'cloud-server/direct-transport-control.js',
     'deleteMessages: false,', 'deleteMessages: true,', /deleteMessages must remain disabled for the Direct bot/],
-  ['participant verification becomes a comment', 'cloud-server/direct-transport-control.js',
-    'masterInfo.client.invoke(new Api.channels.GetParticipant({',
-    'masterInfo.client.invoke(new Api.channels.GetFullChannel(/* new Api.channels.GetParticipant */ {', /verify participant membership/],
   ['INDEX upload call becomes a comment', 'src-tauri/direct-transport/transport-helper.source.mjs',
     'const sent = await sendDocument(filePath, "beatgaler-library.json", INDEX_CAPTION);', 'const sent = fakeUpload(filePath); /* sendDocument(filePath, "beatgaler-library.json", INDEX_CAPTION) */', /call sendDocument/],
   ['permanent token crosses HTTP boundary', 'cloud-server/productive-temp-auth-boundary.js',

@@ -33,6 +33,7 @@ async function main() {
   assert.match(firstName, /InviteToChannel/i);
   assert.match(secondName, /EditAdmin/i);
   assert.equal(calls[1].adminRights.pinMessages, false, 'Direct bot must not be able to pin a client-authored INDEX');
+  assert.equal(calls[1].adminRights.deleteMessages, false, 'Direct bot must not be able to delete MASTER-owned messages');
 
   // Other Telegram failures are not swallowed. Repair stops after one attempt,
   // letting the persistent membership state remain REPAIR for an explicit retry.

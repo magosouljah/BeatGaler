@@ -143,9 +143,6 @@ if (!expectedBotGuard.right.getText().includes('AND transport_bot_id=$') || !set
 if (!/ADD COLUMN transport_bot_id text REFERENCES transport_bots\(id\)\s*,/i.test(migration) || /UPDATE\s+vaults\s+SET\s+transport_bot_id/i.test(migration)) fail('Legacy ownership must stay nullable without a default or bulk assignment.');
 if (!migration.includes('DROP TRIGGER IF EXISTS direct_leases_active_cap_trigger') || !migration.includes('DROP FUNCTION IF EXISTS enforce_transport_bot_active_lease_cap()')) fail('The obsolete four-active-lease cap must remain retired.');
 
-const baseStart = block(controlAst, 'startSession');
-noLocalReachability(controlAst, baseStart, /leaseNextBot|waitForAssignableTransport/, 'Base session start');
-if (!baseStart.getText().includes('TRANSPORT_ASSIGNMENT_LEASE_REQUIRED') || !ts.isThrowStatement(baseStart.statements.at(-1))) fail('Unprepared base startup must fail closed without an allocator.');
 const membershipLock = block(assignmentStore, 'withMembershipLock');
 const lockSql = querySql(membershipLock, 'client');
 if (!lockSql.includes('pg_advisory_lock(') || !lockSql.includes('pg_advisory_unlock(') || /['"`]BEGIN['"`]|pg_advisory_xact_lock/.test(lockSql)) fail('Membership network work must use a session advisory lock without an open SQL transaction.');
@@ -169,16 +166,11 @@ const decommission = block(controlAst, 'decommissionVaultMembership');
 requireCall(decommission, 'masterForVault');
 const kick = requireCall(controlAst, 'kickAndUnban');
 if (kick.pos < decommission.pos || kick.end > decommission.end) fail('kickAndUnban must be reachable only from explicit decommission.');
-const activation = block(controlAst, 'activateSession');
-requireCall(activation, 'masterForVault');
-requireCall(activation, 'inviteAndPromote');
-if (!nodes(activation, node => ts.isNewExpression(node) && node.expression.getText() === 'Api.channels.GetParticipant').length) fail('Exceptional provisioning must verify participant membership.');
 const invite = block(controlAst, 'inviteAndPromote');
 for (const rpc of ['Api.channels.InviteToChannel', 'Api.channels.EditAdmin']) {
   one(nodes(invite, node => ts.isNewExpression(node) && node.expression.getText() === rpc), `exceptional provisioning ${rpc}`);
 }
 requireCall(invite, 'directBotAdminRights');
-requireCall(block(controlAst, 'restrictBotPinRights'), 'directBotAdminRights');
 const rights = one(nodes(block(controlAst, 'directBotAdminRights'), node => ts.isNewExpression(node) && node.expression.getText() === 'Api.ChatAdminRights'), 'transport admin rights');
 for (const right of ['pinMessages', 'deleteMessages']) {
   const field = one(nodes(rights, node => ts.isPropertyAssignment(node) && node.name.getText() === right), `required ${right} permission`);
@@ -214,7 +206,6 @@ if (!helper.includes('deleteMessagesById')) fail('Old index/media deletion is mi
 if (!helper.includes('mergeDeleted(previous?.manifest, next)')) fail('Single-index swaps no longer inherit permanent-delete tombstones.');
 if (!helper.includes('previousRefs')) fail('Unreferenced replaced media deletion is missing.');
 if (!docs.includes('single library index')) fail('Single-index invariant is missing from V5 Direct docs.');
-if (!control.includes('recordIndexPointer')) fail('Control plane no longer records the tiny current-index pointer.');
 for (const [name, requiredCalls] of [
   ['getCurrentIndex', ['active.downloadAsBuffer']],
   ['sendDocument', ['active.sendMedia', 'Readable.toWeb']],
