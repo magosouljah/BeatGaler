@@ -221,11 +221,24 @@ test('rechazo en origen §6.2.1: recoverMissing no verifica ni toca Telegram si 
   assert.deepEqual(await assertVaultRebindAllowedIfConfigured(null, { userId: 'x' }), { native: false, configured: false });
 });
 
-test('§6.1 deshabilitado: la autoridad no expone ninguna ruta de borrado de cuenta', () => {
+test('§6.1 deshabilitado: la autoridad no expone ninguna ruta de borrado de cuenta', async () => {
   const a = authority.createCatalogAuthority({ pool: fakePool(), env: ENV_ON, controlPlaneAuthority: 'postgres' });
   assert.deepEqual(Object.keys(a).filter((k) => /delet|purge|remove/i.test(k)), []);
-  const src = require('fs').readFileSync(require.resolve('../../catalog/authority.js'), 'utf8');
-  assert.equal(/INSERT INTO catalog_account_deletions/.test(src), false);
+  // Comportamiento: provisión completa, resolución y guarda de rebind no tocan jamás la tabla de borrados.
+  const libRow = { user_id: 'u1', vault_id: 'v1', authority: 'POSTGRES', migration_state: 'IDLE', authority_era: 'era-1', authority_epoch: '1', revision: '1',
+    active_generation_id: 'native-x', active_count: '0', trash_count: '0', purging_count: '0', pending_count: '0', cleanup_enabled: false, restore_hold: true,
+    generation_origin: 'NATIVE', generation_status: 'ACTIVE', current_chat_id: '-1001' };
+  let libraryRows = [];
+  const pool = fakePool({ vault: eligibleVault(), onQuery: (sql) => {
+    if (/FROM catalog_libraries l\s+LEFT JOIN catalog_generations/.test(sql)) return { rows: libraryRows };
+    if (/^INSERT INTO catalog_libraries/.test(sql.trim())) { libraryRows = [libRow]; return { rows: [{ authority_era: 'era-1' }] }; }
+  } });
+  const live = authority.createCatalogAuthority({ pool, env: ENV_ON, controlPlaneAuthority: 'postgres', randomUUID: () => 'x' });
+  await live.provisionLibrary({ userId: 'u1' });
+  await live.resolveContext({ userId: 'u1' });
+  await live.assertVaultRebindAllowed({ userId: 'u1' }).catch(() => {});
+  assert.ok(pool.writes().length >= 5, 'la provisión escribió');
+  assert.equal(pool.statements.some((s) => /catalog_account_deletions/i.test(s)), false);
 });
 
 test('§6.1: el arranque de la autoridad rechaza habilitar borrado antes de usar el pool', (t) => {
