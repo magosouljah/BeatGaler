@@ -74,10 +74,12 @@ async function start() {
   directPersistentAssignments.configure({ pool });
 
   const cutover = await prepareControlPlaneCutover({ pool, env: process.env });
-  await assembleServerCatalog({
+  const catalogServices = await assembleServerCatalog({
     pool, env: process.env, cutover,
     onGatewayConfigured: (runtime) => { catalogGatewayRuntime = runtime; },
   });
+  const { configureCatalogBoot, assertVaultRebindAllowedIfConfigured } = require('./catalog-boot');
+  configureCatalogBoot(catalogServices, input => assertVaultRebindAllowedIfConfigured(catalogServices.authority, input));
   // T25: INDEX retirado del runtime. PostgreSQL es la única autoridad del catálogo; el arranque ya no fija, recupera ni publica INDEX
   // (los mensajes INDEX históricos permanecen intactos en Telegram, solo como archivo).
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });

@@ -217,7 +217,8 @@ test('rechazo en origen §6.2.1: recoverMissing no verifica ni toca Telegram si 
   await assert.rejects(lifecycle.recoverMissing(user, { expectedStorageChatId: '-1001' }), /CATALOG_VAULT_REBIND_FORBIDDEN/);
   assert.equal(verified, 0);
   assert.equal(user.storageChatId, '-1001');
-  assert.deepEqual(await authority.assertVaultRebindAllowedIfConfigured({ userId: 'x' }), { native: false, configured: false });
+  const { assertVaultRebindAllowedIfConfigured } = require('../../catalog-boot');
+  assert.deepEqual(await assertVaultRebindAllowedIfConfigured(null, { userId: 'x' }), { native: false, configured: false });
 });
 
 test('§6.1 deshabilitado: la autoridad no expone ninguna ruta de borrado de cuenta', () => {
