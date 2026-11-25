@@ -73,7 +73,9 @@ const mutations = [
 
 for (const [label, filename, original, replacement, expected] of mutations) {
   const source = read(...filename.split('/'));
-  assert.ok(source.includes(original), `${label}: mutation anchor must exist`);
+  const anchor = source.indexOf(original);
+  assert.notEqual(anchor, -1, `${label}: mutation anchor must exist`);
+  assert.equal(source.indexOf(original, anchor + 1), -1, `${label}: mutation anchor must be unique`);
   const changed = source.replace(original, replacement);
   assert.throws(() => verifyDirectArchitecture((...parts) => parts.join('/') === filename ? changed : read(...parts)), expected, label);
 }

@@ -18,6 +18,24 @@ function raw(port, method, p, { headers = {}, body = null } = {}) {
 const fakeCmd = () => new Proxy({}, { get: () => async () => ({}) });
 const auth = (req, res) => { if (req.headers.authorization !== 'Bearer ok') { res.status(401).json({ code: 'UNAUTHENTICATED' }); return null; } return { id: 'u1' }; };
 
+test('POST /catalog/v1/direct/session/stop sin sesión devuelve 401', async () => {
+  const router = createCatalogRouter({
+    authority: {},
+    queries: {},
+    commands: fakeCmd(),
+    operations: {},
+    direct: {},
+    authenticate: auth,
+  });
+  const { server, port } = await listen(router);
+  try {
+    const response = await raw(port, 'POST', '/catalog/v1/direct/session/stop');
+    assert.equal(response.status, 401);
+  } finally {
+    server.close();
+  }
+});
+
 test('rutas Direct B: sesión sin cabeceras X-Catalog; ticket/informe/recibo con era/época; intentos; acceso solo con referencias (sin concesiones de bytes); 501 sin el módulo', async () => {
   const calls = [];
   const direct = {
