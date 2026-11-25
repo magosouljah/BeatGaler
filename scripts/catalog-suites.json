@@ -255,6 +255,17 @@
           ],
           "kind": "node-test",
           "network": "deny"
+        },
+        {
+          "id": "native-transport-provisioning",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-native-transport-provisioning.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
         }
       ]
     },
