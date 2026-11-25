@@ -186,6 +186,13 @@ const r = spawnSync('bash', ['-c', 'x',
   put('cloud-server/tests/readsProd.test.cjs', `${head}const fs = require('node:fs');\nspawnSync(process.execPath, ['x']);\nconst s = fs.${fn}(path.join(__dirname, '..', 'server.js'), 'utf8');\n`);
   put('cloud-server/tests/dataToImported.test.cjs', `${head}const { assertDiff } = require('../scripts/tool.cjs');\nassertDiff(['cloud-server/billing.js']);\n`);
   put('cloud-server/tests/dataToLocalReader.test.cjs', `${head}const fs = require('node:fs');\nconst rd = f => fs.${fn}(f, 'utf8');\nrd('cloud-server/billing.js');\nspawnSync(process.execPath, ['x']);\n`);
+  // casos negativos de la revisión L2: deben seguir siendo M
+  put('cloud-server/scripts/loader.cjs', `module.exports = { loadText: p => require('node:fs').${fn}(p, 'utf8') };\n`);
+  put('cloud-server/scripts/tool.cjs', 'module.exports = { assertDiff: () => {} };\n');
+  put('cloud-server/tests/nodePathMultiline.test.cjs', `${head}const { join } = require('node:path');\nconst fs = require('node:fs');\nspawnSync(process.execPath, ['x']);\nconst s = fs.${fn}(\n  join('cloud-server', 'server.js'), 'utf8');\n`);
+  put('tests/integration/esmResolveMultiline.test.ts', `import { resolve } from 'node:path';\nimport fs from 'node:fs';\nimport { spawnSync } from 'node:child_process';\nspawnSync('x');\nconst s = fs.${fn}(\n  resolve('src/app.ts'), 'utf8');\n`);
+  put('cloud-server/tests/localReaderAfterSpawn.test.cjs', `${head}const fs = require('node:fs');\n${bin}const rd = p => fs.${fn}(p, 'utf8');\nspawnSync(process.execPath, [bin]);\nrd(bin);\n`);
+  put('cloud-server/tests/importedReader.test.cjs', `${head}const { loadText } = require('../scripts/loader.cjs');\nspawnSync(process.execPath, ['x']);\nloadText('cloud-server/billing.js');\n`);
   const git = (...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8' });
   git('init', '-q');
   git('add', '-A');
@@ -201,5 +208,13 @@ const r = spawnSync('bash', ['-c', 'x',
     'spawnAndRead.test.cjs': 'M',
     'readsProd.test.cjs': 'M',
     'dataToLocalReader.test.cjs': 'M',
+    'nodePathMultiline.test.cjs': 'M',
+    'esmResolveMultiline.test.ts': 'M',
+    'localReaderAfterSpawn.test.cjs': 'M',
+    'importedReader.test.cjs': 'M',
+    'nodePathMultiline.test.cjs': 'M',
+    'esmResolveMultiline.test.ts': 'M',
+    'localReaderAfterSpawn.test.cjs': 'M',
+    'importedReader.test.cjs': 'M',
   });
 });

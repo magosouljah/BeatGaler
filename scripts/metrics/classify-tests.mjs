@@ -10,8 +10,12 @@
 //   (2) a product path literal with a code extension elsewhere in the file (helper read("src/x.ts"), file tables).
 // Limits: text heuristic. A test that reads source only to locate something, or that both spawns and reads a script,
 // lands in M. Audit with mode "files" (prints the evidence line per file).
+// Exempt (not a read): a code path used only as an argument of a spawn/exec/fork call, or passed as data to a function
+// imported from a relative product module. Known gap: a spawn aimed at a reader (node -e "readFileSync(...)", grep over
+// source) is exempt like any spawn line; the imported module is not inspected for readFile.
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { repoArg, tracked, read, head } from './lib.mjs';
 const repo = repoArg();
 const mode = process.argv[3] || 'summary';
@@ -58,6 +62,33 @@ const WDIO = new RegExp('\\bbrowser\\.(url|execute|\\$)|\\$\\(\\s*' + Q);
 // A path that is never read: (a) bound to a name whose every other use is inside a spawn/exec/fork call, or
 // (b) passed as data to a function imported from product code (callee imported from a non-helper module).
 const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// (b) applies only to RELATIVE modules (require('../x') / from './x'), never node:* or packages (path.join/resolve are not product code).
+const RELATIVE_MODULE = new RegExp('(?:require\\(|from)\\s*' + Q + '\\.{1,2}/');
+// Fail-closed: true when the imported module cannot be found/read or itself contains a read call (it may read the path).
+let currentFile = '';
+function moduleReads(importLine) {
+  const spec = /(?:require\(|from)\s*['"`](\.{1,2}\/[^'"`]+)['"`]/.exec(importLine)?.[1];
+  if (!spec) return true;
+  const base = path.posix.normalize(path.posix.join(path.posix.dirname(currentFile), spec));
+  for (const ext of ['', '.js', '.cjs', '.mjs', '.ts', '.tsx', '/index.js', '/index.ts']) {
+    const text = read(repo, base + ext);
+    if (text) return READ_CALL.test(text);
+  }
+  return true;
+}
+// True when the spawn call starting on line j is still open (parentheses unbalanced) at line i with no read call between.
+function spawnOpenAt(ls, j, i) {
+  if (j === i) return true;
+  const m = SPAWN_LINE.exec(ls[j]);
+  let depth = 0;
+  for (let k = j; k < i; k++) {
+    const text = k === j ? ls[k].slice(m.index) : ls[k];
+    if (k > j && READ_CALL.test(text)) return false;
+    for (const ch of text.replace(/'[^'\n]*'|"[^"\n]*"/g, "''")) { if (ch === '(') depth++; else if (ch === ')') depth--; }
+    if (depth <= 0) return false;
+  }
+  return true;
+}
 function notRead(l, ls) {
   const decl = /^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(l);
   if (decl) {
@@ -66,7 +97,7 @@ function notRead(l, ls) {
     // (another declaration of the same name is a different scope: ignored)
     const redecl = new RegExp('^\\s*(?:const|let|var)\\s+' + esc(decl[1]) + '\\s*=');
     const idx = ls.map((x, i) => (x !== l && !/^\s*\/\//.test(x) && id.test(x.replace(/'[^'\n]*'|"[^"\n]*"/g, "''")) && !redecl.test(x) ? i : -1)).filter(i => i >= 0);
-    const launched = i => !READ_CALL.test(ls[i]) && [i, i - 1, i - 2].some(j => j >= 0 && SPAWN_LINE.test(ls[j]));
+    const launched = i => !READ_CALL.test(ls[i]) && [i, i - 1, i - 2].some(j => j >= 0 && SPAWN_LINE.test(ls[j]) && spawnOpenAt(ls, j, i));
     if (idx.length && idx.every(launched)) return true;
   }
   const call = /(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(\s*\[?\s*['"`]/.exec(l);
@@ -74,7 +105,7 @@ function notRead(l, ls) {
     const name = esc(call[1]);
     const imp = new RegExp('^\\s*(?:(?:const|let|var)\\s+\\{[^}]*\\b' + name + '\\b[^}]*\\}\\s*=\\s*require|import\\s*\\{[^}]*\\b' + name + '\\b[^}]*\\}\\s*from)');
     const src = ls.find(x => imp.test(x));
-    if (src && !/helpers?\b|fixtures?\b/i.test(src)) return true;
+    if (src && RELATIVE_MODULE.test(src) && !/helpers?\b|fixtures?\b/i.test(src) && !moduleReads(src)) return true;
   }
   return false;
 }
@@ -146,6 +177,7 @@ const files = tracked(repo, 'tests', 'cloud-server/tests', 'scripts');
 for (const [dir, pred] of DIRS) {
   for (const f of files.filter(pred)) {
     const t = read(repo, f);
+    currentFile = f;
     const ls = t.split(/\r?\n/);
     const hasRead = READ_CALL.test(t) || RAW_IMPORT.test(t);
     const evidence = hasRead ? sourceEvidence(ls) : '';
