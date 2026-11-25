@@ -416,6 +416,40 @@ async function main() {
     fs.rmSync(authorityDir, { recursive: true, force: true });
   }
 
+  {
+    // B8: el filtro de persistencia falla cerrado; nunca escribe contenido sin filtrar.
+    const failDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-filter-fail-closed-'));
+    const marker = Symbol.for('beatgaler.accountLifecyclePersistenceFilter');
+    const failRuntime = createAccountLifecycleRuntime({ dataDir: failDir, now: () => clock, env: {} });
+    failRuntime.provide({ filterAccountsValue() { throw new Error('boom user@example.com'); } });
+    failRuntime.installPersistenceFilter();
+    try {
+      const accountsTmp = path.join(failDir, 'accounts-data.json.tmp');
+      const cloudTmp = path.join(failDir, 'cloud-data.json.tmp');
+      const unfiltered = JSON.stringify({ users: [{ id: 'deleted-user', email: 'user@example.com' }], sessions: {} });
+      assert.throws(() => fs.writeFileSync(accountsTmp, unfiltered, 'utf8'), error => {
+        assert.equal(error.code, 'ACCOUNT_LIFECYCLE_FILTER_FAILED');
+        assert.equal(String(error.message).includes('user@example.com'), false);
+        return true;
+      });
+      assert.equal(fs.existsSync(accountsTmp), false, 'filter failure must not persist unfiltered accounts');
+      assert.throws(() => fs.writeFileSync(cloudTmp, '{not json', 'utf8'), { code: 'ACCOUNT_LIFECYCLE_FILTER_FAILED' });
+      assert.equal(fs.existsSync(cloudTmp), false, 'unparseable cloud data must not be persisted');
+      const finalFile = path.join(failDir, 'accounts-data.json');
+      fs.writeFileSync(finalFile, '{"keep":true}', 'utf8');
+      assert.throws(() => fs.writeFileSync(accountsTmp, unfiltered, 'utf8'), { code: 'ACCOUNT_LIFECYCLE_FILTER_FAILED' });
+      assert.throws(() => { fs.writeFileSync(accountsTmp, unfiltered, 'utf8'); fs.renameSync(accountsTmp, finalFile); });
+      assert.equal(fs.readFileSync(finalFile, 'utf8'), '{"keep":true}', 'atomic write leaves the final file unchanged');
+      const other = path.join(failDir, 'other.json');
+      fs.writeFileSync(other, '{not json', 'utf8');
+      assert.equal(fs.readFileSync(other, 'utf8'), '{not json', 'unrelated files are not parsed or altered');
+    } finally {
+      const filterState = fs[marker];
+      if (filterState) { fs.writeFileSync = filterState.original; delete fs[marker]; }
+      fs.rmSync(failDir, { recursive: true, force: true });
+    }
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
   await testSharedRevocation(clock);
   console.log('account-lifecycle: PASS');

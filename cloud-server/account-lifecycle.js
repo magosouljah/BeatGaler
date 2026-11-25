@@ -470,16 +470,23 @@ function createAccountLifecycleRuntime({
     state.installed = true;
     fs.writeFileSync = function lifecycleFilteredWrite(file, data, ...rest) {
       let nextData = data;
-      try {
-        const fileText = String(file || '').replace(/\\/g, '/');
-        if (typeof data === 'string' && (fileText.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`) || fileText.endsWith('/cloud-data.json.tmp'))) {
+      const fileText = String(file || '').replace(/\\/g, '/');
+      const isAccounts = fileText.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`);
+      if (typeof data === 'string' && (isAccounts || fileText.endsWith('/cloud-data.json.tmp'))) {
+        // Fail closed: if parsing or any filter fails, nothing is written.
+        try {
           let parsed = JSON.parse(data);
           for (const runtime of state.runtimes) {
-            parsed = fileText.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`) ? runtime.api.state.filterAccountsValue(parsed) : runtime.api.state.filterCloudValue(parsed);
+            parsed = isAccounts ? runtime.api.state.filterAccountsValue(parsed) : runtime.api.state.filterCloudValue(parsed);
           }
           nextData = JSON.stringify(parsed, null, 2);
+        } catch (cause) {
+          const error = new Error('Account lifecycle persistence filter failed; write aborted.');
+          error.code = 'ACCOUNT_LIFECYCLE_FILTER_FAILED';
+          error.cause = cause;
+          throw error;
         }
-      } catch {}
+      }
       return state.original.call(fs, file, nextData, ...rest);
     };
   }
