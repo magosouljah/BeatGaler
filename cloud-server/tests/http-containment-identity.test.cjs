@@ -137,6 +137,13 @@ for (const virtual of [true, false]) {
     assert.equal(nexted, true);
   });
 
+  test(`bindSessionInstallation rechaza una sesión de otro usuario y no escribe bindings (${mode})`, t => {
+    const extra = [{ id: 'usr_a', email: 'a@example.test', providers: {} }];
+    const f = fixture(t, { virtual, initial: store('usr_c', 'c@example.test', { extraUsers: extra }) });
+    assert.equal(f.containment.bindSessionInstallation(token, INSTALLATION, 'usr_a'), false);
+    assert.equal(fs.existsSync(path.join(f.dir, 'authz-session-bindings.json')), false);
+  });
+
   test(`bindSessionInstallation exige sesión del propietario esperado (${mode})`, t => {
     const f = fixture(t, { virtual });
     assert.equal(f.containment.bindSessionInstallation(token, INSTALLATION, 'usr_a'), true);
