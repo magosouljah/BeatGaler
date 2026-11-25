@@ -10,6 +10,7 @@
 // El transporte es una interfaz inyectada (gateway T11); aquí nunca se envía nada: solo verify/search sobre identidades ya persistidas.
 
 const crypto = require('crypto');
+const queue = require('./queue');
 
 const DEFAULTS = Object.freeze({ claimMax: 10, leaseMs: 60_000, renewEveryMs: 20_000, globalConcurrency: 2, perLibraryConcurrency: 1, pollMs: 1000, stepsPerClaim: 4 });
 const KINDS = Object.freeze(['TRANSFER_VERIFY', 'TRANSFER_COMMIT', 'TRANSFER_RECONCILE', 'QUERY_SET_BUILD', 'OPERATION_STEP', 'PURGE']);
@@ -69,7 +70,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
       const evidence = await remote(job.userId, () => transport.verifyMessage({ chatId: part.chat_id, messageId: Number(receipt.messageId), randomId: part.random_id, senderId: part.sender_id, declaredSize: Number(part.declared_size), declaredSha256: part.declared_sha256, operationId: job.operationId, partKey }));
       if (!evidence || !Number.isSafeInteger(evidence.size)) throw new WorkerJobError('VERIFY_INCONCLUSIVE', 'provider returned no usable evidence', { transient: true });
       const r = await operations.recordVerification({ userId: job.userId, operationId: job.operationId, partKey, evidence: { size: evidence.size, sha256: evidence.sha256 ?? null, provider: evidence.provider ?? 'telegram', messageId: Number(receipt.messageId) }, lease: { jobId: job.jobId, owner, generation: job.lease.generation } });
-      if (r.ready) await operations.enqueueJob({ userId: job.userId, kind: 'TRANSFER_COMMIT', operationId: job.operationId, payload: { reason: 'READY' }, jobId: `job-commit-${job.operationId}` }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
+      if (r.ready) await queue.enqueueToleratingUniqueViolation(operations, { userId: job.userId, kind: 'TRANSFER_COMMIT', operationId: job.operationId, payload: { reason: 'READY' }, jobId: `job-commit-${job.operationId}` });
       return { verified: true, ready: r.ready };
     },
     // Commit idempotente (C7.6): 202 → pendiente (reintento con backoff), 200 → DONE; conflicto → BLOCKED visible.
@@ -103,7 +104,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
       const h = await libraryHeaders(job.userId);
       if (part.dispatch_state !== 'RECEIPT') await operations.putReceipt({ ...h, operationId: job.operationId, partKey, receipt: { messageId: m.messageId, documentId: m.documentId ?? null, size: m.size, chatId: part.chat_id }, lease: { jobId: job.jobId, owner, generation: job.lease.generation } });
       const r = await operations.recordVerification({ userId: job.userId, operationId: job.operationId, partKey, evidence: { size: m.size, sha256: m.sha256 ?? null, provider: 'telegram', messageId: m.messageId, reconciled: true }, lease: { jobId: job.jobId, owner, generation: job.lease.generation } });
-      if (r.ready) await operations.enqueueJob({ userId: job.userId, kind: 'TRANSFER_COMMIT', operationId: job.operationId, payload: { reason: 'RECONCILED' }, jobId: `job-commit-${job.operationId}` }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
+      if (r.ready) await queue.enqueueToleratingUniqueViolation(operations, { userId: job.userId, kind: 'TRANSFER_COMMIT', operationId: job.operationId, payload: { reason: 'RECONCILED' }, jobId: `job-commit-${job.operationId}` });
       return { reconciled: true, ready: r.ready };
     },
     // Construcción de conjuntos (T06): hasta stepsPerClaim lotes por claim; BUILDING restante → re-encolar; READY/STALE → DONE.
@@ -114,8 +115,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
         last = await queries.stepQuerySet({ userId: job.userId, setId: job.payload.setId, batch: 240 });
         if (last.status !== 'BUILDING') return { status: last.status, memberCount: last.memberCount };
       }
-      const n = (job.payload.continuation || 0) + 1; const root = job.payload.root || job.jobId;
-      await operations.enqueueJob({ userId: job.userId, kind: 'QUERY_SET_BUILD', payload: { ...job.payload, continuation: n, root }, jobId: `${root}-c${n}`.slice(0, 64) }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
+      await queue.continueLater(operations, 'QUERY_SET_BUILD', job);
       return { status: 'BUILDING', memberCount: last.memberCount, continued: true };
     },
     // Lotes de operaciones bulk/rename (T07): un paso por iteración, CONFLICT/CANCELLED/PARTIAL/COMPLETED terminan el job.
@@ -127,8 +127,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
         last = await commands.stepOperation({ ...h, operationId: job.payload.operationId || job.operationId, batch: 50 });
         if (!['QUEUED', 'RUNNING'].includes(last.status)) return { status: last.status, progress: last.progress };
       }
-      const n = (job.payload.continuation || 0) + 1; const root = job.payload.root || job.jobId;
-      await operations.enqueueJob({ userId: job.userId, kind: 'OPERATION_STEP', operationId: job.operationId, payload: { ...job.payload, continuation: n, root }, jobId: `${root}-c${n}`.slice(0, 64) }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
+      await queue.continueLater(operations, 'OPERATION_STEP', job);
       return { status: last.status, continued: true };
     },
     // Purge durable (T15, C9): cada paso es una transacción corta + (para objetos) journal y llamadas remotas fuera de SQL; el módulo
@@ -141,8 +140,7 @@ function createCatalogWorker({ pool, operations, queries = null, commands = null
         last = await remote(job.userId, () => purge.step({ userId: job.userId, purgeId }));
         if (!last.more) return { status: last.status, done: true };
       }
-      const n = (job.payload.continuation || 0) + 1; const root = job.payload.root || job.jobId;
-      await operations.enqueueJob({ userId: job.userId, kind: 'PURGE', operationId: job.operationId, payload: { ...job.payload, purgeId, continuation: n, root }, jobId: `${root}-c${n}`.slice(0, 64) }).catch((e) => { if (e?.detail?.sqlstate !== '23505') throw e; });
+      await queue.continueLater(operations, 'PURGE', job, { ...job.payload, purgeId });
       return { status: last.status, continued: true };
     },
   };

@@ -55,8 +55,10 @@ test('catalog/ no importa transporte ni red', () => {
     // T06: ./cursor y ./queries son módulos internos (SQL + HMAC); routes.js es el único que requiere express (servidor HTTP, no cliente de red).
     // M4.3: ./library-tx es módulo interno (política de transacción + SQL); sin transporte ni red.
     const allowed = ['crypto', './contract', './beat-projection', './authority', './cursor', './queries', './metadata-rules', './commands', './facets', './name-uniqueness', './library-tx'];
-    if (f === 'worker.js') allowed.length = 1; // worker.js: solo crypto; transporte inyectado, nunca importado
+    if (f === 'worker.js') allowed.length = 1; // transporte inyectado, nunca importado
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
+    if (['worker.js', 'library-tx.js', 'direct.js'].includes(f)) allowed.push('./queue');
+    if (f === 'queue.js') allowed.splice(0, allowed.length, './authority'); // C7: solo JSON canónico; la conexión se recibe del llamador
     if (f === 'prefix-packs.js') allowed.push('./transport-gateway'); // E75: solo el marcador del paquete; verificador inyectado; sin fs, SDK ni red
     if (f === 'direct.js') allowed.push('./transport-gateway'); // E70: Direct B; solo caption/identidad del gateway (sin SDK ni red); sesión y vinculación inyectadas
     if (f === 'native-cli.js') allowed.push('fs', '../legacy-import-executor'); // T17: manifiestos en disco y el id determinista de vault del importador (R12)
