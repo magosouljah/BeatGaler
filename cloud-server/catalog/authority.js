@@ -324,22 +324,9 @@ async function assertNoNativeActivation(pool, action = 'control-plane cutover') 
   }
 }
 
-// Singleton para server-core (igual que library-index-publication.configure): sin configurar, los helpers de origen no actúan.
-let configured = null;
-function configureCatalogAuthority(options = null) {
-  configured = options && options.pool ? createCatalogAuthority(options) : null;
-  return configured;
-}
-function currentCatalogAuthority() { return configured; }
-async function assertVaultRebindAllowedIfConfigured(input) {
-  if (!configured) return { native: false, configured: false };
-  return configured.assertVaultRebindAllowed(input);
-}
-
 module.exports = {
   RESET_LIBRARY_SQL,
   NATIVE_FLAG_ENV, ACCOUNT_DELETION_FLAG_ENV, CATALOG_SESSION_PROTOCOL, DIRECT_CREDENTIAL_KEYS, SQLSTATE,
   CatalogAuthorityError, catalogNativeConfig, createCatalogAuthority, evaluateNativePredicate, nativeGenerationDescriptor, canonicalJson,
   stripDirectCredentials, stripDirectPublicJson, containsDirectCredentials, assertNativeStartupCompatible, assertNoNativeActivation,
-  configureCatalogAuthority, currentCatalogAuthority, assertVaultRebindAllowedIfConfigured,
 };

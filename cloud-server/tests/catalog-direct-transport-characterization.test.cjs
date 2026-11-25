@@ -299,11 +299,8 @@ test('transformSession y POST /catalog/v1/direct/session emiten bootstrap y vín
   assert.equal(rejected.ok, false);
 
   const { assembleServerCatalog } = require('../catalog-assembly');
-  const { currentCatalogAuthority } = require('../catalog/authority');
-  const { currentCatalogQueries } = require('../catalog/queries');
-  const { currentCatalogDirect } = require('../catalog/direct');
   const { createCatalogRouter } = require('../catalog/routes');
-  await assembleServerCatalog({
+  const { authority, queries, direct } = await assembleServerCatalog({
     pool: fakeCatalogPool(), cutover: { authority: 'postgres' }, onGatewayConfigured() {},
     env: {
       NODE_ENV: 'test', BEATGALER_CATALOG_NATIVE_ENABLED: 'true',
@@ -311,8 +308,7 @@ test('transformSession y POST /catalog/v1/direct/session emiten bootstrap y vín
     },
   });
   const router = createCatalogRouter({
-    authority: currentCatalogAuthority(), queries: currentCatalogQueries(),
-    direct: currentCatalogDirect(), authenticate: () => ({ id: 'catalog-user' }),
+    authority, queries, direct, authenticate: () => ({ id: 'catalog-user' }),
   });
   const start = (body) => observeRoute(router, 'post', '/catalog/v1/direct/session', { body });
   const bootstrap = await start({});

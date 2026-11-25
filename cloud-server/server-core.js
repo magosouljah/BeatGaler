@@ -28,21 +28,6 @@ const { createPrivateUserStorageGroup, ensurePrivateUserStorageBotAbsent, verify
 
 const directTransport = require("./direct-transport-control");
 
-
-const { assertVaultRebindAllowedIfConfigured, currentCatalogAuthority } = require("./catalog/authority");
-const { currentCatalogQueries } = require("./catalog/queries");
-const { currentCatalogCommands } = require("./catalog/commands");
-const { currentCatalogOperations } = require("./catalog/operations");
-const { currentCatalogPlayback } = require("./catalog/playback");
-const { currentCatalogMedia } = require("./catalog/media");
-const { currentCatalogPurge } = require("./catalog/purge");
-const { currentCatalogDirect } = require("./catalog/direct");
-const { currentPrefixPacks } = require("./catalog/prefix-packs");
-
-const { createCatalogRouter } = require("./catalog/routes");
-const { currentNativeTransportProvisioner } = require("./catalog/native-transport-provisioning");
-
-
 const { ensurePlanState, CODE_POLICY } = require("./plans");
 const accessGrants = require("./access-grant-runtime");
 const accessRuntime = require("./access-runtime");
@@ -131,7 +116,7 @@ app.use('/catalog/v1/prefix-packs/main', express.json({ limit: '6mb' }));
 app.use(express.json({ limit: "256kb" }));
 // T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
 // T16: rondas, medios, purge y transferencias montados; sin gateway real responden 503 TRANSFER_UNAVAILABLE / jobs en reintento (fail-closed).
-app.use(createCatalogRouter({ authority: currentCatalogAuthority(), queries: currentCatalogQueries(), commands: currentCatalogCommands(), operations: currentCatalogOperations(), direct: currentCatalogDirect(), transportProvisioner: currentNativeTransportProvisioner(), prefixPacks: currentPrefixPacks(), playback: currentCatalogPlayback(), media: currentCatalogMedia(), purge: currentCatalogPurge(), authenticate: (req, res) => authenticatedUser(req, res), log: console.warn }));
+const assertVaultRebindAllowed = require('./catalog-boot').mountCatalog(app, (req, res) => authenticatedUser(req, res));
 const { statePath } = require("./state-dir");
 const DATA_FILE = statePath("cloud-data.json");
 const AUTH_DATA_FILE = statePath("accounts-data.json");
@@ -672,7 +657,7 @@ const userStorageLifecycle = createUserStorageLifecycle({
   rebindStorageBindingsForUser,
   ensureEmptyIndexForStorage,
   // T05-N (NATIVO r2.1 §6.2.1): rechazo en origen del cambio de chat de un vault con biblioteca nativa.
-  assertVaultRebindAllowed: input => assertVaultRebindAllowedIfConfigured(input),
+  assertVaultRebindAllowed,
   logger: console,
 });
 

@@ -2,7 +2,7 @@
 
 const { prepareControlPlaneCutover } = require('./control-plane-cutover-runtime');
 const accessRuntime = require('./access-runtime');
-const catalogAuthority = require('./catalog/authority');
+const { createCatalogAuthority } = require('./catalog/authority');
 const catalogQueries = require('./catalog/queries');
 const catalogCommands = require('./catalog/commands');
 const catalogOperations = require('./catalog/operations');
@@ -42,15 +42,15 @@ async function assembleServerCatalog({ pool, env, cutover, onGatewayConfigured }
   const catalogPrefixPacks = require('./catalog/prefix-packs');
 
   // T05-N: la autoridad solo se monta con el plano PostgreSQL.
-  const nativeAuthority = catalogAuthority.configureCatalogAuthority(cutover.authority === 'postgres' && pool
-    ? { pool, env, controlPlaneAuthority: cutover.authority } : null);
-  const config = nativeAuthority ? { pool, authority: nativeAuthority } : null;
-  const { queries: nativeQueries } = configureCatalogServices(config, env);
+  const authority = cutover.authority === 'postgres' && pool
+    ? createCatalogAuthority({ pool, env, controlPlaneAuthority: cutover.authority }) : null;
+  const config = authority ? { pool, authority } : null;
+  const { queries, commands, operations } = configureCatalogServices(config, env);
 
   // Owner-authorized reduced-fencing rollout: distinct from a G2 PASS.
   const reusedBotRiskAccepted = String(env.BEATGALER_CATALOG_OWNER_G2_RISK_ACCEPTED || '').trim().toLowerCase() === 'true';
   if (reusedBotRiskAccepted) {
-    if (!pool || !nativeAuthority || !nativeAuthority.config.nativeEnabled) {
+    if (!pool || !authority || !authority.config.nativeEnabled) {
       throw new Error('STOP-GATE: reused bot risk acceptance requires an enabled native PostgreSQL authority');
     }
     const activation = (await pool.query('SELECT transport_bot_ids, direct_token_exposure FROM catalog_native_activation')).rows;
@@ -61,16 +61,15 @@ async function assembleServerCatalog({ pool, env, cutover, onGatewayConfigured }
   }
 
   // T16: sin gateway de medios, transferencias 503 y jobs en reintento.
-  const gatewayRuntime = catalogGateway.gatewayFromEnv({ pool: nativeAuthority ? pool : null, env, log: console });
+  const gatewayRuntime = catalogGateway.gatewayFromEnv({ pool: authority ? pool : null, env, log: console });
   // El cierre PostgreSQL debe conocer el gateway aun si falla una configuración posterior.
   onGatewayConfigured(gatewayRuntime);
   const mediaGateway = gatewayRuntime ? gatewayRuntime.gateway : null;
-  const nativeOperations = catalogOperations.currentCatalogOperations();
-  catalogPlayback.configureCatalogPlayback(nativeAuthority ? { pool, authority: nativeAuthority } : null);
+  const playback = catalogPlayback.configureCatalogPlayback(config);
   const directFlag = String(env.BEATGALER_CATALOG_DIRECT_ENABLED || '').trim().toLowerCase() === 'true';
-  catalogMedia.configureCatalogMedia(nativeAuthority ? { pool, authority: nativeAuthority } : null);
+  const media = catalogMedia.configureCatalogMedia(config);
   const journalDir = String(env.BEATGALER_CATALOG_JOURNAL_DIR || '').trim();
-  configurePurge(config, mediaGateway, journalDir);
+  const purge = configurePurge(config, mediaGateway, journalDir);
 
   // Direct B (E70): apagado por defecto. En producción exige el dictamen G2 o riesgo aceptado.
   const directProd = ['production', 'prod'].includes(String(env.BEATGALER_DEPLOYMENT_ENV || env.NODE_ENV || '').trim().toLowerCase());
@@ -78,31 +77,31 @@ async function assembleServerCatalog({ pool, env, cutover, onGatewayConfigured }
     throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires proven G2 or owner-accepted unrotated-bot risk; refusing to start.');
   }
   // E75: el gateway solo comprueba el mensaje publicado por el navegador.
-  catalogPrefixPacks.configurePrefixPacks(String(env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && nativeAuthority ? {
-    pool, authority: nativeAuthority, gateway: mediaGateway, directReads: directFlag, log: console.warn,
+  const prefixPacks = catalogPrefixPacks.configurePrefixPacks(String(env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && authority ? {
+    pool, authority, gateway: mediaGateway, directReads: directFlag, log: console.warn,
   } : null);
-  catalogDirect.configureCatalogDirect(directFlag && nativeAuthority && nativeOperations ? {
-    pool, authority: nativeAuthority, operations: nativeOperations,
+  const direct = catalogDirect.configureCatalogDirect(directFlag && authority && operations ? {
+    pool, authority, operations,
     resolveProjectAccess: catalogDirect.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }),
     sessionSource: ({ botId, chatId }) => getCatalogTelegramTransport().catalogDirectSession({ botId, chatId }),
     bindBuilder: (session, metadata) => require('./productive-temp-auth-boundary').transformSession(session, metadata),
     log: console.warn,
   } : null);
   // La pertenencia al vault se verifica de forma perezosa con MASTER y el bot.
-  catalogNativeTransport.configureNativeTransportProvisioner(
-    nativeAuthority?.config.nativeEnabled && directFlag && mediaGateway
+  const transportProvisioner = catalogNativeTransport.configureNativeTransportProvisioner(
+    authority?.config.nativeEnabled && directFlag && mediaGateway
       ? { pool, assignmentStore: require('./direct-vault-assignment').createDirectVaultAssignmentStore(pool), transport: getCatalogTelegramTransport(), log: console.warn }
       : null);
 
   // E73: precalentamiento en segundo plano, sin bloquear el arranque ni /readyz.
-  const direct = catalogDirect.currentCatalogDirect();
   const raw = env.BEATGALER_CATALOG_DIRECT_PREWARM_BOTS;
   const maxBots = raw === undefined || raw === '' ? 3 : Number(raw);
   if (direct && maxBots > 0) {
     const timer = setTimeout(() => { direct.prewarm({ maxBots }).catch(() => {}); }, 3000);
     if (typeof timer.unref === 'function') timer.unref();
   }
-  console.log(`[catalog] native=${nativeAuthority ? (nativeAuthority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${nativeQueries ? nativeQueries.keySource : 'n/a'} gateway=${mediaGateway ? 'bot-router(lazy)' : 'none'} journal=${journalDir ? 'file' : 'none'}`);
+  console.log(`[catalog] native=${authority ? (authority.config.nativeEnabled ? 'enabled' : 'flag-off') : 'not-mounted'} cursor-keys=${queries ? queries.keySource : 'n/a'} gateway=${mediaGateway ? 'bot-router(lazy)' : 'none'} journal=${journalDir ? 'file' : 'none'}`);
+  return { authority, queries, commands, operations, playback, media, purge, prefixPacks, direct, transportProvisioner };
 }
 
 async function assembleWorkerCatalog({ pool, env }) {
@@ -112,7 +111,7 @@ async function assembleWorkerCatalog({ pool, env }) {
     await pool.end();
     return null;
   }
-  const authority = catalogAuthority.configureCatalogAuthority({ pool, env, controlPlaneAuthority: cutover.authority });
+  const authority = pool ? createCatalogAuthority({ pool, env, controlPlaneAuthority: cutover.authority }) : null;
   if (!authority || !authority.config.nativeEnabled) {
     console.error('[catalog-worker] refused: native catalog flag is off');
     await pool.end();

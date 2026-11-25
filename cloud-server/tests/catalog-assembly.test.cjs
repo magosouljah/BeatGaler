@@ -25,13 +25,10 @@ function fixture(t, { cutoverAuthority = 'postgres', nativeEnabled = true, activ
   const stubs = {
     './control-plane-cutover-runtime': { prepareControlPlaneCutover },
     './access-runtime': { configure: record('access'), resolveUserAccess: record('resolveAccess', { quotas: { max_beats: 7 } }) },
-    './catalog/authority': { configureCatalogAuthority: (config) => record('authority', config ? authority : null)(config) },
+    './catalog/authority': { createCatalogAuthority: record('authority', authority) },
     './catalog/queries': { configureCatalogQueries: record('queries', queries) },
     './catalog/commands': { configureCatalogCommands: record('commands', commands) },
-    './catalog/operations': {
-      configureCatalogOperations: record('operations', operations),
-      currentCatalogOperations: record('currentOperations', operations),
-    },
+    './catalog/operations': { configureCatalogOperations: record('operations', operations) },
     './catalog-gateway-runtime': {
       gatewayFromEnv: (config) => {
         record('gateway')(config);
@@ -45,8 +42,7 @@ function fixture(t, { cutoverAuthority = 'postgres', nativeEnabled = true, activ
     './catalog/prefix-packs': { configurePrefixPacks: record('prefixPacks') },
     './catalog/direct': {
       createProjectAccessResolver: record('projectAccess', () => {}),
-      configureCatalogDirect: record('direct'),
-      currentCatalogDirect: record('currentDirect', null),
+      configureCatalogDirect: record('direct', null),
     },
     './catalog/native-transport-provisioning': { configureNativeTransportProvisioner: record('transport') },
     './catalog/worker': { createCatalogWorker: record('worker', worker) },
@@ -73,11 +69,16 @@ function fixture(t, { cutoverAuthority = 'postgres', nativeEnabled = true, activ
 
 test('Ensamblado HTTP: conserva orden, catálogo sin gateway ni journal y estado (G-d/G-e)', async (t) => {
   const f = fixture(t);
-  await f.runServer();
+  const services = await f.runServer();
   assert.deepEqual(f.order(), [
     'authority', 'queries', 'commands', 'operations', 'gateway', 'publishGateway',
-    'currentOperations', 'playback', 'media', 'purge', 'prefixPacks', 'direct', 'transport', 'currentDirect', 'log',
+    'playback', 'media', 'purge', 'prefixPacks', 'direct', 'transport', 'log',
   ]);
+  assert.equal(services.authority, f.authority);
+  assert.equal(services.queries, f.queries);
+  assert.equal(services.commands, f.commands);
+  assert.equal(services.operations, f.operations);
+  assert.equal(services.purge, f.purge);
   assert.deepEqual(f.input('purge'), { pool: f.pool, authority: f.authority, gateway: null, journal: null });
   assert.equal(f.input('publishGateway'), null);
   assert.equal(f.input('direct'), null);
@@ -90,7 +91,7 @@ test('G-a: rechaza riesgo aceptado sin autoridad habilitada o sin activación SQ
   await assert.rejects(f.runServer(env, { pool: null }), {
     message: 'STOP-GATE: reused bot risk acceptance requires an enabled native PostgreSQL authority',
   });
-  assert.deepEqual(f.order(), ['authority', 'queries', 'commands', 'operations']);
+  assert.deepEqual(f.order(), ['queries', 'commands', 'operations']);
   f.calls.length = 0;
   await assert.rejects(f.runServer(env), {
     message: 'STOP-GATE: reused bot risk acceptance requires REUSED_UNROTATED SQL activation',
@@ -104,7 +105,7 @@ test('G-b: Direct en producción sin G2 aborta después de purge', async (t) => 
   await assert.rejects(f.runServer({ NODE_ENV: 'prod', BEATGALER_CATALOG_DIRECT_ENABLED: 'true' }), {
     message: 'STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires proven G2 or owner-accepted unrotated-bot risk; refusing to start.',
   });
-  assert.deepEqual(f.order().slice(-5), ['publishGateway', 'currentOperations', 'playback', 'media', 'purge']);
+  assert.deepEqual(f.order().slice(-4), ['publishGateway', 'playback', 'media', 'purge']);
 });
 
 test('G-c: pasa el entorno al gateway y su rechazo precede a G-b', async (t) => {

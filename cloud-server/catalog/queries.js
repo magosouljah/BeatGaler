@@ -570,7 +570,7 @@ function createCatalogQueries({ pool = null, authority = null, env = process.env
   });
 }
 
-// Singleton para server-core (mismo patrón que authority.configureCatalogAuthority).
+// Singleton para server-core (la autoridad ya no es singleton desde M4.1b: catalog-boot.js).
 let configured = null;
 function configureCatalogQueries(options = null) {
   configured = options && options.pool && options.authority ? createCatalogQueries(options) : null;
