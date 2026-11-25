@@ -1469,6 +1469,17 @@
           "network": "deny"
         },
         {
+          "id": "t19-catalog-backup-secrets-static",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-backup-secrets.static.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
+        },
+        {
           "id": "g3-preflight",
           "cmd": [
             "node",

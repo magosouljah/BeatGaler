@@ -3,7 +3,7 @@
 cloud-server/tests/account-lifecycle-request-guard.test.cjs
 cloud-server/tests/auth-identity-preflight.test.cjs
 cloud-server/tests/billing-polar-daily.test.cjs
-cloud-server/tests/catalog/catalog-backup-infra.test.cjs
+cloud-server/tests/catalog/catalog-backup-secrets.static.test.cjs
 cloud-server/tests/catalog/catalog-contract.test.cjs
 cloud-server/tests/password-kdf.test.cjs
 cloud-server/tests/plan-dev-switch-removed.test.cjs
