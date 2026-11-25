@@ -29,12 +29,12 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 ## 3. Roles
 
 - **Propietario (Purp):** decide arquitectura y producto; autoriza operaciones reales, despliegues, borrados, push y cambios de credenciales. No programa: explicarle por responsabilidades y comportamiento, y traerle decisiones, no preguntas técnicas.
-- **Sol (GPT-6):** revisión técnica cuando el propietario la pida; conserva el dictamen formal de gates pendientes (G2, G3).
+- **Dictamen técnico (D26):** Sol ya no es dependencia. El dictamen sensible lo da Opus con inteligencia ALTA más un segundo revisor independiente. Producto, producción y operaciones irreversibles siguen siendo del propietario.
 - **Claude Code:** ejecutor. Inteligencia MEDIA por defecto; BAJA para tareas mecánicas; ALTA solo para arquitectura nueva o revisión crítica.
 
 ## 4. Estado y pendientes que no deben darse por cerrados
 
-- **G2 NOT_PROVEN:** producción usa bots reutilizados sin rotar (`REUSED_UNROTATED`, riesgo aceptado por el propietario). **G3 pendiente.** No declarar PASS con mocks.
+- **G2 NOT_PROVEN:** producción usa bots reutilizados sin rotar (`REUSED_UNROTATED`, riesgo aceptado por el propietario). **G3 pendiente.** El dictamen formal de G2/G3 lo da Opus ALTA con segundo revisor (D26); cerrarlos con riesgo residual es decisión del propietario. No declarar PASS con mocks.
 - Flujos con sesión en producción: **NOT_PROVEN** (no hay cuenta de prueba controlada en producción).
 - Eliminación física en Telegram **deshabilitada a propósito** (`BEATGALER_CATALOG_JOURNAL_DIR` sin configurar).
 - Borrado de cuentas: proceso autorizado, durable y auditable; **no habilitar** sin decisión.
@@ -64,6 +64,7 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 - Mutaciones: auth server-side, aislamiento por usuario, transacciones SQL breves, era/época/versión, idempotencia, control de concurrencia; ninguna espera de Telegram dentro de una transacción.
 - Proteger catálogo, generaciones activas y referencias de archivos contra cascadas; `reset` no vacía bibliotecas; no borrar medios, mensajes ni INDEX históricos por autorización genérica.
 - Un backup SQL **no** sustituye la copia de bytes de Telegram.
+- Las guardas de cuentas se componen solo en `cloud-server/account-route-guards.js` (tabla única montada sobre la instancia en `server-core.js`); no se reasigna `express.application.*`.
 - No tocar por simplificar sin pruebas y permiso: refs/purge, Direct/mtcute compartido, sesión y CSRF (incluido el `fetch` global de `webCsrfFetchCoordinator`), `server-core-auth-bridge-loader`, idempotencia, derechos pagados, guards SQL.
 - **Preservar sin cambios visuales** Landing, Gallery virtualizada, BeatCards, Tag Bar y Playbar; Gallery consulta globalmente en PostgreSQL sin cargar la biblioteca en memoria.
 

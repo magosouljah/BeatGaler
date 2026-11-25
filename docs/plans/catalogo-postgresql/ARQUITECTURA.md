@@ -31,7 +31,7 @@ Mapa de la rama de integración de la limpieza V1. [Glosario](../../GLOSSARY.md)
 | `worker.js` | Ejecutor de jobs con lease y fencing (verificación, commit, reconciliación, conjuntos, purga). Transporte inyectado. |
 | `transport-gateway.js` | Adaptador MTProto del Cloud (verificación, búsqueda, borrado y prueba de ausencia). SDK inyectado; sin bytes de archivos. |
 | `backup.js` | Backup/restore SQL cifrado (G4); los medios no se copian aquí. |
-| `legacy-fence.js`, `flush-quarantine.js` | Cerco de rutas legacy para bibliotecas nativas y cuarentena del control-plane. |
+| `flush-quarantine.js` | Cuarentena del control-plane. El cerco `legacy-fence.js` se retiró en M6.2. |
 | `native-cli.js` | CLI de operador (`inspect`/`activate`/`rebind-chat`/`reset`), dry-run por defecto. |
 | `routes.js`, `api-manifest.json` | Router HTTP `/catalog/v1` (único módulo con express) y su contrato publicado. |
 
@@ -65,10 +65,10 @@ D13.1/2 unifican las reglas SQL nativas en 409. D13.5 y D13.6 aplican cuarentena
 | Grupo | Módulos |
 | --- | --- |
 | Composición | `catalogComposition` (flag `VITE_CATALOG_API_ENABLED`), `LibraryCompositionGate`, `catalogLibraryProvider` (crea `CatalogServices`). |
-| Datos | `catalogApi`/`catalogCommandsApi` (HTTP), `catalogQueryStore` (bloques residentes, sin cargar la biblioteca entera), `catalogFirstBlockCache`, `catalogInteractionStore` (selección, edición, bulk). |
-| Sesiones de Gallery | `catalogQuerySession` (navegación, búsqueda diferida, facetas e invalidación tras mutaciones), `catalogImportSession` (revisión, progreso, provisionales y operaciones pendientes), `catalogPlaybackLink` (enlace entre la sesión de reproducción y `useAudio`, comandos de Playbar y cola). |
-| Gallery | `CatalogAppShell` (pantalla), `useCatalogGalleryScope` (composición, suscripciones y estado de vista), `catalogGalleryCards` (DTO conocidos acotados, ordinales y portadas perezosas), `CatalogVirtualGallery` + `useCatalogVirtualRows` + `catalogRowGeometry` (rejilla virtual; `leadCards` = tarjetas de subida en curso). |
-| Mutaciones y archivos | `catalogMutations` (PATCH/import/replace/purga), `catalogTransfer` (C7 por partes), `catalogFilePrep`, `catalogImportPlan`, `catalogBeatEditor` (guardado, reemplazo, papelera y lectura del resultado), `catalogProjectMerge`, `catalogDropKinds`/`catalogDropRouting`/`useCatalogFileDrop`, `catalogUploadProgress`, `catalogDownloads` (ID3 al descargar). |
+| Datos | `catalogApi`/`catalogCommandsApi` (HTTP), `catalogQueryIdentity` (identidades de consulta con nombre: filtros, conjunto y filtros de reproducción), `catalogQueryStore` (bloques residentes, sin cargar la biblioteca entera), `catalogFirstBlockCache`, `catalogInteractionStore` (selección, edición, bulk). |
+| Sesiones de Gallery | `catalogQuerySession` (navegación, borrador de búsqueda aplicado a los 250 ms, facetas e invalidación tras mutaciones), `catalogImportSession` (revisión, progreso, provisionales y operaciones pendientes), `catalogPlaybackLink` (enlace entre la sesión de reproducción y `useAudio`, comandos de Playbar y cola). |
+| Gallery | `CatalogAppShell` (pantalla), `CatalogBeatCards` (`CatalogBeatCard` y `ProvisionalBeatCard`: fijan las props inertes de `BeatCard`), `src/app/galleryLocation.ts` (ubicación de Gallery fuera del ciclo de importación), `useCatalogGalleryScope` (composición, suscripciones y estado de vista), `catalogGalleryCards` (DTO conocidos acotados, ordinales y portadas perezosas), `CatalogVirtualGallery` + `useCatalogVirtualRows` + `catalogRowGeometry` (rejilla virtual; `leadCards` = tarjetas de subida en curso). |
+| Mutaciones y archivos | `catalogMutations` (PATCH/import/replace/purga), `catalogTransfer` (C7 por partes), `catalogFilePrep`, `catalogImportPlan`, `catalogBeatEditor` (guardado, reemplazo, papelera y lectura del resultado; sustituye a los adaptadores `catalogAudioReplace`, `catalogArtworkReplace` y `catalogDrawerSave`, retirados en C2), `catalogProjectMerge`, `catalogDropKinds`/`catalogDropRouting`/`useCatalogFileDrop`, `catalogUploadProgress`, `catalogDownloads` (ID3 al descargar; `createGalleryDownloadsStore`, almacén observable de descargas por beat), `catalogFileKinds` (único normalizador de data URL → File, portada validada y detección de MASTER MP3). |
 | Direct B y medios | `catalogDirectCore`/`catalogDirectPort`/`catalogDirectTypes` (Worker MTProto; reanudable), `catalogLabDirectPort` (doble del LAB), `catalogMediaClient`, `catalogPrefixCache`, `catalogArtworkCache`, `catalogMainPack`, `catalogStreamSource` (MSE), `catalogLocalCaches` (Settings). |
 | Reproducción y papelera | `catalogPlaybackSession`, `catalogPlaybackSets`, `catalogTrashSource`. |
 
@@ -89,12 +89,18 @@ D13.1/2 unifican las reglas SQL nativas en 409. D13.5 y D13.6 aplican cuarentena
 
 ## Compatibilidad tras T25
 
-La composición Web requiere el catálogo PostgreSQL. `LibraryCompositionGate` muestra el estado `legacy-retired` cuando la composición queda deshabilitada. El Cloud conserva cercos HTTP para rutas retiradas, incluidos literales de INDEX y PROJECT en `http-containment.js`.
+La composición Web requiere el catálogo PostgreSQL. `LibraryCompositionGate` muestra el estado `legacy-retired` cuando la composición queda deshabilitada. El Cloud conserva cercos HTTP para rutas retiradas, incluidos literales de INDEX y PROJECT en `http-containment.js`. M6.2 retiró el Direct antiguo del Cloud (emisión y vista de capacidades, runtime de membresía, rutas y pruebas asociadas); se conserva la revocación de capacidades al cerrar sesión, cambiar la contraseña o borrar la cuenta (D21) en `direct-capability-boundary.js`.
+
+### Cuentas y guardas HTTP (M7.2–M7.3, X69)
+
+- `cloud-server/account-route-guards.js`: **tabla única** de guardas de cuentas y seguridad (prefijo y sufijo de rutas). `server-core.js` la monta sobre la instancia con `mountAccountRouteGuards(app)`; no se reasigna `express.application.use/post/get`.
+- `accountLifecycle.api` (`cloud-server/account-lifecycle.js`): interfaz agrupada del ciclo de vida de cuentas; `provide()` registra las implementaciones al instalar los módulos, sin lecturas de `_test` en producción.
+- Cuando la durabilidad no está disponible, el 503 de las rutas de sesión no emite cookies (X69).
 
 ### Conexión del transporte en la instalación LIVE
 
 - `catalog/native-transport-provisioning.js`: valida chat y activación, asigna un bot existente de forma durable, usa lock por vault, verifica membresía en Telegram y marca `ready` solamente con prueba.
-- `direct-vault-assignment.js`, `direct-persistent-membership-runtime.js`, `direct-transport-control.js`: persistencia del bot, operación MASTER de membresía y proveedor Telegram.
+- `direct-vault-assignment.js`, `direct-transport-control.js`: persistencia del bot, operación MASTER de membresía y proveedor Telegram (`direct-persistent-membership-runtime.js` se retiró en M6.2).
 - `catalog-worker.js` y `catalog/worker.js`: servicio **independiente del Cloud HTTP**, debe estar habilitado para hacer `TRANSFER_VERIFY` y `TRANSFER_COMMIT`. Su ausencia fue la causa del spinner tras las primeras 2 subidas; al arrancarlo se procesaron las 6 tareas sin reenvío de medios.
 - `catalog-gateway-runtime.js`: resuelve bot por `vaults.transport_bot_id` con control de cuarentena/rotación; la activación de producción tiene modo `REUSED_UNROTATED` con riesgo residual expresamente aceptado, **no G2 PASS**.
 
