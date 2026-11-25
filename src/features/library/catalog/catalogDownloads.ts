@@ -62,32 +62,39 @@ export interface GalleryDownloadFiles {
   files: CatalogBeatFile[];
 }
 
-export function createGalleryDownloads({
-  mutations, media, cloudFiles, downloadBusy, setCloudFiles, setDownloadBusy, setDownloaded,
-  rejectOfflineMutation, setNotice, save,
-}: {
-  mutations: Pick<CatalogMutations, "listBeatFiles">;
-  media: { downloadFile(fileId: string): Promise<{ blob: Blob }> };
+export interface GalleryDownloadsSnapshot {
   cloudFiles: GalleryDownloadFiles | null;
   downloadBusy: DownloadKind | null;
-  setCloudFiles(files: GalleryDownloadFiles): void;
-  setDownloadBusy(kind: DownloadKind | null): void;
-  setDownloaded(update: Set<string> | ((current: Set<string>) => Set<string>)): void;
+  downloaded: Set<string>;
+}
+
+export interface GalleryDownloadsPorts {
+  mutations: Pick<CatalogMutations, "listBeatFiles">;
+  media: { downloadFile(fileId: string): Promise<{ blob: Blob }> };
   rejectOfflineMutation(action: string): boolean;
   setNotice(value: string | null): void;
   save: typeof saveBlobWithBrowser;
-}) {
+}
+
+/** Almacén observable de las descargas de la Gallery: la UI solo se suscribe (useSyncExternalStore). `ports` se lee en cada uso (puertos vivos del render). */
+export function createGalleryDownloadsStore(ports: () => GalleryDownloadsPorts) {
+  let snap: GalleryDownloadsSnapshot = { cloudFiles: null, downloadBusy: null, downloaded: new Set() };
+  const listeners = new Set<() => void>();
+  const set = (patch: Partial<GalleryDownloadsSnapshot>) => { snap = { ...snap, ...patch }; for (const l of [...listeners]) l(); };
+
   function openDownloads(beat: Beat) {
+    const { mutations, rejectOfflineMutation, setNotice } = ports();
     if (rejectOfflineMutation("Downloading")) return;
-    setDownloaded(new Set());
-    void mutations.listBeatFiles(beat.id).then((files) => setCloudFiles({ beat, files })).catch((error) =>
+    set({ downloaded: new Set() });
+    void mutations.listBeatFiles(beat.id).then((files) => set({ cloudFiles: { beat, files } })).catch((error) =>
       setNotice(`No se pudo leer los archivos del beat: ${String((error as { message?: unknown })?.message ?? error)}`));
   }
 
   function downloadKind(kind: DownloadKind) {
-    if (!cloudFiles || downloadBusy) return;
-    setDownloadBusy(kind);
-    const { beat, files } = cloudFiles;
+    const { media, setNotice, save } = ports();
+    if (!snap.cloudFiles || snap.downloadBusy) return;
+    set({ downloadBusy: kind });
+    const { beat, files } = snap.cloudFiles;
     const artFile = files.find((file) => file.role === "ARTWORK" && file.current && file.status !== "DELETED");
     const { name, bpm, key, tags, rating } = beat;
     const mp3Tags = {
@@ -99,12 +106,19 @@ export function createGalleryDownloads({
     };
     void downloadBeatFiles({ files, kind, beatName: name, download: (id) => media.downloadFile(id), save, mp3Tags }).then((result) => {
       if (result.status === "done") {
-        setDownloaded((current) => new Set(current).add(kind));
+        set({ downloaded: new Set(snap.downloaded).add(kind) });
         setNotice(result.saved.length > 1 ? `${result.saved.length} archivos descargados.` : `«${result.saved[0]}» descargado.`);
       } else if (result.status === "empty") setNotice("Ese archivo no está disponible para este beat.");
       else setNotice(`No se pudo descargar: ${result.message}`);
-    }).finally(() => setDownloadBusy(null));
+    }).finally(() => set({ downloadBusy: null }));
   }
 
-  return { openDownloads, downloadKind };
+  function closeDownloads() { set({ cloudFiles: null, downloadBusy: null }); }
+
+  return {
+    openDownloads, downloadKind, closeDownloads,
+    getSnapshot: () => snap,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  };
 }
+export type GalleryDownloadsStore = ReturnType<typeof createGalleryDownloadsStore>;

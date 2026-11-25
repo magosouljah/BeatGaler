@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CatalogBeatDto, CatalogQueryFilters } from "../../src/features/library/catalog/catalogApi";
 import type { CatalogBeatFile } from "../../src/features/library/catalog/catalogCommandsApi";
 import { createGalleryBeatEditor } from "../../src/features/library/catalog/catalogBeatEditor";
-import { createGalleryDownloads } from "../../src/features/library/catalog/catalogDownloads";
+import { createGalleryDownloadsStore } from "../../src/features/library/catalog/catalogDownloads";
 import { createKnownGalleryCards, KNOWN_BEATS_MAX } from "../../src/features/library/catalog/catalogGalleryCards";
 import { importLandsAtTop, projectPendingCards } from "../../src/features/library/catalog/catalogImportSession";
 import { createCatalogInteractionStore, createGallerySelection } from "../../src/features/library/catalog/catalogInteractionStore";
@@ -102,24 +102,22 @@ it("bloquea la apertura de descargas offline y aplica ID3 con la portada actual 
     blob: new Blob([id === "cover" ? "img" : "\xffMP3"], { type: id === "cover" ? "image/png" : "audio/mpeg" }),
   }));
   const save = vi.fn();
-  const setCloudFiles = vi.fn();
-  const setDownloaded = vi.fn();
-  const setDownloadBusy = vi.fn();
   const setNotice = vi.fn();
   const rejectOfflineMutation = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
-  const ports = { mutations: { listBeatFiles }, media: { downloadFile }, setCloudFiles, setDownloaded, setDownloadBusy, setNotice, rejectOfflineMutation, save };
-  const download = createGalleryDownloads({ ...ports, cloudFiles: null, downloadBusy: null });
+  const download = createGalleryDownloadsStore(() => ({ mutations: { listBeatFiles }, media: { downloadFile }, setNotice, rejectOfflineMutation, save }));
+  const busy: Array<string | null> = [];
+  download.subscribe(() => { const b = download.getSnapshot().downloadBusy; if (busy.at(-1) !== b) busy.push(b); });
   download.openDownloads(beat);
   expect(listBeatFiles).not.toHaveBeenCalled();
   download.openDownloads(beat);
-  await vi.waitFor(() => expect(setCloudFiles).toHaveBeenCalledExactlyOnceWith({ beat, files }));
+  await vi.waitFor(() => expect(download.getSnapshot().cloudFiles).toEqual({ beat, files }));
 
-  createGalleryDownloads({ ...ports, cloudFiles: { beat, files }, downloadBusy: null }).downloadKind("MP3");
-  await vi.waitFor(() => expect(setDownloadBusy.mock.calls).toEqual([["MP3"], [null]]));
+  download.downloadKind("MP3");
+  await vi.waitFor(() => expect(busy).toEqual([null, "MP3", null]));
   expect(downloadFile.mock.calls).toEqual([["master"], ["cover"]]);
   expect(save).toHaveBeenCalledExactlyOnceWith(expect.any(Blob), "Beat.mp3");
   expect(setNotice).toHaveBeenCalledExactlyOnceWith("«Beat.mp3» descargado.");
-  expect(setDownloaded.mock.calls[1][0](new Set(["WAV"]))).toEqual(new Set(["WAV", "MP3"]));
+  expect([...download.getSnapshot().downloaded]).toEqual(["MP3"]);
 });
 
 it("envía ordinal y query global, mantiene tagsOp del lote y refresca un renombrado confirmado", async () => {

@@ -13,7 +13,7 @@ import { useCatalogPlayback } from "./catalogPlaybackSession";
 import { createGalleryPlaybackCommands, linkPlayback, reportPlaybackFailure } from "./catalogPlaybackLink";
 import { createGalleryBeatEditor, dispatchWebDrawerSave } from "./catalogBeatEditor";
 import { appAlert, appConfirm } from "../../../lib/dialog";
-import { createGalleryDownloads, saveBlobWithBrowser, type DownloadKind, type GalleryDownloadFiles } from "./catalogDownloads";
+import { createGalleryDownloadsStore, saveBlobWithBrowser, type GalleryDownloadsPorts } from "./catalogDownloads";
 import { setBeatCloudUpdateBusy } from "../../cloud/beatCloudUpdateBusy";
 import type { CatalogStoreSnapshot } from "./catalogQueryStore";
 import { createHistoryWriter } from "./catalogNavigation";
@@ -217,14 +217,12 @@ export function useCatalogGalleryScope({ services, accountId, context }: Catalog
   const loading = snapshot.status === "loading" || snapshot.status === "resolving";
   const rejectOfflineMutation = useCallback((_action: string) => { if (connectionState !== "online") { setNotice("Reconnect to verify your Galer Cloud library."); return true; } return false; }, [connectionState, setNotice]);
   // ---- «Download» de una BeatCard: MP3 / WAV / PROJECT / todo, por el cliente de medios del catálogo (verifica tamaño y hash) ----
-  const [cloudFiles, setCloudFiles] = useState<GalleryDownloadFiles | null>(null);
-  const [downloadBusy, setDownloadBusy] = useState<DownloadKind | null>(null);
-  const [downloaded, setDownloaded] = useState<Set<string>>(new Set());
-  const { openDownloads, downloadKind } = useMemo(() => createGalleryDownloads({
-    mutations, media, cloudFiles, downloadBusy, setCloudFiles, setDownloadBusy, setDownloaded,
-    rejectOfflineMutation, setNotice, save: saveBlobWithBrowser,
-  }), [mutations, media, cloudFiles, downloadBusy, rejectOfflineMutation, setNotice]);
-  const closeDownloads = useCallback(() => { setCloudFiles(null); setDownloadBusy(null); }, []);
+  const downloadPorts = useRef<GalleryDownloadsPorts>({ mutations, media, rejectOfflineMutation, setNotice, save: saveBlobWithBrowser });
+  downloadPorts.current = { mutations, media, rejectOfflineMutation, setNotice, save: saveBlobWithBrowser };
+  const [downloads] = useState(() => createGalleryDownloadsStore(() => downloadPorts.current));
+  const { cloudFiles, downloadBusy, downloaded } = useSyncExternalStore(downloads.subscribe, downloads.getSnapshot, downloads.getSnapshot);
+  const { openDownloads, closeDownloads, downloadKind } = downloads;
+
   const dismissNotice = useCallback(() => { setNotice(null); interactionStore.dismissNotice(); }, [interactionStore, setNotice]);
 
   return {
