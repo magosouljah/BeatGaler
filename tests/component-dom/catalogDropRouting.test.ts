@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { classifyDroppedFile } from "../../src/features/library/catalog/catalogDropKinds";
 import { routeDrop } from "../../src/features/library/catalog/catalogDropRouting";
-import { normalizeArtworkFile, replaceBeatArtwork, resolveArtworkFile } from "../../src/features/library/catalog/catalogArtworkReplace";
+import { createBeatEditor, normalizeArtworkFile, resolveArtworkFile } from "../../src/features/library/catalog/catalogBeatEditor";
 
 const f = (name: string, type = "") => new File([new Uint8Array(8)], name, { type });
 const ev = (files: File[], targetBeatId: string | null, artwork: Promise<never[]> | null = null) => ({ files, artwork: artwork as never, targetBeatId });
@@ -60,19 +60,21 @@ describe("portada: archivos y fuentes", () => {
     await expect(resolveArtworkFile([{ kind: "file", file: f("a.txt") }])).rejects.toThrow(/no compatible/);
     await expect(resolveArtworkFile([])).rejects.toThrow(/imagen utilizable/);
   });
+  const replaceBeatArtwork = ({ mutations, beatId, file }: { mutations: never; beatId: string; file: File }) =>
+    createBeatEditor({ mutations, knownDto: () => undefined, loadProject: async () => null, errorMessage: String }).replaceArtwork(beatId, [{ kind: "file", file }]);
   const detail = { id: "b-1", name: "Mi beat", bpm: "140", key: "Am", tags: ["trap"], rating: 3, color: "#111", color2: "#222", version: "9", hasWav: false, playback: { fileId: "f", revision: "1" }, artwork: null, hasProject: false };
   it("replaceBeatArtwork: MISMO beat, solo el archivo de portada, metadatos intactos, sin importar ni tocar audio", async () => {
     const replaceBeat = vi.fn(async () => ({ status: "committed", operationId: "o", beatId: "b-1", version: "10", revision: "5", operation: {} }));
     const art = f("p.png", "image/png");
     const r = await replaceBeatArtwork({ mutations: { getBeat: vi.fn(async () => detail), replaceBeat } as never, beatId: "b-1", file: art });
-    expect(r).toEqual({ status: "committed", beatId: "b-1" });
+    expect(r).toMatchObject({ reading: "success", status: "committed" });
     const a = replaceBeat.mock.calls[0][0] as { beatId: string; expectedVersion: string; original: unknown; updated: unknown; files: Record<string, unknown> };
     expect(a.beatId).toBe("b-1"); expect(a.expectedVersion).toBe("9"); expect(a.files).toEqual({ artwork: art }); expect(a.updated).toBe(a.original);
   });
   it("conflicto / error / lectura fallida → failed, sin éxito falso", async () => {
     const mk = (outcome: unknown) => ({ getBeat: vi.fn(async () => detail), replaceBeat: vi.fn(async () => outcome) }) as never;
-    expect(await replaceBeatArtwork({ mutations: mk({ status: "conflict", operationId: "o", beatId: "b-1", operation: null, retained: false, error: null }), beatId: "b-1", file: f("p.png", "image/png") })).toMatchObject({ status: "failed", message: expect.stringContaining("otro dispositivo") });
-    expect(await replaceBeatArtwork({ mutations: mk({ status: "failed", operationId: "o", beatId: "b-1", operation: null, retained: true, error: null }), beatId: "b-1", file: f("p.png", "image/png") })).toMatchObject({ status: "failed" });
-    expect(await replaceBeatArtwork({ mutations: { getBeat: vi.fn(async () => { throw new Error("404"); }), replaceBeat: vi.fn() } as never, beatId: "b-1", file: f("p.png", "image/png") })).toMatchObject({ status: "failed" });
+    expect(await replaceBeatArtwork({ mutations: mk({ status: "conflict", operationId: "o", beatId: "b-1", operation: null, retained: false, error: null }), beatId: "b-1", file: f("p.png", "image/png") })).toMatchObject({ reading: "rejected", why: "conflict", message: expect.stringContaining("otro dispositivo") });
+    expect(await replaceBeatArtwork({ mutations: mk({ status: "failed", operationId: "o", beatId: "b-1", operation: null, retained: true, error: null }), beatId: "b-1", file: f("p.png", "image/png") })).toMatchObject({ reading: "rejected", why: "failed" });
+    expect(await replaceBeatArtwork({ mutations: { getBeat: vi.fn(async () => { throw new Error("404"); }), replaceBeat: vi.fn() } as never, beatId: "b-1", file: f("p.png", "image/png") })).toMatchObject({ reading: "rejected", why: "error" });
   });
 });

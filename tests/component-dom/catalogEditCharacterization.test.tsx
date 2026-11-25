@@ -239,7 +239,7 @@ describe("S2 · guardar el Drawer con archivos (REPLACE) — éxito / incierto /
     expect(h.writes(m).map((r) => [r.method, r.body])).toEqual([["PATCH", { expectedVersion: "1", patch: { artwork: null } }]]);
   });
   // FALLO CONOCIDO (X03): se conserva hasta M9. La vía `commitDrawerCloudMutation` (solo la alcanza el Drawer en Desktop) da un error genérico y NO refresca ante incierto;
-  // `saveDrawerChanges` (la vía Web) da el aviso «pendiente» y refresca. Se fija la vía genérica llamándola como lo hace el Drawer.
+  // `createBeatEditor().saveDrawer` (la vía Web) da el aviso «pendiente» y refresca. Se fija la vía genérica llamándola como lo hace el Drawer.
   it("X03 · commitDrawerCloudMutation ante incierto: error genérico «La operación quedó en estado uncertain…», sin refresco", async () => {
     h = await mountFor("uncertain"); arm("uncertain", "g0"); const sc = h.scope(); const beat = sc.toBeat(h.dto("g0")); const r0 = h.refreshes();
     const err = await h.drive(sc.commitDrawerCloudMutation({ ...beat, image_base64: "data:image/png;base64,iVBORw0KGgo=" }).then(() => null, (e: Error) => e));

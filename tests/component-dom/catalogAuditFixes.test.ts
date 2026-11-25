@@ -5,7 +5,8 @@ import { downloadBeatFiles, filesForDownload, safeDownloadName } from "../../src
 import { resolveImportPlan } from "../../src/features/library/catalog/catalogImportPlan";
 import { prepareCatalogFiles } from "../../src/features/library/catalog/catalogFilePrep";
 import { createCatalogTrashSource } from "../../src/features/library/catalog/catalogTrashSource";
-import { classifyDroppedAudio, replaceBeatAudio } from "../../src/features/library/catalog/catalogAudioReplace";
+import { classifyDroppedAudio } from "../../src/features/library/catalog/catalogDropKinds";
+import { createBeatEditor } from "../../src/features/library/catalog/catalogBeatEditor";
 import { routeDrop } from "../../src/features/library/catalog/catalogDropRouting";
 import type { CatalogBeatFile } from "../../src/features/library/catalog/catalogCommandsApi";
 import type { Beat } from "../../src/types";
@@ -73,8 +74,8 @@ describe("PROJECT por arrastre sobre una tarjeta", () => {
     const detail = (hasProject: boolean) => ({ id: "b-1", name: "Mi beat", bpm: "", key: "", tags: [], rating: 0, color: null, color2: null, version: "3", hasWav: false, hasProject, playback: null, artwork: null });
     for (const [has, title] of [[false, "Add project?"], [true, "Replace project?"]] as const) {
       const replaceBeat = vi.fn(async () => ({ status: "committed", operationId: "o", beatId: "b-1", version: "4", revision: "9", operation: {} })); const confirm = vi.fn(async () => true); const z = file("p.zip");
-      const r = await replaceBeatAudio({ mutations: { getBeat: async () => detail(has), replaceBeat } as never, confirm, beatId: "b-1", file: z });
-      expect(r).toMatchObject({ status: "committed", kind: "PROJECT", replacedExisting: has }); expect(confirm.mock.calls[0][0].title).toBe(title);
+      const r = await createBeatEditor({ mutations: { getBeat: async () => detail(has), replaceBeat } as never, knownDto: () => undefined, loadProject: async () => null, errorMessage: String }).replaceAudio("b-1", z, { confirm });
+      expect(r).toMatchObject({ reading: "success", status: "committed", kind: "PROJECT", replacedExisting: has }); expect(confirm.mock.calls[0][0].title).toBe(title);
       expect((replaceBeat.mock.calls[0] as unknown as [{ files: unknown }])[0].files).toEqual({ project: z });
     }
   });

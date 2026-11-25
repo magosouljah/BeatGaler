@@ -57,7 +57,6 @@ const SC = {
     ['src/features/library/catalog/useCatalogGalleryScope.ts', 'saveReview'],
     ['src/features/library/catalog/catalogImportSession.ts', 'mutations.importBeat'],
     ['src/features/library/catalog/catalogImportPlan.ts', 'resolveImportPlan'],
-    ['src/features/library/catalog/catalogDrawerSave.ts', 'enqueueReview'],
     ['src/features/library/catalog/catalogFilePrep.ts', ''],
     ['src/features/library/catalog/catalogMainPack.ts', ''],
     ['src/features/library/catalog/catalogMutations.ts', 'async function importBeat'],
