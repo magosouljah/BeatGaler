@@ -258,8 +258,15 @@ test('bulk: operación congelada sobre selección, lotes de 50 con journal/check
   assert.deepEqual([detail.details.length, detail.detailsNext !== null], [50, true]);
   // reanudar exige la revisión actual explícita (no retry ciego)
   await assert.rejects(cmd.resumeOperation({ ...hdr, operationId: op.operationId, revision: '3' }), (e) => e.code === 'REVISION_MISMATCH');
-  const resumed = await cmd.resumeOperation({ ...hdr, operationId: op.operationId, revision: '4' });
+  const resume = { ...hdr, operationId: op.operationId, revision: '4' };
+  const resumes = await Promise.all([cmd.resumeOperation(resume), cmd.resumeOperation(resume)]);
+  const resumed = resumes.find((result) => !result.replay);
   assert.equal(resumed.status, 'RUNNING');
+  assert.equal(resumed.resumed, true);
+  assert.deepEqual(resumes.filter((result) => result.replay), [{ ...resumed, replay: true }]);
+  await assert.rejects(cmd.resumeOperation({ ...resume, revision: '5' }), { code: 'OPERATION_TRANSITION_INVALID', status: 409 });
+  const resumeJobs = await pool.query("SELECT job_id FROM catalog_jobs WHERE user_id = $1 AND operation_id = $2 AND job_id <> $3", [lib.userId, op.operationId, `job-op-${op.operationId}`]);
+  assert.deepEqual(resumeJobs.rows, [{ job_id: `job-op-${op.operationId}-resume-4` }]);
   // workers duplicados: dos pasos concurrentes → uno avanza, el otro ve el estado ya avanzado (sin doble aplicación)
   const pools = [new Pool({ ...h.config, max: 2 }), new Pool({ ...h.config, max: 2 })];
   try {
