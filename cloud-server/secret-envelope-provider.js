@@ -1,11 +1,12 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { normalizeSecretKeyring } = require('./secret-keyring');
 
 const PROVIDERS = new Set(['development', 'aws-secrets-manager']);
 const AWS_SECRET_SCHEMA = 'beatgaler-envelope-keyring-v1';
 
-function secretEnvelopeProviderConfig(env = process.env) {
+function secretEnvelopeProviderConfig(env = getRuntimeEnv()) {
   const production = String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
   const provider = String(env.BEATGALER_SECRET_ENVELOPE_PROVIDER || (production ? '' : 'development')).trim().toLowerCase();
   if (!provider) {
@@ -23,7 +24,7 @@ function secretEnvelopeProviderConfig(env = process.env) {
   return Object.freeze({ provider, production });
 }
 
-function developmentEnvelopeKeyConfig(env = process.env) {
+function developmentEnvelopeKeyConfig(env = getRuntimeEnv()) {
   const raw = String(env.BEATGALER_SECRET_ENVELOPE_KEY_B64 || '').trim();
   const keyVersion = Number(env.BEATGALER_SECRET_ENVELOPE_KEY_VERSION || 1);
   if (!raw) throw new Error('Development/CI envelope provider requires BEATGALER_SECRET_ENVELOPE_KEY_B64.');
@@ -101,7 +102,7 @@ async function defaultAwsSecretFetcher({ secretId, region }) {
   throw new Error('AWS Secrets Manager response contains neither SecretString nor SecretBinary.');
 }
 
-async function awsSecretsManagerEnvelopeKeyring(env = process.env, { fetchSecret = defaultAwsSecretFetcher } = {}) {
+async function awsSecretsManagerEnvelopeKeyring(env = getRuntimeEnv(), { fetchSecret = defaultAwsSecretFetcher } = {}) {
   const secretId = String(env.BEATGALER_AWS_SECRET_ENVELOPE_ID || '').trim();
   const region = String(env.AWS_REGION || env.AWS_DEFAULT_REGION || '').trim();
   if (!secretId) throw new Error('aws-secrets-manager provider requires BEATGALER_AWS_SECRET_ENVELOPE_ID.');
@@ -109,7 +110,7 @@ async function awsSecretsManagerEnvelopeKeyring(env = process.env, { fetchSecret
   return parseAwsEnvelopeKeyringSecret(secretString);
 }
 
-async function resolveSecretEnvelopeKeyring(env = process.env, options = {}) {
+async function resolveSecretEnvelopeKeyring(env = getRuntimeEnv(), options = {}) {
   const config = secretEnvelopeProviderConfig(env);
   if (config.provider === 'development') {
     return normalizeSecretKeyring(developmentEnvelopeKeyConfig(env));

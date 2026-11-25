@@ -1,5 +1,6 @@
 'use strict';
 
+const { directEnv, telegramEnv } = require('./runtime-env');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -21,25 +22,25 @@ function backendPath(value, fallbackName) {
   return path.isAbsolute(raw) ? raw : path.resolve(ROOT, raw);
 }
 
-const POOL_FILE = backendPath(process.env.TRANSPORT_BOTS_FILE, 'transport-bots.local.json');
-const STATE_FILE = backendPath(process.env.TRANSPORT_POOL_STATE, 'transport-pool-state.json');
-const MASTERS_FILE = backendPath(process.env.MASTERS_FILE, 'masters.local.json');
-const VAULT_REGISTRY_FILE = backendPath(process.env.VAULT_REGISTRY_FILE, 'vault-registry.json');
-const MASTER_SOFT_LIMIT = Number(process.env.MASTER_VAULT_SOFT_LIMIT || process.env.BEATGALER_MASTER_GROUP_LIMIT || 400);
+const POOL_FILE = backendPath(directEnv.transportBotsFile(), 'transport-bots.local.json');
+const STATE_FILE = backendPath(directEnv.transportPoolState(), 'transport-pool-state.json');
+const MASTERS_FILE = backendPath(directEnv.mastersFile(), 'masters.local.json');
+const VAULT_REGISTRY_FILE = backendPath(directEnv.vaultRegistryFile(), 'vault-registry.json');
+const MASTER_SOFT_LIMIT = Number(directEnv.masterVaultSoftLimit() || directEnv.masterGroupLimit() || 400);
 const POOL_LOCK_FILE = `${STATE_FILE}.lock`;
 const PROCESS_INSTANCE_ID = crypto.randomBytes(8).toString('hex');
-const HEARTBEAT_INTERVAL_MS = Math.max(30_000, Number(process.env.DIRECT_HEARTBEAT_INTERVAL_MS || 60_000));
-const HEARTBEAT_TIMEOUT_MS = Math.max(60_000, Number(process.env.DIRECT_HEARTBEAT_TIMEOUT_MS || 5 * 60_000));
-const TOKEN_ROTATION_ENABLED = ['1','true','on','yes'].includes(String(process.env.DIRECT_TOKEN_ROTATION_ENABLED || 'false').trim().toLowerCase());
-const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(process.env.DIRECT_DATA_OPERATION_TTL_MS || 4 * 60 * 60_000));
+const HEARTBEAT_INTERVAL_MS = Math.max(30_000, Number(directEnv.heartbeatIntervalMs() || 60_000));
+const HEARTBEAT_TIMEOUT_MS = Math.max(60_000, Number(directEnv.heartbeatTimeoutMs() || 5 * 60_000));
+const TOKEN_ROTATION_ENABLED = ['1','true','on','yes'].includes(String(directEnv.tokenRotationEnabled() || 'false').trim().toLowerCase());
+const DATA_OPERATION_TTL_MS = Math.max(15 * 60_000, Number(directEnv.dataOperationTtlMs() || 4 * 60 * 60_000));
 // INDEX locks are renewable leases.  A dead tab therefore releases quickly,
 // while a deliberately paused but still-live Worker keeps renewing its lease.
-const INDEX_OPERATION_LIVENESS_TIMEOUT_MS = Math.max(5_000, Number(process.env.DIRECT_INDEX_OPERATION_LIVENESS_TIMEOUT_MS || 15_000));
-const MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS = Math.max(1, Math.min(3, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS || 3)));
-const MANAGED_TOKEN_FETCH_RETRY_BASE_MS = Math.max(25, Math.min(500, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_BASE_MS || 150)));
-const MANAGED_TOKEN_FETCH_RETRY_MAX_MS = Math.max(MANAGED_TOKEN_FETCH_RETRY_BASE_MS, Math.min(1_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_RETRY_MAX_MS || 500)));
-const MANAGED_TOKEN_FETCH_TIMEOUT_MS = Math.max(500, Math.min(5_000, Number(process.env.DIRECT_MANAGED_TOKEN_FETCH_TIMEOUT_MS || 3_000)));
-const DIAG_DIR = backendPath(process.env.DIRECT_DIAGNOSTICS_DIR, 'diagnostics');
+const INDEX_OPERATION_LIVENESS_TIMEOUT_MS = Math.max(5_000, Number(directEnv.indexOperationLivenessTimeoutMs() || 15_000));
+const MANAGED_TOKEN_FETCH_RETRY_ATTEMPTS = Math.max(1, Math.min(3, Number(directEnv.managedTokenFetchRetryAttempts() || 3)));
+const MANAGED_TOKEN_FETCH_RETRY_BASE_MS = Math.max(25, Math.min(500, Number(directEnv.managedTokenFetchRetryBaseMs() || 150)));
+const MANAGED_TOKEN_FETCH_RETRY_MAX_MS = Math.max(MANAGED_TOKEN_FETCH_RETRY_BASE_MS, Math.min(1_000, Number(directEnv.managedTokenFetchRetryMaxMs() || 500)));
+const MANAGED_TOKEN_FETCH_TIMEOUT_MS = Math.max(500, Math.min(5_000, Number(directEnv.managedTokenFetchTimeoutMs() || 3_000)));
+const DIAG_DIR = backendPath(directEnv.diagnosticsDir(), 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
 // Runtime-only material. Tokens never go to the JSON state file.
@@ -62,13 +63,13 @@ let managedTokenFetchRetryPolicy = {
 };
 
 function enabled() {
-  const raw = String(process.env.BEATGALER_DIRECT_TRANSPORT || 'true').trim().toLowerCase();
+  const raw = String(directEnv.transportEnabled() || 'true').trim().toLowerCase();
   if (['0', 'false', 'off', 'no'].includes(raw)) return false;
-  return fs.existsSync(POOL_FILE) && Boolean(process.env.TELEGRAM_API_ID) && Boolean(process.env.TELEGRAM_API_HASH);
+  return fs.existsSync(POOL_FILE) && Boolean(telegramEnv.apiId()) && Boolean(telegramEnv.apiHash());
 }
 
 function required(name) {
-  const value = String(process.env[name] || '').trim();
+  const value = String(directEnv.credentialByName(name) || '').trim();
   if (!value) throw new Error(`Missing ${name}.`);
   return value;
 }
@@ -104,7 +105,7 @@ function writeJsonAtomic(file, value) {
     // open. The pool mutation is already protected by POOL_LOCK_FILE, so do
     // not fail the user operation for this short OS-level contention.
     const retryable = new Set(['EPERM', 'EBUSY', 'EACCES']);
-    const maxAttempts = Math.max(1, Number(process.env.POOL_STATE_RENAME_ATTEMPTS || 8));
+    const maxAttempts = Math.max(1, Number(directEnv.poolStateRenameAttempts() || 8));
     let lastError = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
@@ -345,7 +346,7 @@ function finishOperationCleanup(cleanup) {
 function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 function withPoolLock(fn) {
   const started = Date.now();
-  const waitMs = Number(process.env.POOL_LOCK_WAIT_MS || 15000);
+  const waitMs = Number(directEnv.poolLockWaitMs() || 15000);
   while (true) {
     let fd = null;
     try {
@@ -446,16 +447,16 @@ function loadVaultRegistry() {
 function loadMasterSession(config = null) {
   if (config?.session) return String(config.session).trim();
   if (config?.session_env) {
-    const value = String(process.env[String(config.session_env)] || '').trim();
+    const value = String(directEnv.credentialByName(String(config.session_env)) || '').trim();
     if (value) return value;
   }
   if (config?.session_file) {
     const file = path.resolve(String(config.session_file));
     if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
   }
-  const inline = String(process.env.BEATGALER_MASTER_SESSION || process.env.MASTER_SESSION || '').trim();
+  const inline = String(telegramEnv.beatGalerMasterSession() || telegramEnv.masterSession() || '').trim();
   if (inline) return inline;
-  const envFile = String(process.env.MASTER_SESSION_FILE || '').trim();
+  const envFile = String(telegramEnv.masterSessionFile() || '').trim();
   const candidates = [envFile && path.resolve(envFile), path.join(ROOT, 'master-session.txt')].filter(Boolean);
   for (const file of candidates) if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
   throw new Error('MASTER Telegram session is not configured.');
@@ -503,7 +504,7 @@ async function openMaster(config) {
 
 async function resolveVault(client, chatId) {
   const wanted = String(chatId);
-  for await (const dialog of client.iterDialogs({ limit: Number(process.env.MASTER_DIALOG_LIMIT || 1000) })) {
+  for await (const dialog of client.iterDialogs({ limit: Number(telegramEnv.masterDialogLimit() || 1000) })) {
     if (markedChatId(dialog.entity) === wanted) return dialog.entity;
   }
   const error = new Error(`MASTER cannot find private vault ${wanted}.`);
@@ -670,7 +671,7 @@ async function resolveManagedToken(botConfig) {
   if (!botConfig.telegram_user_id || !botConfig.manager_token_env) {
     throw new Error(`${botConfig.id}: managed bot requires telegram_user_id and manager_token_env.`);
   }
-  const managerToken = String(process.env[botConfig.manager_token_env] || '').trim();
+  const managerToken = String(directEnv.credentialByName(botConfig.manager_token_env) || '').trim();
   if (!managerToken) throw new Error(`${botConfig.id}: missing ${botConfig.manager_token_env}.`);
   const token = await getManagedTokenWithRetry(managerToken, botConfig);
   if (!token) throw new Error(`${botConfig.id}: Telegram returned no managed token.`);
@@ -699,7 +700,7 @@ async function tokenForCredentialVersion(botConfig, credentialVersion) {
 
 async function rotateManagedToken(botConfig) {
   if (!botConfig.managed) throw new Error(`${botConfig.id}: automatic token rotation requires managed=true.`);
-  const managerToken = String(process.env[botConfig.manager_token_env] || '').trim();
+  const managerToken = String(directEnv.credentialByName(botConfig.manager_token_env) || '').trim();
   if (!managerToken) throw new Error(`${botConfig.id}: missing ${botConfig.manager_token_env}.`);
   const replacement = await managerBotApiCall(managerToken, 'replaceManagedBotToken', { user_id: Number(botConfig.telegram_user_id) });
   if (!replacement) throw new Error(`${botConfig.id}: Telegram returned no replacement token.`);
@@ -766,7 +767,7 @@ async function ensureBotApiResolverChat() {
   if (resolverBootstrapPromise) return resolverBootstrapPromise;
   resolverBootstrapPromise = (async () => {
     const registry = loadVaultRegistry();
-    const existingId = String(registry.resolver?.chat_id || process.env.DIRECT_BOTAPI_RESOLVER_CHAT_ID || '').trim();
+    const existingId = String(registry.resolver?.chat_id || directEnv.resolverChatId() || '').trim();
     const pool = loadPool();
     let masterInfo = null;
     try {
@@ -917,7 +918,7 @@ function sessionPublicLegacy(runtime, leaseState = null) {
     // chooses and owns its loopback port; the control plane never dictates it.
     telegram_api_id: apiCredentials().apiId,
     telegram_api_hash: apiCredentials().apiHash,
-    resolver_chat_id: runtime.resolverChatId || String(process.env.DIRECT_BOTAPI_RESOLVER_CHAT_ID || '').trim() || null,
+    resolver_chat_id: runtime.resolverChatId || String(directEnv.resolverChatId() || '').trim() || null,
     generation: runtime.generation,
     credential_version: runtime.credentialVersion,
     heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,

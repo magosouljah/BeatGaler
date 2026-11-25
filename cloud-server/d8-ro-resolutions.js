@@ -1,12 +1,13 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const OAUTH_FLOW_TTL_MS = 10 * 60 * 1000;
 
-function d8LifecycleEnv(env = process.env) {
+function d8LifecycleEnv(env = getRuntimeEnv()) {
   return { ...env, BEATGALER_ACCOUNT_TOMBSTONE_RETENTION_DAYS: '0' };
 }
 
@@ -149,7 +150,7 @@ async function fetchIdentity(fetchImpl, provider, cfg, accessToken) {
 }
 
 function createProviderReauthCoordinator(runtime, {
-  env = process.env,
+  env = getRuntimeEnv(),
   fetchImpl = global.fetch,
   now = () => Date.now(),
   randomBytes = size => crypto.randomBytes(size),

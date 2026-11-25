@@ -1,3 +1,4 @@
+const { telegramEnv } = require('./runtime-env');
 const fs = require("fs");
 const path = require("path");
 
@@ -5,7 +6,7 @@ const SESSION_FILE = path.join(__dirname, "master-session.txt");
 const STORAGE_TITLE_LIMIT = 120;
 
 function readSession() {
-  const envSession = String(process.env.BEATGALER_MASTER_SESSION || "").trim();
+  const envSession = String(telegramEnv.beatGalerMasterSession() || "").trim();
   if (envSession) return envSession;
   if (!fs.existsSync(SESSION_FILE)) return "";
   return fs.readFileSync(SESSION_FILE, "utf8").trim();
@@ -14,8 +15,8 @@ function readSession() {
 function masterStorageReady() {
   return Boolean(
     readSession() &&
-    process.env.TELEGRAM_API_ID &&
-    process.env.TELEGRAM_API_HASH
+    telegramEnv.apiId() &&
+    telegramEnv.apiHash()
   );
 }
 
@@ -86,8 +87,8 @@ async function openMasterClient() {
     throw new Error('Missing GramJS. Run "cd cloud-server" then "npm install".');
   }
 
-  const apiId = Number(process.env.TELEGRAM_API_ID);
-  const apiHash = String(process.env.TELEGRAM_API_HASH || "");
+  const apiId = Number(telegramEnv.apiId());
+  const apiHash = String(telegramEnv.apiHash() || "");
   const session = readSession();
   if (!Number.isFinite(apiId) || !apiHash || !session) {
     throw new Error("Master Telegram account is not configured. Run node setup-master-account.js.");

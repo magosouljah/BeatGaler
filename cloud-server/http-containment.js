@@ -1,5 +1,6 @@
 "use strict";
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { bearerTokenRequiredRequest: bearerToken, accountsDataPath } = require("./auth-helpers");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -45,7 +46,7 @@ function sendJson(res, status, error, extra = {}) {
 
 function createHttpContainment(options = {}) {
   const dataDir = options.dataDir || require("./state-dir").STATE_DIR;
-  const env = options.env || process.env;
+  const env = options.env || getRuntimeEnv();
   const now = options.now || (() => Date.now());
   const accountsFile = accountsDataPath(dataDir);
   const cloudFile = path.join(dataDir, "cloud-data.json");

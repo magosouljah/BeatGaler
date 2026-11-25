@@ -1,5 +1,6 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const {
   createCommercialCatalog,
   getCheckoutReadyOffer,
@@ -68,7 +69,7 @@ function requiredUrl(value, label) {
   return url.toString();
 }
 
-function readPolarSandboxConfig(env = process.env) {
+function readPolarSandboxConfig(env = getRuntimeEnv()) {
   if (!env || typeof env !== 'object') {
     throw new PolarSandboxConfigError('Sandbox environment configuration is required.');
   }
@@ -103,7 +104,7 @@ function readPolarSandboxConfig(env = process.env) {
   });
 }
 
-function readPolarProductionConfig(env = process.env) {
+function readPolarProductionConfig(env = getRuntimeEnv()) {
   if (!env || typeof env !== 'object') {
     throw new PolarSandboxConfigError('Production environment configuration is required.', 'POLAR_PRODUCTION_CONFIG_INVALID');
   }
@@ -332,8 +333,8 @@ function createPolarAdapter(options = {}) {
     throw new PolarSandboxConfigError('Polar environment is unsupported.', 'POLAR_CONFIG_ENVIRONMENT_MISMATCH');
   }
   const config = options.config || (environment === POLAR_ENVIRONMENT
-    ? readPolarSandboxConfig(options.env || process.env)
-    : readPolarProductionConfig(options.env || process.env));
+    ? readPolarSandboxConfig(options.env || getRuntimeEnv())
+    : readPolarProductionConfig(options.env || getRuntimeEnv()));
   assertPolarConfig(config, environment);
   const catalog = options.catalog || (environment === POLAR_ENVIRONMENT
     ? createSandboxCommercialCatalog(config) : createProductionCommercialCatalog(config));

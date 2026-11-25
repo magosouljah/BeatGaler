@@ -1,5 +1,6 @@
 "use strict";
 
+const { criticalPathTraceFile } = require('./runtime-env');
 const fs = require("fs");
 
 const RELEVANT_ROUTES = new Set([
@@ -14,11 +15,6 @@ const RELEVANT_ROUTES = new Set([
 
 let stream = null;
 
-function traceFile() {
-  const value = String(process.env.STAGE1_CRITICAL_PATH_CLOUD_TRACE_FILE || "").trim();
-  return value || null;
-}
-
 function correlation(req) {
   const value = String(req?.headers?.["x-stage1-critical-path"] || "").trim();
   return /^[A-Za-z0-9:-]{1,100}$/.test(value) ? value : null;
@@ -26,7 +22,7 @@ function correlation(req) {
 
 function write(req, event, detail = {}) {
   const id = correlation(req);
-  const file = traceFile();
+  const file = criticalPathTraceFile();
   if (!id || !file || !RELEVANT_ROUTES.has(String(req?.path || ""))) return;
   if (!stream) {
     stream = fs.createWriteStream(file, { flags: "a" });

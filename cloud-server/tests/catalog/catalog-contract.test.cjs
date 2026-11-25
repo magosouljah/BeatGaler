@@ -48,13 +48,16 @@ test('el guard rechaza desviaciones del contrato del catálogo', () => {
 
 test('catalog/ no importa transporte ni red', () => {
   const dir = path.join(__dirname, '..', '..', 'catalog');
+  const runtimeEnv = path.join(dir, '..', 'runtime-env.js');
+  const requires = (file) => [...fs.readFileSync(file, 'utf8').matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+  assert.deepEqual(requires(runtimeEnv), [], 'runtime-env.js debe ser un módulo sin dependencias');
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js'))) {
-    const src = fs.readFileSync(path.join(dir, f), 'utf8');
-    const reqs = [...src.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1]);
+    const reqs = requires(path.join(dir, f));
     // T05-N: ./authority es módulo interno del catálogo (solo SQL + crypto); sigue prohibido importar transporte o red.
     // T06: ./cursor y ./queries son módulos internos (SQL + HMAC); routes.js es el único que requiere express (servidor HTTP, no cliente de red).
     // M4.3: ./library-tx es módulo interno (política de transacción + SQL); sin transporte ni red.
     const allowed = ['crypto', './contract', './beat-projection', './authority', './cursor', './queries', './metadata-rules', './commands', './facets', './name-uniqueness', './library-tx'];
+    if (['authority.js', 'cursor.js', 'queries.js'].includes(f)) allowed.push('../runtime-env'); // Fallback del env inyectado; sin dependencias.
     if (f === 'worker.js') allowed.length = 1; // transporte inyectado, nunca importado
     if (f === 'transport-gateway.js') allowed.length = 1; // T11: solo crypto; el SDK (telegram/big-integer) y el cliente se inyectan
     if (['worker.js', 'library-tx.js', 'direct.js'].includes(f)) allowed.push('./queue');

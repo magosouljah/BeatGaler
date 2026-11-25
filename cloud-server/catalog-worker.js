@@ -4,16 +4,15 @@
 // ejecuta jobs SQL (conjuntos, lotes bulk, commits); los de verificación/reconciliación quedan en reintento acotado.
 // SIGTERM/SIGINT: deja de reclamar, termina los handlers en curso y sale; leases y checkpoints quedan durables (no borra jobs).
 require('dotenv').config({ quiet: true });
+const { getRuntimeEnv, WORKER_FLAG, catalogWorkerEnv } = require('./runtime-env');
 const { startPostgresControlPlane } = require('./postgres-bootstrap');
 const { assembleWorkerCatalog } = require('./catalog-assembly');
 
-const WORKER_FLAG = 'BEATGALER_CATALOG_WORKER_ENABLED';
-
 async function main() {
-  if (String(process.env[WORKER_FLAG] || '').toLowerCase() !== 'true') { console.log(`[catalog-worker] disabled (${WORKER_FLAG} != true)`); return 0; }
+  if (!catalogWorkerEnv.enabled()) { console.log(`[catalog-worker] disabled (${WORKER_FLAG} != true)`); return 0; }
   const started = await startPostgresControlPlane({});
   const pool = started.pool;
-  const catalog = await assembleWorkerCatalog({ pool, env: process.env });
+  const catalog = await assembleWorkerCatalog({ pool, env: getRuntimeEnv() });
   if (!catalog) return 2;
   const { worker, gatewayRuntime, mediaGateway } = catalog;
   let shuttingDown = false;
@@ -29,7 +28,7 @@ async function main() {
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
   worker.start();
   console.log(`[catalog-worker] started owner=${worker.owner} gateway=${mediaGateway ? 'bot-router(lazy)' : 'none'} claimMax=${worker.options.claimMax} lease=${worker.options.leaseMs}ms concurrency=${worker.options.globalConcurrency}/${worker.options.perLibraryConcurrency}`);
-  setInterval(() => { worker.health().then((h) => console.log('[catalog-worker] health', JSON.stringify(h))).catch(() => {}); }, Number(process.env.BEATGALER_CATALOG_WORKER_HEALTH_MS || 60_000)).unref();
+  setInterval(() => { worker.health().then((h) => console.log('[catalog-worker] health', JSON.stringify(h))).catch(() => {}); }, catalogWorkerEnv.healthIntervalMs()).unref();
   return null;
 }
 

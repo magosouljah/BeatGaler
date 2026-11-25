@@ -1,8 +1,9 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { structuredEvent, createMetrics, alertRoute } = require('./operations-observability');
 
-function createOperationsRuntime({ env = process.env, logger = console, now = () => Date.now() } = {}) {
+function createOperationsRuntime({ env = getRuntimeEnv(), logger = console, now = () => Date.now() } = {}) {
   const metrics = createMetrics();
   const windows = new Map();
   let postgresUnavailable = false;

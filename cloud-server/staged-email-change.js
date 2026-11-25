@@ -1,5 +1,6 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { normalizeEmail, validEmailAfterNormalization: validEmail, sha256String: sha256 } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const { markVerifiedEmail } = require('./email-verification-authority');
@@ -29,7 +30,7 @@ function createStagedEmailChange({
   emailNotifier,
   commitLocalEmail,
   flushAuthority = async () => {},
-  env = process.env,
+  env = getRuntimeEnv(),
   now = () => Date.now(),
   randomBytes = size => crypto.randomBytes(size),
 } = {}) {

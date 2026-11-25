@@ -1,5 +1,6 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { EventEmitter } = require('node:events');
 const { publicRegistrationOpen } = require('./auth-public-registration-hardening');
 const SIGNUP_COOKIE = '__Host-beatgaler_signup';
@@ -86,7 +87,7 @@ function publicError(error) {
   return { error: safeMessages.get(code) || 'Account creation is temporarily unavailable.', code };
 }
 
-function shouldOwnRegister(env = process.env) {
+function shouldOwnRegister(env = getRuntimeEnv()) {
   // The legacy handler creates a permanent user and vault before verification.
   // It must never be reachable, including in development with the flag off.
   return true;
@@ -128,7 +129,7 @@ async function invokeCapturedHandler(handler, body, { headers = {} } = {}) {
 
 function installPendingSignupBoundary(express, {
   service = null,
-  env = process.env,
+  env = getRuntimeEnv(),
   activation = null,
 } = {}) {
   const application = express?.application;

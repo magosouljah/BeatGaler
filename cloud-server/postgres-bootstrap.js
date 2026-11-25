@@ -1,9 +1,10 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { postgresConfig, createPostgresPool } = require('./postgres-runtime-config');
 const { applyMigrations, assertKnownMigrations } = require('./postgres-migrations');
 
-async function startPostgresControlPlane({ env = process.env, PoolCtor, apply = applyMigrations, forwardGuard = assertKnownMigrations,
+async function startPostgresControlPlane({ env = getRuntimeEnv(), PoolCtor, apply = applyMigrations, forwardGuard = assertKnownMigrations,
   onMigrationError = () => {} } = {}) {
   const config = postgresConfig(env);
   if (!config.enabled) return Object.freeze({ enabled: false, pool: null, migrations: null });

@@ -1,5 +1,6 @@
 'use strict';
 
+const { getRuntimeEnv } = require('./runtime-env');
 const { operationsRuntime } = require('./operations-runtime');
 
 const DEFAULTS = Object.freeze({
@@ -23,7 +24,7 @@ function boundedInt(raw, fallback, min, max, name) {
   return value;
 }
 
-function runtimeConfig(env = process.env) {
+function runtimeConfig(env = getRuntimeEnv()) {
   const nodeEnv = String(env.NODE_ENV || 'development').trim().toLowerCase() || 'development';
   const deploymentEnv = String(env.BEATGALER_DEPLOYMENT_ENV || (nodeEnv === 'production' ? '' : 'development')).trim().toLowerCase();
   if (nodeEnv === 'production' && !['staging', 'production'].includes(deploymentEnv)) {
@@ -137,7 +138,7 @@ function installGracefulShutdown(server, { processLike = process, config = runti
   return close;
 }
 
-function installRuntimeOperability(express, { env = process.env, processLike = process, logger = console } = {}) {
+function installRuntimeOperability(express, { env = getRuntimeEnv(), processLike = process, logger = console } = {}) {
   const application = express?.application;
   if (!application || application.__beatgalerRuntimePatchInstalled) return;
   application.__beatgalerRuntimePatchInstalled = true;
