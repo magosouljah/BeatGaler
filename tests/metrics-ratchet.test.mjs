@@ -8,10 +8,10 @@ import { compareBaselines } from '../scripts/metrics/ratchet.mjs';
 
 const originalGuard = 'tests/original.test.mjs';
 const nextGuard = 'tests/new-text.test.mjs';
-const baseline = { metrics: { P1: 2, S1: 3, 'F+M': 1 }, sourceTextTests: [originalGuard] };
+const baseline = { metrics: { P1: 2, S1: 3, CY: 1, CYF: 9, 'F+M': 1 }, sourceTextTests: [originalGuard] };
 
 function runRatchet(t, {
-  p1 = 2, extraRows = [], files = [['F', originalGuard]], allowlist = [], flags = [],
+  p1 = 2, cycles = [1, 9], extraRows = [], files = [['F', originalGuard]], allowlist = [], flags = [],
 } = {}) {
   const repo = mkdtempSync(path.join(os.tmpdir(), 'metrics-ratchet-'));
   t.after(() => rmSync(repo, { recursive: true, force: true }));
@@ -34,6 +34,9 @@ function runRatchet(t, {
   ].join('\n');
   const fileTsv = files.map(([kind, file]) => [kind, file, '1', ''].join('\t')).join('\n');
   write('metrics.mjs', `console.log(${JSON.stringify(metrics)});\n`);
+  write('src-reach.mjs', `console.log(${JSON.stringify(`HEAD fixture
+import cycles (SCC size>1) in src runtime graph: ${cycles[0]}  files inside cycles: ${cycles[1]}  largest: 9`)});
+`);
   write('classify-tests.mjs', `console.log(process.argv[3] === 'summary'
     ? ${JSON.stringify(summary)} : ${JSON.stringify(fileTsv)});\n`);
   const result = spawnSync(process.execPath, [script, repo, ...flags], { encoding: 'utf8' });
@@ -44,7 +47,7 @@ function runRatchet(t, {
 test('acepta métricas iguales e ignora el conteo informativo C4', t => {
   const result = runRatchet(t);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /PASS trinquete: 3 métricas, 1 pruebas F\/M/);
+  assert.match(result.stdout, /PASS trinquete: 5 métricas, 1 pruebas F\/M/);
 });
 
 test('bloquea y nombra cada métrica que sube', t => {
@@ -52,6 +55,13 @@ test('bloquea y nombra cada métrica que sube', t => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /P1 sube de 2 a 3/);
   assert.match(result.stderr, /F\+M sube de 1 a 2/);
+});
+
+test('bloquea un ciclo de importación nuevo (métrica 7)', t => {
+  const result = runRatchet(t, { cycles: [2, 11] });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /CY sube de 1 a 2/);
+  assert.match(result.stderr, /CYF sube de 9 a 11/);
 });
 
 test('acepta una mejora con aviso', t => {
@@ -86,7 +96,7 @@ test('acepta una excepción nominal si F+M queda dentro del umbral', t => {
 });
 
 test('protege umbrales y rutas iniciales del baseline histórico', () => {
-  const previous = { ...baseline, sourceTextTests: new Set(baseline.sourceTextTests) };
+  const previous = { metrics: { P1: 2, S1: 3, 'F+M': 1 }, sourceTextTests: new Set(baseline.sourceTextTests) };
   const current = { metrics: { P1: 3, 'F+M': 0 }, sourceTextTests: new Set([nextGuard]) };
   assert.deepEqual(compareBaselines(current, previous), [
     'Baseline: P1 sube de 2 a 3',

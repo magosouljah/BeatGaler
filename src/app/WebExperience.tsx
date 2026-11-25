@@ -1,12 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import { galleryLocation } from "./galleryLocation";
 const LandingPage = lazy(() => import("../features/design/LANDING/LandingPage"));
 const AuthenticatedPage = lazy(() => import("./WebGalleryEntry"));
-
-export function galleryLocation() {
-  const url = new URL(window.location.href);
-  url.pathname = "/gallery";
-  return url.pathname + url.search + url.hash;
-}
 
 export default function WebExperience() {
   const [path, setPath] = useState(() => window.location.pathname.replace(/\/$/, "") || "/");
