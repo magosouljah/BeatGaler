@@ -65,7 +65,7 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 - Proteger catálogo, generaciones activas y referencias de archivos contra cascadas; `reset` no vacía bibliotecas; no borrar medios, mensajes ni INDEX históricos por autorización genérica.
 - Un backup SQL **no** sustituye la copia de bytes de Telegram.
 - Las guardas de cuentas se componen solo en `cloud-server/account-route-guards.js` (tabla única montada sobre la instancia en `server-core.js`); no se reasigna `express.application.*`.
-- No tocar por simplificar sin pruebas y permiso: refs/purge, Direct/mtcute compartido, sesión y CSRF (incluido el `fetch` global de `webCsrfFetchCoordinator`), `server-core-auth-bridge-loader`, idempotencia, derechos pagados, guards SQL.
+- No tocar por simplificar sin pruebas y permiso: refs/purge, Direct/mtcute compartido, sesión y CSRF (incluido el `fetch` global único de `webFetchBoundary`), `server-core-auth-bridge-loader`, idempotencia, derechos pagados, guards SQL.
 - **Preservar sin cambios visuales** Landing, Gallery virtualizada, BeatCards, Tag Bar y Playbar; Gallery consulta globalmente en PostgreSQL sin cargar la biblioteca en memoria.
 
 ## 8. Pruebas

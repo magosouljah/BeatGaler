@@ -41,7 +41,7 @@ El router delega en los módulos de dominio, que usan `authority` y `contract`. 
 
 `cloud-server/catalog-assembly.js` concentra el ensamblado HTTP y del worker. HTTP configura autoridad con pool y control-plane PostgreSQL, y ensambla antes de que `server-core.js` monte el router. Direct y el gateway exigen en producción G2 aprobado o la excepción de riesgo aceptado. El ensamblado HTTP valida esa excepción con autoridad nativa habilitada y activación SQL `REUSED_UNROTATED`. El worker prepara el cutover, rechaza autoridad distinta de PostgreSQL o catálogo nativo apagado y comprueba disponibilidad antes de arrancar. Si falta el gateway, el worker reintenta verificación y reconciliación y MAIN devuelve 503 en operaciones que requieren verificador.
 
-Los pares `configure*/current*` siguen en uso (X53/X54). `server-core.js` toma las instancias al montar el router y la guarda de revinculación sigue consultando la autoridad configurada.
+`cloud-server/catalog-boot.js` (M4.1b): `server.js` configura el arranque del catálogo antes de cargar `server-core.js`, que monta el router con `mountCatalog(app, authenticate)` (sin servicios: 503 `CATALOG_UNAVAILABLE`). La autoridad ya no es singleton (`createCatalogAuthority`); quedan pares `configure*/current*` en otros módulos (X53/X54, S1/S2 = 9).
 
 ### Transacción de biblioteca y cola (M4.3–M4.4)
 
@@ -64,7 +64,7 @@ D13.1/2 unifican las reglas SQL nativas en 409. D13.5 y D13.6 aplican cuarentena
 
 | Grupo | Módulos |
 | --- | --- |
-| Composición | `catalogComposition` (flag `VITE_CATALOG_API_ENABLED`), `LibraryCompositionGate`, `catalogLibraryProvider` (crea `CatalogServices`). |
+| Composición | `catalogComposition` (flag `VITE_CATALOG_API_ENABLED`), `LibraryCompositionGate`, `catalogLibraryProvider` (crea `CatalogServices`), `catalogServiceLifecycle` (C12: preconexión Direct, MAIN y caché de conjuntos con `dispose`; orden de teardown fijo). |
 | Datos | `catalogApi`/`catalogCommandsApi` (HTTP), `catalogQueryIdentity` (identidades de consulta con nombre: filtros, conjunto y filtros de reproducción), `catalogQueryStore` (bloques residentes, sin cargar la biblioteca entera), `catalogFirstBlockCache`, `catalogInteractionStore` (selección, edición, bulk). |
 | Sesiones de Gallery | `catalogQuerySession` (navegación, borrador de búsqueda aplicado a los 250 ms, facetas e invalidación tras mutaciones), `catalogImportSession` (revisión, progreso, provisionales y operaciones pendientes), `catalogPlaybackLink` (enlace entre la sesión de reproducción y `useAudio`, comandos de Playbar y cola). |
 | Gallery | `CatalogAppShell` (pantalla), `CatalogBeatCards` (`CatalogBeatCard` y `ProvisionalBeatCard`: fijan las props inertes de `BeatCard`), `src/app/galleryLocation.ts` (ubicación de Gallery fuera del ciclo de importación), `useCatalogGalleryScope` (composición, suscripciones y estado de vista), `catalogGalleryCards` (DTO conocidos acotados, ordinales y portadas perezosas), `CatalogVirtualGallery` + `useCatalogVirtualRows` + `catalogRowGeometry` (rejilla virtual; `leadCards` = tarjetas de subida en curso). |
@@ -96,6 +96,12 @@ La composición Web requiere el catálogo PostgreSQL. `LibraryCompositionGate` m
 - `cloud-server/account-route-guards.js`: **tabla única** de guardas de cuentas y seguridad (prefijo y sufijo de rutas). `server-core.js` la monta sobre la instancia con `mountAccountRouteGuards(app)`; no se reasigna `express.application.use/post/get`.
 - `accountLifecycle.api` (`cloud-server/account-lifecycle.js`): interfaz agrupada del ciclo de vida de cuentas; `provide()` registra las implementaciones al instalar los módulos, sin lecturas de `_test` en producción.
 - Cuando la durabilidad no está disponible, el 503 de las rutas de sesión no emite cookies (X69).
+- `cloud-server/auth-helpers.js` (M7.8): ayudantes únicos (email, bearer, sha256, ruta de `accounts-data.json`); las variantes que difieren conservan nombre propio.
+- `cloud-server/identity-store.js` (M7.4a/b): índice en memoria del almacén de identidad en modo PostgreSQL (archivo virtual), reconstruido solo al confirmar el `rename`; cada lector recibe copia. Lo usan `session-security`, `account-lifecycle` y `http-containment`. En modo json se sigue leyendo el disco. Cada proceso tiene su propio almacén (X87).
+- Persistencia: los filtros de cuentas borradas (`account-lifecycle`, B8) y de registro público (`auth-public-registration-hardening`, B8b) **fallan cerrados** (`ACCOUNT_LIFECYCLE_FILTER_FAILED` / `AUTH_REGISTRATION_FILTER_FAILED`).
+- `cloud-server/runtime-env.js` (E2/E2b): nombra las variables de entorno; las fábricas reciben `env` explícito del compositor (`requiredEnv` lanza si falta).
+- `server-core.js` no escucha al importarse: `server.js` llama a `listenCloudServer()` tras el require (M7.5a).
+- Web: `src/features/auth/webFetchBoundary.ts` (M7.7b) es el **único** reemplazo de `window.fetch` (coordinador CSRF → frontera de credenciales solo Web → nativo; contrato X86 fijado en `webFetchPatchChain.contract.test.ts`); `webSession.ts`/`webSignIn.ts` (M7.7a) concentran la sesión Web.
 
 ### Conexión del transporte en la instalación LIVE
 
