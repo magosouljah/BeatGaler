@@ -159,7 +159,6 @@ export interface PlatformImportPort {
 export interface PlatformAdapter {
   kind: PlatformKind;
   capabilities: Readonly<PlatformCapabilities>;
-  clientId: string;
   library: PlatformLibraryPort;
   preferences: PlatformPreferencesPort;
   trash: PlatformTrashPort;
