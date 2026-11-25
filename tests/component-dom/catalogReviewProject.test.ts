@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PROJECT_LOAD_FAILED, prepareProjectForBeat } from "../../src/features/library/catalog/catalogProjectMerge";
 import { resolveImportPlan } from "../../src/features/library/catalog/catalogImportPlan";
 import { importFailureMessage } from "../../src/features/library/catalog/useCatalogGalleryScope";
-import { replaceBeatAudio } from "../../src/features/library/catalog/catalogAudioReplace";
+import { createBeatEditor } from "../../src/features/library/catalog/catalogBeatEditor";
 import type { Beat } from "../../src/types";
 
 const zipFile = async (entries: Record<string, string>, name = "p.zip") => { const z = new JSZip(); for (const [k, v] of Object.entries(entries)) z.file(k, v); return new File([await z.generateAsync({ type: "arraybuffer" })], name, { type: "application/zip" }); };
@@ -34,17 +34,18 @@ describe("prepareProjectForBeat (fusión anterior)", () => {
   });
 });
 
-describe("replaceBeatAudio PROJECT: un fallo de carga no sube nada", () => {
+describe("replaceAudio PROJECT: un fallo de carga no sube nada", () => {
   const detail = { id: "b1", name: "Beat", bpm: "", key: "", tags: [], rating: 0, color: null, color2: null, version: "4", hasWav: false, hasProject: true, playback: null, artwork: null };
   it("fusiona con el ZIP actual y sube solo el PROJECT; si no puede cargarlo, no llama a replaceBeat", async () => {
     const replaceBeat = vi.fn(async () => ({ status: "committed", operationId: "o", beatId: "b1", version: "5", revision: "9", operation: {} }));
     const existing = await zipFile({ "Samples/s.wav": "s", "v.flp": "v" });
-    const ok = await replaceBeatAudio({ mutations: { getBeat: async () => detail, replaceBeat } as never, confirm: async () => true, beatId: "b1", file: f("n.flp"), loadProject: async () => existing });
-    expect(ok).toMatchObject({ status: "committed", kind: "PROJECT" });
+    const editor = (loadProject: (id: string) => Promise<File | null>) => createBeatEditor({ mutations: { getBeat: async () => detail, replaceBeat } as never, knownDto: () => undefined, loadProject, errorMessage: String });
+    const ok = await editor(async () => existing).replaceAudio("b1", f("n.flp"), { confirm: async () => true });
+    expect(ok).toMatchObject({ reading: "success", status: "committed", kind: "PROJECT" });
     const sent = (replaceBeat.mock.calls[0] as unknown as [{ files: { project: File } }])[0].files.project; expect(await names(sent)).toEqual(["Samples/s.wav", "n.flp"].sort());
     replaceBeat.mockClear();
-    const bad = await replaceBeatAudio({ mutations: { getBeat: async () => detail, replaceBeat } as never, confirm: async () => true, beatId: "b1", file: f("n.flp"), loadProject: async () => { throw new Error("x"); } });
-    expect(bad).toMatchObject({ status: "failed", message: PROJECT_LOAD_FAILED }); expect(replaceBeat).not.toHaveBeenCalled();
+    const bad = await editor(async () => { throw new Error("x"); }).replaceAudio("b1", f("n.flp"), { confirm: async () => true });
+    expect(bad).toMatchObject({ reading: "rejected", why: "error", message: PROJECT_LOAD_FAILED }); expect(replaceBeat).not.toHaveBeenCalled();
   });
 });
 

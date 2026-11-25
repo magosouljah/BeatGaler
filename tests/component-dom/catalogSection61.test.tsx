@@ -176,10 +176,18 @@ describe("§6.1-7 Subidas duplicadas tras timeout/bloqueo", () => {
   });
 });
 
-// ---- lógica de la Gallery extraída (catalogDrawerSave.ts) contra el servidor falso de mutaciones/transferencias ----
+// ---- lógica de la Gallery extraída (catalogBeatEditor.ts / catalogImportSession.ts) contra el servidor falso de mutaciones/transferencias ----
 import { createCatalogCommandsApi } from "../../src/features/library/catalog/catalogCommandsApi";
 import { createCatalogTransfer } from "../../src/features/library/catalog/catalogTransfer";
-import { enqueueReview, nextReview, saveDrawerChanges, summarizePendingTransfers } from "../../src/features/library/catalog/catalogDrawerSave";
+import { enqueueReview, nextReview, summarizePendingTransfers } from "../../src/features/library/catalog/catalogImportSession";
+import { createBeatEditor, drawerEditError } from "../../src/features/library/catalog/catalogBeatEditor";
+// El Drawer Web guarda con `createBeatEditor().saveDrawer`; el adaptador que lanzaba el error ya no existe (Edit result → éxito o error).
+type DrawerDeps = { mutations: never; knownDto: (id: string) => unknown; loadProject: (id: string) => Promise<File | null>; dataUrlToFile?: () => null; errorMessage: (e: unknown) => string };
+const saveDrawerChanges = async (deps: DrawerDeps, input: Parameters<ReturnType<typeof createBeatEditor>["saveDrawer"]>[0]) => {
+  const result = await createBeatEditor(deps as never).saveDrawer(input);
+  if (result.reading !== "success") throw drawerEditError(result);
+  return { status: result.status === "committed" ? "committed" : "patched", artworkRemoved: result.artworkRemoved };
+};
 import { createCatalogFakeCommands, fakeBeats } from "../helpers/catalogFakeCommands";
 import { beatFromCatalogDetail } from "../../src/features/library/catalog/catalogMutations";
 
