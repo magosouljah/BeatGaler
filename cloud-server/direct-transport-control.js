@@ -12,7 +12,6 @@ const { ProjectAccessError } = require('./project-access');
 const { withTelegramFloodWait } = require('./telegram-retry');
 
 const { configureCatalogTelegramTransport } = require('./catalog-telegram-transport');
-const { noDirectStartupTrace } = require('./direct-startup-trace');
 
 const ROOT = __dirname;
 function backendPath(value, fallbackName) {
@@ -43,15 +42,12 @@ const DIAG_DIR = backendPath(directEnv.diagnosticsDir(), 'diagnostics');
 const DIAG_FILE = path.join(DIAG_DIR, 'telegram-direct-control.txt');
 
 // Runtime-only material. Tokens never go to the JSON state file.
-const runtimeSessions = new Map(); // session_id -> hydrated session + current token
 const managedTokenCache = new Map(); // bot_id -> { credentialVersion, token }; process memory only
 const managedTokenFetches = new Map();
 const botRotationLocks = new Map();
 const leaseCleanupLocks = new Map();
 const unconfirmedOperationSince = new Map();
 let monotonicNowImpl = () => performance.now();
-const busyOperationDiagnostics = new Map();
-let resolverBootstrapPromise = null;
 let maintenanceStarted = false;
 let managerBotFetch = (...args) => fetch(...args);
 let managedTokenFetchRetryPolicy = {
@@ -182,32 +178,6 @@ function operationLivenessAge(op, opId) {
 function operationIsStale(op, opId) {
   return !op || operationLivenessAge(op, opId) >= operationLivenessTimeout(op);
 }
-function operationDurationMs(op) {
-  if (op?.liveness_owner_instance === PROCESS_INSTANCE_ID && Number.isFinite(Number(op?.started_monotonic_ms))) {
-    return elapsedSinceMonotonic(op.started_monotonic_ms);
-  }
-  return Math.max(0, Date.now() - parseTime(op?.started_at));
-}
-function operationDiagnosticOwner(op) {
-  if (!op) return {};
-  return {
-    owner_session_id: op.session_id || null,
-    owner_installation: op.installation_id ? `${String(op.installation_id).slice(0, 8)}…` : null,
-    owner_tab_id: op.document_tab_id || null,
-    owner_document_id: op.document_id || null,
-    owner_document_generation: op.document_generation || null,
-    owner_kind: op.kind || null,
-    owner_liveness_age_ms: Math.round(operationLivenessAge(op, op.operation_id)),
-  };
-}
-function diagBusyOperationOnce(key, fields) {
-  const now = monotonicNow();
-  const previous = busyOperationDiagnostics.get(key) || 0;
-  if (now - previous < 2_000) return;
-  busyOperationDiagnostics.set(key, now);
-  diag('OPERATION_BEGIN_WAIT', fields);
-}
-
 function loadPool() {
   if (!fs.existsSync(POOL_FILE)) throw new Error(`Transport bot pool not found: ${POOL_FILE}`);
   const raw = readJson(POOL_FILE, null);
@@ -759,167 +729,6 @@ async function kickAndUnban(master, vault, botEntity) {
   } catch (_) {}
 }
 
-async function ensureBotApiResolverChat() {
-  // Resolver infrastructure is process-singleflight. It is not part of every
-  // user session startup; once created/bootstraped, subsequent leases only use
-  // its chat id. This removes repeated MASTER resolver work on every warmup.
-  if (resolverBootstrapPromise) return resolverBootstrapPromise;
-  resolverBootstrapPromise = (async () => {
-    const registry = loadVaultRegistry();
-    const existingId = String(registry.resolver?.chat_id || directEnv.resolverChatId() || '').trim();
-    const pool = loadPool();
-    let masterInfo = null;
-    try {
-      if (existingId) {
-        // The resolver group and its bot memberships are persistent infrastructure.
-        // A warm process only needs the durable chat id; re-resolving it through
-        // MASTER here would put MASTER back on every normal READY startup.
-        diag('RESOLVER_READY', { chat_id: existingId, bots: pool.length, bootstrap: 'persisted' });
-        return existingId;
-      } else {
-        const config = loadMasters()[0];
-        const client = await openMaster(config);
-        let updates;
-        try {
-          updates = await client.invoke(new Api.channels.CreateChannel({
-            title: 'BeatGaler Transport Resolver',
-            about: 'Private internal transport resolver. End users are not members.',
-            megagroup: true,
-          }));
-        } catch (error) {
-          try { await client.disconnect(); } catch (_) {}
-          throw error;
-        }
-        const vault = (updates?.chats || []).find(chat => chat?.id) || null;
-        if (!vault) {
-          try { await client.disconnect(); } catch (_) {}
-          throw new Error('MASTER created resolver group but no channel entity was returned.');
-        }
-        masterInfo = { config, client, vault };
-        const resolverId = markedChatId(vault);
-        registry.resolver = { chat_id: resolverId, created_at: nowIso(), master_id: config.id };
-        writeJsonAtomic(VAULT_REGISTRY_FILE, registry);
-        diag('RESOLVER_CREATED', { chat_id: resolverId, master: config.id });
-      }
-
-      // One-time bootstrap only. Prefer @username because GramJS can't always
-      // resolve an arbitrary numeric bot id that MASTER hasn't seen before.
-      for (const configured of pool) {
-        try {
-          let username = configured.telegram_username;
-          if (!username) {
-            const token = await resolveManagedToken(configured);
-            const identity = await resolveBotIdentityViaHttp(token);
-            username = identity.telegram_username;
-          }
-          if (!username) throw new Error('Transport bot username could not be resolved.');
-          const botEntity = await masterInfo.client.getEntity(`@${String(username).replace(/^@/, '')}`);
-          await inviteAndPromote(masterInfo.client, masterInfo.vault, botEntity);
-        } catch (error) {
-          diag('RESOLVER_BOT_ENSURE_FAILED', { transport_id: configured.id, error: error?.message || error });
-        }
-      }
-      const chatId = markedChatId(masterInfo.vault);
-      diag('RESOLVER_READY', { chat_id: chatId, bots: pool.length, bootstrap: 'once' });
-      return chatId;
-    } finally {
-      try { if (masterInfo?.client) await masterInfo.client.disconnect(); } catch (_) {}
-    }
-  })();
-  try {
-    return await resolverBootstrapPromise;
-  } catch (error) {
-    resolverBootstrapPromise = null;
-    throw error;
-  }
-}
-
-async function runtimeForLease(
-  lease,
-  { freshMarker = false, startupTrace = noDirectStartupTrace } = {},
-) {
-  const pool = await startupTrace.step("START_POOL", async () => loadPool());
-  const bot = pool.find(item => item.id === lease.bot_id);
-  if (!bot) throw new Error(`Unknown transport bot ${lease.bot_id}.`);
-
-  const state = await startupTrace.step("START_STATE", async () => stateSnapshot(pool));
-  const botState = state.bots[bot.id];
-
-  let runtime = runtimeSessions.get(lease.session_id);
-  if (!runtime || runtime.credentialVersion !== botState.credential_version) {
-    if (bot.managed) {
-      const cached = managedTokenCache.get(String(bot.id));
-      startupTrace.mark(cached?.credentialVersion === Number(botState.credential_version)
-        ? "START_TOKEN_CACHE_HIT" : "START_TOKEN_CACHE_MISS");
-    }
-    const token = await startupTrace.step(
-      "START_TOKEN",
-      () => tokenForCredentialVersion(bot, botState.credential_version),
-    );
-
-    let username = bot.telegram_username || runtime?.bot?.telegram_username || null;
-    let userId = bot.telegram_user_id || runtime?.bot?.telegram_user_id || null;
-
-    if (!username || !userId) {
-      const identity = await startupTrace.step(
-        "START_IDENTITY",
-        () => resolveBotIdentityViaHttp(token),
-      );
-      username = username || identity.telegram_username;
-      userId = userId || identity.telegram_user_id;
-    }
-
-    runtime = {
-      id: lease.session_id,
-      installationId: lease.installation_id,
-      chatId: lease.chat_id,
-      bot: { ...bot, telegram_username: username, telegram_user_id: userId },
-      token,
-      generation: lease.generation,
-      credentialVersion: botState.credential_version,
-      startedAt: parseTime(lease.started_at) || Date.now(),
-      masterId: null,
-      resolverChatId: null,
-    };
-
-    runtimeSessions.set(lease.session_id, runtime);
-  }
-
-  if (!runtime.resolverChatId) {
-    runtime.resolverChatId = await startupTrace.step(
-      "START_RESOLVER",
-      () => ensureBotApiResolverChat(),
-    );
-  }
-
-  return runtime;
-}
-
-function sessionPublic(runtime, leaseState = null) {
-  return {
-    ok: true,
-    mode: 'telegram-direct-botapi-local',
-    session_id: runtime.id,
-    transport_id: runtime.bot.id,
-    transport_user_id: runtime.bot.telegram_user_id || null,
-    transport_username: runtime.bot.telegram_username || null,
-    chat_id: String(runtime.chatId),
-    bot_token: runtime.token,
-    // The Bot API server is part of the Desktop data plane. The Desktop
-    // chooses and owns its loopback port; the control plane never dictates it.
-    telegram_api_id: apiCredentials().apiId,
-    telegram_api_hash: apiCredentials().apiHash,
-    resolver_chat_id: runtime.resolverChatId || String(directEnv.resolverChatId() || '').trim() || null,
-    generation: runtime.generation,
-    credential_version: runtime.credentialVersion,
-    heartbeat_interval_ms: HEARTBEAT_INTERVAL_MS,
-    heartbeat_timeout_ms: HEARTBEAT_TIMEOUT_MS,
-    token_rotation_enabled: TOKEN_ROTATION_ENABLED,
-    started_at: runtime.startedAt,
-    lease_state: leaseState || null,
-  };
-}
-
 function getLeaseChecked({ installationId, sessionId, generation, allowExpired = false }) {
   const pool = loadPool();
   const state = stateSnapshot(pool);
@@ -963,12 +772,6 @@ async function maybeRotatePendingBot(botId) {
           if (lease.bot_id === botId) lease.status = lease.status === 'SUSPECTED' ? 'SUSPECTED' : 'ACTIVE';
         }
       });
-      for (const [sessionId, runtime] of runtimeSessions.entries()) {
-        if (runtime.bot.id !== botId) continue;
-        runtime.token = newToken;
-        runtime.credentialVersion = version;
-        runtimeSessions.set(sessionId, runtime);
-      }
       managedTokenCache.set(botId, { credentialVersion: version, token: newToken });
       console.log(`[direct] TOKEN_ROTATED transport=${botId} credential_version=${version}`);
       return { rotated: true, pending: false, credential_version: version };
@@ -990,246 +793,6 @@ async function maybeRotatePendingBot(botId) {
   return promise;
 }
 
-function normalizeOperationDocumentContext(input) {
-  const tabId = String(input?.tab_id || '').trim();
-  const documentId = String(input?.document_id || '').trim();
-  const documentGeneration = Number(input?.generation || 0);
-  if (
-    !tabId ||
-    !documentId ||
-    tabId.length > 128 ||
-    documentId.length > 128 ||
-    !Number.isSafeInteger(documentGeneration) ||
-    documentGeneration <= 0
-  ) {
-    return null;
-  }
-  return {
-    tab_id: tabId,
-    document_id: documentId,
-    generation: documentGeneration,
-  };
-}
-
-async function beginOperation({ installationId, sessionId, generation, credentialVersion, kind, documentContext }) {
-  const beginStartedAt = monotonicNow();
-  const checked = getLeaseChecked({ installationId, sessionId, generation });
-  if (!checked) {
-    diag('OPERATION_BEGIN_EXPIRED', {
-      session_id: String(sessionId || ''),
-      generation: Number(generation || 0),
-      kind: String(kind || 'data'),
-      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
-    });
-    return { ok: false, expired: true };
-  }
-  const { pool, lease } = checked;
-  diag('OPERATION_BEGIN_ENTER', {
-    session_id: lease.session_id,
-    transport_id: lease.bot_id,
-    vault: lease.chat_id,
-    kind: String(kind || 'data'),
-    generation: Number(generation || 0),
-  });
-  mutateState(pool, state => {
-    if (state.leases[lease.session_id]) state.leases[lease.session_id].last_heartbeat_at = nowIso();
-  });
-
-  let snapshot = stateSnapshot(pool);
-  let botState = snapshot.bots[lease.bot_id];
-  if (botState.rotation_pending) {
-    const rotation = await maybeRotatePendingBot(lease.bot_id);
-    snapshot = stateSnapshot(pool);
-    botState = snapshot.bots[lease.bot_id];
-    if (botState.rotation_pending) {
-      diag('OPERATION_BEGIN_WAIT', {
-        session_id: lease.session_id,
-        transport_id: lease.bot_id,
-        vault: lease.chat_id,
-        kind: String(kind || 'data'),
-        reason: 'rotation_pending',
-        elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
-      });
-      return { ok: false, wait: true, retry_after_ms: 250, reason: 'rotation_pending' };
-    }
-  }
-
-  if (Number(credentialVersion || 0) !== Number(botState.credential_version)) {
-    const runtime = await runtimeForLease(snapshot.leases[lease.session_id], { freshMarker: true });
-    diag('OPERATION_BEGIN_REFRESH_REQUIRED', {
-      session_id: lease.session_id,
-      transport_id: lease.bot_id,
-      vault: lease.chat_id,
-      kind: String(kind || 'data'),
-      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
-    });
-    return { ok: false, refresh_required: true, credential_refresh: sessionPublic(runtime) };
-  }
-
-  const normalizedKind = String(kind || 'data');
-  const normalizedDocumentContext = normalizeOperationDocumentContext(documentContext);
-  const opId = `op_${crypto.randomBytes(12).toString('hex')}`;
-  const admitted = mutateState(pool, state => {
-    const current = state.leases[lease.session_id];
-    if (!current) return false;
-
-    // A vault has exactly one authoritative pinned INDEX. Serialize EVERY
-    // INDEX read/write by Telegram chat id, not by installation. A get_index
-    // must never race a replace_index that pins the new document and deletes
-    // the previous one; otherwise the reader can obtain the old pinned message
-    // just before it disappears. This also protects multiple BeatGaler devices
-    // connected to the same vault.
-    const isIndexOperation = normalizedKind === 'get_index' || normalizedKind === 'replace_index';
-    if (isIndexOperation) {
-      // Browser reload/navigation replaces the active Document and terminates its
-      // dedicated Worker. A later generation from the SAME tab + SAME Direct
-      // session may therefore fence and reclaim only that tab's older orphaned
-      // INDEX operation. Different tabs/devices remain serialized, and an older
-      // request arriving late can never steal a newer generation's operation.
-      if (normalizedDocumentContext) {
-        for (const [existingId, existing] of Object.entries(state.operations)) {
-          const existingIsIndex = existing?.kind === 'get_index' || existing?.kind === 'replace_index';
-          const sameVault = String(existing?.chat_id || '') === String(lease.chat_id || '');
-          const sameSession = String(existing?.session_id || '') === String(lease.session_id || '');
-          const sameTab = String(existing?.document_tab_id || '') === normalizedDocumentContext.tab_id;
-          const existingGeneration = Number(existing?.document_generation || 0);
-          const supersededDocument =
-            Number.isSafeInteger(existingGeneration) &&
-            existingGeneration > 0 &&
-            existingGeneration < normalizedDocumentContext.generation;
-
-          if (existingIsIndex && sameVault && sameSession && sameTab && supersededDocument) {
-            delete state.operations[existingId];
-            unconfirmedOperationSince.delete(existingId);
-            diag('INDEX_OPERATION_DOCUMENT_SUPERSEDED', {
-              operation_id: existingId,
-              session_id: existing.session_id,
-              vault: existing.chat_id,
-              old_document_generation: existingGeneration,
-              new_document_generation: normalizedDocumentContext.generation,
-            });
-          }
-        }
-      }
-
-      const busy = Object.values(state.operations).some(op =>
-        (op.kind === 'get_index' || op.kind === 'replace_index') &&
-        String(op.chat_id || '') === String(lease.chat_id || '')
-      );
-      if (busy) return false;
-    }
-
-    current.last_heartbeat_at = nowIso();
-    state.operations[opId] = {
-      operation_id: opId,
-      session_id: lease.session_id,
-      bot_id: lease.bot_id,
-      installation_id: lease.installation_id,
-      chat_id: lease.chat_id,
-      kind: normalizedKind,
-      ...(normalizedDocumentContext ? {
-        document_tab_id: normalizedDocumentContext.tab_id,
-        document_id: normalizedDocumentContext.document_id,
-        document_generation: normalizedDocumentContext.generation,
-      } : {}),
-      started_at: nowIso(),
-      started_monotonic_ms: monotonicNow(),
-      liveness_owner_instance: PROCESS_INSTANCE_ID,
-      last_liveness_at: nowIso(),
-      last_liveness_monotonic_ms: monotonicNow(),
-    };
-    return true;
-  });
-  if (!admitted) {
-    const blocking = Object.values(stateSnapshot(pool).operations).find(op =>
-      (op.kind === 'get_index' || op.kind === 'replace_index') &&
-      String(op.chat_id || '') === String(lease.chat_id || '')
-    );
-    diagBusyOperationOnce(`${lease.chat_id}:${normalizedKind}`, {
-      session_id: lease.session_id,
-      transport_id: lease.bot_id,
-      vault: lease.chat_id,
-      kind: normalizedKind,
-      reason: 'index_busy',
-      elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
-      document_generation: normalizedDocumentContext?.generation || null,
-      ...operationDiagnosticOwner(blocking),
-    });
-    return { ok: false, wait: true, retry_after_ms: 200, reason: 'index_busy' };
-  }
-  diag('OPERATION_BEGIN_GRANTED', {
-    operation_id: opId,
-    session_id: lease.session_id,
-    transport_id: lease.bot_id,
-    vault: lease.chat_id,
-    kind: normalizedKind,
-    elapsed_ms: Math.round(elapsedSinceMonotonic(beginStartedAt)),
-    document_generation: normalizedDocumentContext?.generation || null,
-  });
-  return {
-    ok: true,
-    operation_id: opId,
-    credential_version: botState.credential_version,
-    operation_liveness_timeout_ms: operationLivenessTimeout({ kind: normalizedKind }),
-  };
-}
-
-async function endOperation({ installationId, sessionId, generation, operationId }) {
-  const pool = loadPool();
-  let botId = null;
-  let endedOperation = null;
-  mutateState(pool, state => {
-    const lease = state.leases[String(sessionId || '')];
-    if (lease && lease.installation_id === String(installationId || '') && Number(lease.generation) === Number(generation)) {
-      lease.last_heartbeat_at = nowIso();
-      botId = lease.bot_id;
-    }
-    const op = state.operations[String(operationId || '')];
-    if (op && op.session_id === String(sessionId || '')) {
-      botId = botId || op.bot_id;
-      endedOperation = { ...op };
-      delete state.operations[String(operationId)];
-      unconfirmedOperationSince.delete(String(operationId));
-    }
-  });
-  if (endedOperation) {
-    diag('OPERATION_END', {
-      operation_id: String(operationId || ''),
-      session_id: endedOperation.session_id,
-      transport_id: endedOperation.bot_id,
-      vault: endedOperation.chat_id,
-      kind: endedOperation.kind,
-      duration_ms: Math.round(operationDurationMs(endedOperation)),
-      last_liveness_age_ms: Math.round(operationLivenessAge(endedOperation, operationId)),
-      document_generation: endedOperation.document_generation || null,
-    });
-  }
-  if (botId) await maybeRotatePendingBot(botId);
-  return { ok: true };
-}
-
-async function renewOperation({ installationId, sessionId, generation, operationId }) {
-  const pool = loadPool();
-  let renewed = false;
-  let operation = null;
-  mutateState(pool, state => {
-    const lease = state.leases[String(sessionId || '')];
-    const current = state.operations[String(operationId || '')];
-    if (!lease || !current) return;
-    if (lease.installation_id !== String(installationId || '') || Number(lease.generation) !== Number(generation)) return;
-    if (current.session_id !== lease.session_id) return;
-    lease.last_heartbeat_at = nowIso();
-    current.last_liveness_at = nowIso();
-    current.last_liveness_monotonic_ms = monotonicNow();
-    current.liveness_owner_instance = PROCESS_INSTANCE_ID;
-    unconfirmedOperationSince.delete(String(operationId));
-    operation = { ...current };
-    renewed = true;
-  });
-  if (!renewed) return { ok: false, expired: true };
-  return { ok: true, operation_id: String(operationId || ''), liveness_timeout_ms: operationLivenessTimeout(operation) };
-}
-
 async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
   const pool = loadPool();
   const snapshot = stateSnapshot(pool);
@@ -1245,10 +808,8 @@ async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
     if (current) current.status = 'STOPPING';
   });
 
-  // deleteLease removes every operation owned by the lease. runtimeSessions is
-  // the remaining process-local credential/session material for this lease.
+  // deleteLease removes every operation owned by the lease.
   deleteLease(lease.session_id);
-  runtimeSessions.delete(lease.session_id);
 
   const remaining = leasesForBot(stateSnapshot(pool), lease.bot_id).length;
   let rotation = { rotated: false, pending: false, disabled: !TOKEN_ROTATION_ENABLED };
@@ -1500,16 +1061,12 @@ module.exports = {
   poolStatus,
   __testing: {
     TOKEN_ROTATION_ENABLED,
-    beginOperation,
-    renewOperation,
-    endOperation,
     stopSession,
     decommissionVaultMembership,
     downloadMessageBuffer,
     copyLegacyProjectPartFromClient,
     verifyProjectMediaFromClient,
     cleanupExpiredSessions,
-    sessionPublic,
     pinMasterIndexMessage,
     commitIndexCopyOnWriteWithMaster,
     stateSnapshot,

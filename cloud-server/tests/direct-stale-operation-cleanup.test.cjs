@@ -37,6 +37,7 @@ Module._load = function(request, parent, isMain) {
 (async () => {
   const direct = require('../direct-transport-control.js');
   const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
+  const { seedOperation } = require('./helpers/seed-operation.cjs');
   const runtimePool = [{ id: 'Bot01' }];
   let monotonicClock = 100;
   direct.__testing.setMonotonicNow(() => monotonicClock);
@@ -48,15 +49,15 @@ Module._load = function(request, parent, isMain) {
     installationId: 'stale-operation-installation',
     chatId: '-1007000000999',
   });
-  const operation = await direct.__testing.beginOperation({
-    installationId: lease.installation_id,
-    sessionId: lease.session_id,
-    generation: lease.generation,
-    credentialVersion: lease.credential_version,
-    kind: 'get_index',
-    documentContext: { tab_id: 'tab-1', document_id: 'document-1', generation: 1 },
-  });
-  assert.equal(operation.ok, true);
+  const operation = {
+    operation_id: seedOperation({
+      directTransport: direct, pool: runtimePool, lease, kind: 'get_index',
+      extra: { document_tab_id: 'tab-1', document_id: 'document-1', document_generation: 1 },
+    }),
+  };
+  // First maintenance pass registers the persisted operation (bounded grace) and keeps it.
+  await direct.__testing.cleanupExpiredSessions();
+  assert.ok(JSON.parse(fs.readFileSync(stateFile, 'utf8')).operations[operation.operation_id], 'fresh operation must survive its first maintenance pass');
 
   monotonicClock += 15_001;
   const beforeRead = fs.readFileSync(stateFile, 'utf8');
@@ -83,6 +84,17 @@ Module._load = function(request, parent, isMain) {
   assert.ok(persisted.leases[lease.session_id], 'later maintenance must preserve the valid lease');
   assert.equal(persisted.operations[operation.operation_id], undefined, 'stale operation must not reappear on disk');
   assert.equal(reapCount(), 1, 'later maintenance must not reap the same operation again');
+
+  // An operation whose lease no longer exists is removed by maintenance.
+  const { lease: orphanLease } = prepareAssignedLease({
+    directTransport: direct, status: direct.poolStatus(), transportBotId: 'Bot01',
+    installationId: 'orphan-operation-installation', chatId: '-1007000000998',
+  });
+  const orphanId = seedOperation({ directTransport: direct, pool: runtimePool, lease: orphanLease, kind: 'data' });
+  direct.__testing.mutateState(runtimePool, state => { delete state.leases[orphanLease.session_id]; });
+  assert.ok(JSON.parse(fs.readFileSync(stateFile, 'utf8')).operations[orphanId], 'orphan operation is persisted before maintenance');
+  await direct.__testing.cleanupExpiredSessions();
+  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).operations[orphanId], undefined, 'operation without a lease must be removed');
 
   console.log('PASS Direct stale operation cleanup: persisted once, diagnosed once, valid lease preserved');
 })().catch(error => {

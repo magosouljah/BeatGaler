@@ -72,19 +72,11 @@ function prepareAccount(direct, prepareAssignedLease, index, installationSuffix 
   }).lease;
 }
 
-function opArgs(lease, kind) {
-  return {
-    installationId: lease.installation_id,
-    sessionId: lease.session_id,
-    generation: lease.generation,
-    credentialVersion: lease.credential_version,
-    kind,
-  };
-}
-
 (async () => {
   const direct = require('../direct-transport-control.js');
   const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
+  const { seedOperation } = require('./helpers/seed-operation.cjs');
+  const runtimePool = bots.map(bot => ({ id: bot.id }));
 
   assert.equal(direct.enabled(), true);
   assert.deepEqual(direct.poolStatus().bots.map(bot => bot.id), ['Bot01', 'Bot02', 'Bot03']);
@@ -117,16 +109,17 @@ function opArgs(lease, kind) {
   const vaultB = leases[3];
   assert.equal(vaultA.bot_id, 'Bot01');
   assert.equal(vaultB.bot_id, 'Bot01');
-  const opA = await direct.__testing.beginOperation(opArgs(vaultA, 'replace_index'));
-  const opB = await direct.__testing.beginOperation(opArgs(vaultB, 'get_index'));
-  assert.equal(opA.ok, true, 'vault A operation should start');
-  assert.equal(opB.ok, true, 'vault B must not be blocked by vault A on the same bot');
+  // X1d: operation admission (beginOperation/index_busy/endOperation) was retired
+  // with the unregistered /transport/operation/* routes. Operations are seeded as
+  // persisted state; what stays live is the accounting by bot in poolStatus().
+  const opA = seedOperation({ directTransport: direct, pool: runtimePool, lease: vaultA, kind: 'replace_index' });
+  const opB = seedOperation({ directTransport: direct, pool: runtimePool, lease: vaultB, kind: 'get_index' });
   status = direct.poolStatus();
   assert.equal(status.operations, 2);
   assert.equal(status.bots.find(bot => bot.id === 'Bot01').active_operations, 2);
 
-  // A second device on the SAME vault must be serialized against the active
-  // INDEX operation, proving the lock boundary is vault-scoped rather than global.
+  // A second device on the SAME vault is a separate session of the same bot; stopping
+  // it must not touch the other sessions or their operations.
   const secondDevice = prepareAssignedLease({
     directTransport: direct,
     status: direct.poolStatus(),
@@ -134,36 +127,15 @@ function opArgs(lease, kind) {
     installationId: 'stage1-install-0-device-2',
     chatId: vaultA.chat_id,
   }).lease;
-  const blockedSameVault = await direct.__testing.beginOperation(opArgs(secondDevice, 'get_index'));
-  assert.equal(blockedSameVault.ok, false);
-  assert.equal(blockedSameVault.wait, true);
-  assert.equal(blockedSameVault.reason, 'index_busy');
-
-  await direct.__testing.endOperation({
-    installationId: vaultA.installation_id,
-    sessionId: vaultA.session_id,
-    generation: vaultA.generation,
-    operationId: opA.operation_id,
-  });
-  const admittedSameVault = await direct.__testing.beginOperation(opArgs(secondDevice, 'get_index'));
-  assert.equal(admittedSameVault.ok, true, 'same vault must proceed once its previous INDEX operation ends');
-
-  await direct.__testing.endOperation({
-    installationId: vaultB.installation_id,
-    sessionId: vaultB.session_id,
-    generation: vaultB.generation,
-    operationId: opB.operation_id,
-  });
-  await direct.__testing.endOperation({
-    installationId: secondDevice.installation_id,
-    sessionId: secondDevice.session_id,
-    generation: secondDevice.generation,
-    operationId: admittedSameVault.operation_id,
-  });
   await direct.__testing.stopSession({
     installationId: secondDevice.installation_id,
     sessionId: secondDevice.session_id,
     generation: secondDevice.generation,
+  });
+  assert.equal(direct.poolStatus().operations, 2, 'stopping one session leaves the other operations');
+  direct.__testing.mutateState(runtimePool, state => {
+    delete state.operations[opA];
+    delete state.operations[opB];
   });
 
   status = direct.poolStatus();
@@ -196,7 +168,7 @@ function opArgs(lease, kind) {
   assert.equal(status.operations, 0);
   assert.equal(telegramClientConstructions, 0, 'session concurrency/cleanup must not open MASTER');
 
-  console.log('PASS Stage 1 multi-account concurrency: 3/10/80 sessions, bot sharing, vault-scoped operations, cleanup isolation');
+  console.log('PASS Stage 1 multi-account concurrency: 3/10/80 sessions, bot sharing, operation accounting, cleanup isolation');
 })().catch(error => {
   console.error(error?.stack || error);
   process.exitCode = 1;
