@@ -348,3 +348,53 @@ describe("Galer Cloud Web transport bootstrap deadlines", () => {
     });
   });
 });
+
+describe("Galer Cloud Web transport invalidation publication (M10: comportamiento)", () => {
+  let invalidated = 0;
+  const onInvalidated = () => { invalidated += 1; };
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    invalidated = 0;
+    vi.useFakeTimers();
+    vi.stubGlobal("Worker", FakeWorker);
+    const items = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => { items.set(key, value); },
+      removeItem: (key: string) => { items.delete(key); },
+    });
+    window.addEventListener("beatgaler:web-session-invalidated", onInvalidated);
+  });
+
+  afterEach(() => {
+    window.removeEventListener("beatgaler:web-session-invalidated", onInvalidated);
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const session = { chat_id: "-1001234567890", transport_user_id: "4242", temp_auth: { expected_bot_id: "4242", api_id: 1 } } as any;
+
+  it("does not publish an invalidation for a worker that never initialized the data plane", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const pending = client.initialize(session, []);
+    const rejection = expect(pending).rejects.toThrow();
+    FakeWorker.instances[0].onerror?.({} as ErrorEvent);
+    await rejection;
+    await client.shutdown();
+    expect(invalidated).toBe(0);
+  });
+
+  it("publishes exactly one invalidation after an initialized data plane is lost", async () => {
+    const client = new WebTransportWorkerClient(1000);
+    const pending = client.initialize(session, []);
+    FakeWorker.instances[0].respond();
+    await pending;
+    expect(invalidated).toBe(0);
+
+    FakeWorker.instances[0].onerror?.({} as ErrorEvent);
+    expect(invalidated).toBe(1);
+    await client.shutdown();
+    expect(invalidated).toBe(1);
+  });
+});

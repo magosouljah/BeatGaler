@@ -6,29 +6,10 @@ function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
+// M10: el orden restore→start, el timeout de control y la invalidación tras inicializar el plano de datos
+// ahora se prueban por comportamiento en tests/component-dom/webTransportSession.test.ts y
+// webTransportWorkerClient.test.ts. Queda solo la parte de cloud-server (tanda de cloud-server de M10).
 describe("Direct session startup liveness", () => {
-  it("waits for the shared Web account restore before reserving Direct", () => {
-    const session = source("src/features/cloud/webTransportSession.ts");
-    const reserveStart = session.indexOf("export async function reserveWebTransportSession");
-    const restore = session.indexOf("await restoreBeatGalerSession();", reserveStart);
-    const directStart = session.indexOf('transportRequest<WebTransportSessionPublic>("/transport/session/start"', reserveStart);
-
-    expect(session).toContain("restoreBeatGalerSession");
-    expect(reserveStart).toBeGreaterThanOrEqual(0);
-    expect(restore).toBeGreaterThan(reserveStart);
-    expect(directStart).toBeGreaterThan(restore);
-  });
-
-  it("bounds browser control-plane requests so controller singleflight can settle", () => {
-    const session = source("src/features/cloud/webTransportSession.ts");
-
-    expect(session).toContain("WEB_TRANSPORT_CONTROL_REQUEST_TIMEOUT_MS = 70_000");
-    expect(session).toContain("const controller = new AbortController();");
-    expect(session).toContain("signal: controller.signal");
-    expect(session).toContain("Galer Cloud transport control request timed out.");
-    expect(session).toContain("clearTimeout(timeoutId);");
-  });
-
   it("bounds productive temporary-auth response transformation and formerly unbounded setup steps", () => {
     const boundary = source("cloud-server/productive-temp-auth-boundary.js");
 
@@ -38,15 +19,5 @@ describe("Direct session startup liveness", () => {
     expect(boundary).toContain("transformTransportBody(req, body)");
     expect(boundary).toContain("BOUNDARY_TIMEOUT_MS");
     expect(boundary).toContain("Temporary transport authorization is unavailable.");
-  });
-
-  it("does not publish a source-session invalidation until the worker data plane was initialized", () => {
-    const worker = source("src/features/cloud/webTransportWorkerClient.ts");
-
-    expect(worker).toContain("private dataPlaneInitialized = false;");
-    expect(worker).toContain("private publishTransportInvalidatedIfReady(): void");
-    expect(worker).toContain("this.dataPlaneInitialized = true;");
-    expect(worker).toContain("this.publishTransportInvalidatedIfReady();");
-    expect(worker).toContain("WEB_TRANSPORT_SHUTDOWN_REQUEST_TIMEOUT_MS = 5_000");
   });
 });
