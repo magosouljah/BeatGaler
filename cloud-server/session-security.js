@@ -602,22 +602,23 @@ function createSessionSecurityRuntime({
   };
 }
 
+function wrapSessionSecurityUse(routePathOrHandlers, handlers) {
+  const { app, next } = this;
+  const runtime = app.__beatgalerSessionSecurityRuntime;
+  if (runtime && !app.__beatgalerSessionSecurityMiddlewareAttached) {
+    app.__beatgalerSessionSecurityMiddlewareAttached = true;
+    next(runtime.requestMiddleware);
+  }
+  return next(routePathOrHandlers, ...handlers);
+}
+
 function installSessionSecurity(express, options = {}) {
   const application = express?.application;
   if (!application || application.__beatgalerSessionSecurityInstalled) return application?.__beatgalerSessionSecurityRuntime || null;
   application.__beatgalerSessionSecurityInstalled = true;
   const runtime = createSessionSecurityRuntime(options);
   application.__beatgalerSessionSecurityRuntime = runtime;
-  const originalUse = application.use;
   const originalPost = application.post;
-
-  application.use = function patchedSessionSecurityUse(...handlers) {
-    if (!this.__beatgalerSessionSecurityMiddlewareAttached) {
-      this.__beatgalerSessionSecurityMiddlewareAttached = true;
-      originalUse.call(this, runtime.requestMiddleware);
-    }
-    return originalUse.call(this, ...handlers);
-  };
 
   function ensureManagementRoutes(app) {
     if (app.__beatgalerSessionSecurityRoutesInstalled) return;
@@ -640,6 +641,7 @@ function installSessionSecurity(express, options = {}) {
 
 module.exports = {
   installSessionSecurity,
+  wrapSessionSecurityUse,
   createSessionSecurityRuntime,
   SESSION_COOKIE,
   CSRF_COOKIE,
