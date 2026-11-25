@@ -1,5 +1,6 @@
 'use strict';
 
+const { accountsDataPath } = require('./auth-helpers');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -10,11 +11,11 @@ const { installMultiprocessAuthSnapshotCompatibility } = require('./postgres-aut
 const { assertJsonRollbackSnapshot } = require('./postgres-rollback-preparation');
 const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('./control-plane-json-compat');
 const { assertNativeStartupCompatible } = require('./catalog/authority');
-const { statePath } = require('./state-dir');
+const { STATE_DIR, statePath } = require('./state-dir');
 
 async function prepareControlPlaneCutover({ pool, env = process.env, secretProviderOptions } = {}) {
   const config = controlPlaneAuthorityConfig(env);
-  const authPath = statePath('accounts-data.json');
+  const authPath = accountsDataPath(STATE_DIR);
   const persistentPath = statePath('cloud-data.json');
 
   if (config.authority === 'json') {

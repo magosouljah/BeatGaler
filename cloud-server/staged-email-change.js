@@ -1,5 +1,6 @@
 'use strict';
 
+const { normalizeEmail, validEmailAfterNormalization: validEmail, sha256String: sha256 } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const { markVerifiedEmail } = require('./email-verification-authority');
 
@@ -10,19 +11,6 @@ const MAX_DELIVERIES = 5;
 
 function coded(message, code, extras = {}) {
   return Object.assign(new Error(message), { code, ...extras });
-}
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-function validEmail(value) {
-  const email = normalizeEmail(value);
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254;
-}
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
 }
 
 function sameHash(a, b) {

@@ -1,5 +1,6 @@
 'use strict';
 
+const { ACCOUNTS_FILE_NAME } = require('./auth-helpers');
 const { exportLegacyAccounts } = require('./legacy-exporter');
 const { buildLegacyRows } = require('./legacy-import-executor');
 const { snapshotManifest, planLegacyImport } = require('./legacy-import-plan');
@@ -23,7 +24,7 @@ async function exportCurrentPostgresForRollback(pool, { cryptoConfig }) {
   const authRaw = JSON.stringify(auth, null, 2);
   const persistentRaw = JSON.stringify(persistent, null, 2);
   const snapshot = snapshotManifest({
-    'accounts-data.json': authRaw,
+    [ACCOUNTS_FILE_NAME]: authRaw,
     'cloud-data.json': persistentRaw,
   });
 
@@ -65,7 +66,7 @@ async function assertJsonRollbackSnapshot(pool, expectedRollbackSha256, { authRa
     throw new Error('JSON rollback SHA256 does not match the committed PostgreSQL rollback export.');
   }
   const actual = snapshotManifest({
-    'accounts-data.json': String(authRaw),
+    [ACCOUNTS_FILE_NAME]: String(authRaw),
     'cloud-data.json': String(persistentRaw),
   }).manifest_sha256;
   if (actual !== expectedRollbackSha256) {

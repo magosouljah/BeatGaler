@@ -1,5 +1,6 @@
 'use strict';
 
+const { ACCOUNTS_FILE_NAME } = require('./auth-helpers');
 const { parseLegacyJson, snapshotManifest, planLegacyImport } = require('./legacy-import-plan');
 const { replaceLegacyEntitlementsForCutover } = require('./access-grant-store');
 const { assertNoNativeActivation } = require('./catalog/authority');
@@ -22,11 +23,11 @@ const COUNT_KEYS = Object.freeze([
 ]);
 
 function validateSource({ authRaw, persistentRaw }) {
-  const auth = parseLegacyJson(authRaw, 'accounts-data.json');
+  const auth = parseLegacyJson(authRaw, ACCOUNTS_FILE_NAME);
   const persistent = parseLegacyJson(persistentRaw, 'cloud-data.json');
   const plan = planLegacyImport(auth, persistent);
   const snapshot = snapshotManifest({
-    'accounts-data.json': String(authRaw),
+    [ACCOUNTS_FILE_NAME]: String(authRaw),
     'cloud-data.json': String(persistentRaw),
   });
   return { auth, persistent, plan, snapshot };

@@ -1,12 +1,9 @@
 'use strict';
 
+const { sha256String: sha256 } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
-}
 
 function writeState(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -1,14 +1,11 @@
 'use strict';
 
+const { normalizeEmail } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const { deterministicId } = require('./legacy-import-executor');
 
 function coded(message, code, extras = {}) {
   return Object.assign(new Error(message), { code, ...extras });
-}
-
-function normalizeEmail(value) {
-  return String(value || '').trim().toLowerCase();
 }
 
 function normalizeXHandle(value) {

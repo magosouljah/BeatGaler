@@ -1,5 +1,6 @@
 "use strict";
 
+const { bearerTokenRequiredRequest: bearerToken, accountsDataPath } = require("./auth-helpers");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -30,12 +31,6 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 
-function bearerToken(req) {
-  const raw = String(req.headers?.authorization || "");
-  const match = raw.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : "";
-}
-
 function sessionKey(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
@@ -52,7 +47,7 @@ function createHttpContainment(options = {}) {
   const dataDir = options.dataDir || require("./state-dir").STATE_DIR;
   const env = options.env || process.env;
   const now = options.now || (() => Date.now());
-  const accountsFile = path.join(dataDir, "accounts-data.json");
+  const accountsFile = accountsDataPath(dataDir);
   const cloudFile = path.join(dataDir, "cloud-data.json");
   const bindingsFile = path.join(dataDir, "authz-session-bindings.json");
   const uploadWindowMs = Math.max(1_000, Number(env.BEATGALER_UPLOAD_RATE_WINDOW_MS || DEFAULT_UPLOAD_WINDOW_MS));

@@ -1,5 +1,6 @@
 'use strict';
 
+const { sha256String: sha256, bearerTokenOptionalRequest: bearerToken, accountsDataPath } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -12,7 +13,6 @@ const ROTATED_TOKEN_PREFIX = 'sessr_';
 const STATE_VERSION = 1;
 const SESSION_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const STATE_FILE_NAME = 'session-security-state.json';
-const ACCOUNTS_FILE_NAME = 'accounts-data.json';
 const PUBLIC_LOGIN_ROUTES = new Set(['/auth/login', '/auth/register', '/auth/signup/verify', '/auth/signup/resend', '/auth/signup/status']);
 const CSRF_EXEMPT_ROUTES = new Set(['/auth/login', '/auth/register', '/auth/signup/verify', '/auth/signup/resend', '/auth/signup/status', '/auth/session']);
 const RESPONSE_AUTH_ROUTES = new Set([
@@ -38,20 +38,10 @@ const SENSITIVE_ROTATION_ROUTES = new Set(['/auth/password/change']);
 const CLEAR_SESSION_ROUTES = new Set(['/auth/logout', '/auth/account/delete', '/auth/email/change/confirm']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-function sha256(value) {
-  return crypto.createHash('sha256').update(String(value || '')).digest('hex');
-}
-
 function timingSafeTextEqual(left, right) {
   const a = Buffer.from(String(left || ''), 'utf8');
   const b = Buffer.from(String(right || ''), 'utf8');
   return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b);
-}
-
-function bearerToken(req) {
-  const raw = String(req?.headers?.authorization || '');
-  const match = raw.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
 }
 
 function parseCookies(req) {
@@ -160,7 +150,7 @@ function createSessionSecurityRuntime({
   getCapabilityStore = () => null,
 } = {}) {
   const stateFile = path.join(dataDir, STATE_FILE_NAME);
-  const accountsFile = path.join(dataDir, ACCOUNTS_FILE_NAME);
+  const accountsFile = accountsDataPath(dataDir);
   const persisted = normalizePersistentState(readJsonFile(stateFile, {}));
   const revokedSessionHashes = new Set(persisted.revoked_session_hashes);
   const managedSessionHashes = new Set(persisted.managed_session_hashes);
