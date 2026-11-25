@@ -13,24 +13,31 @@ const persistenceError = { error: 'Control-plane persistence unavailable. Reques
 
 function fakePersistence(initial) {
   let nextFlush;
+  let poisoned;
   let staged = structuredClone(initial);
   let durable = structuredClone(initial);
   return {
     saveAuthSnapshot(auth) { staged.auth = auth; },
     savePersistentSnapshot(persistent) { staged.persistent = persistent; },
     async flush() {
+      if (poisoned) throw poisoned;
       const gate = nextFlush;
       nextFlush = undefined;
       if (gate) {
         gate.enter();
-        await gate.released;
+        try {
+          await gate.released;
+        } catch (error) {
+          if (gate.poisonOnFailure) poisoned = error;
+          throw error;
+        }
       }
       durable = structuredClone(staged);
     },
-    holdNextFlush() {
+    holdNextFlush({ poisonOnFailure = false } = {}) {
       const entered = Promise.withResolvers();
       const released = Promise.withResolvers();
-      nextFlush = { enter: entered.resolve, released: released.promise };
+      nextFlush = { enter: entered.resolve, released: released.promise, poisonOnFailure };
       return { entered: entered.promise, commit: released.resolve, fail: released.reject };
     },
     staged: () => staged,
@@ -47,7 +54,7 @@ function sessionFromCookies(response) {
   };
 }
 
-function installFakeCutover(stateDir, { sends, errors, onInstall }) {
+function installFakeCutover(stateDir, { sends, errors, sessionResponses, onInstall }) {
   const cutover = require('../control-plane-cutover-runtime');
   const prepareCutover = cutover.prepareControlPlaneCutover;
   const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('../control-plane-json-compat');
@@ -64,6 +71,12 @@ function installFakeCutover(stateDir, { sends, errors, onInstall }) {
       initialAuth, initialPersistent,
     });
     const originalSend = express.response.send;
+    const originalJson = express.response.json;
+    express.response.json = function observedJson(body) {
+      // Un runtime envenenado convierte también el rechazo de sesión en un 503.
+      if (this.req.path === '/auth/sessions') sessionResponses.push([this.statusCode, body.code]);
+      return originalJson.call(this, body);
+    };
     express.response.send = function observedSend(body) {
       sends.push(this.req.path);
       return originalSend.call(this, body);
@@ -74,6 +87,7 @@ function installFakeCutover(stateDir, { sends, errors, onInstall }) {
     restorePersistence = () => {
       uninstallBarrier();
       express.response.send = originalSend;
+      express.response.json = originalJson;
       uninstallJson();
       delete fs[Symbol.for('beatgaler.accountLifecyclePersistenceFilter')];
     };
@@ -89,13 +103,14 @@ function installFakeCutover(stateDir, { sends, errors, onInstall }) {
 test('Barrera de persistencia en mutaciones HTTP de cuenta', async t => {
   const sends = [];
   const errors = [];
+  const sessionResponses = [];
   let runtime;
   let restore;
   try {
     await withCloud(async (_app, send) => {
       const post = (route, headers = browser, body = {}) => send('POST', '/auth/' + route, { headers, body });
-      async function whileFlushing(route, headers, body, inspect, error) {
-        const gate = runtime.holdNextFlush();
+      async function whileFlushing(route, headers, body, inspect, error, flushOptions) {
+        const gate = runtime.holdNextFlush(flushOptions);
         const count = sends.length;
         const response = post(route, headers, body);
         try {
@@ -118,6 +133,9 @@ test('Barrera de persistencia en mutaciones HTTP de cuenta', async t => {
           assert.equal(runtime.staged().persistent.linkedAccounts[account.beatgalerUserId].beatgalerAccountId, account.id);
         });
         assert.equal(login.status, 200);
+        assert.deepEqual(login.headers['set-cookie'].map(value => value.split('=', 1)[0]),
+          ['__Host-beatgaler_session', '__Host-beatgaler_csrf']);
+        assert.match(login.headers['set-cookie'][1], /^__Host-beatgaler_csrf=[^;]+;/);
         const { hash } = sessionFromCookies(login);
         assert.equal(runtime.durable().auth.sessions[hash].userId, account.id);
         assert.equal(runtime.durable().persistent.linkedAccounts[account.beatgalerUserId].beatgalerAccountId, account.id);
@@ -132,10 +150,10 @@ test('Barrera de persistencia en mutaciones HTTP de cuenta', async t => {
         assert.equal(login.status, 503);
         assert.match(login.headers['content-type'], /^application\/json\b/);
         assert.deepEqual(JSON.parse(login.data), persistenceError);
-        // La decoración de sesión ya había preparado las cookies antes del 503.
-        const { hash } = sessionFromCookies(login);
-        assert.equal(runtime.staged().auth.sessions[hash].userId, account.id);
-        assert.equal(runtime.durable().auth.sessions[hash], undefined);
+        assert.equal(login.headers['set-cookie'], undefined);
+        const newSessions = Object.entries(runtime.staged().auth.sessions)
+          .filter(([hash]) => !Object.hasOwn(durableBefore.auth.sessions, hash));
+        assert.deepEqual(newSessions.map(([, session]) => session.userId), [account.id]);
         assert.deepEqual(runtime.durable(), durableBefore);
         assert.deepEqual(errors, ['fake login write failed']);
       });
@@ -166,18 +184,54 @@ test('Barrera de persistencia en mutaciones HTTP de cuenta', async t => {
         }, 'fake logout write failed');
         assert.equal(logout.status, 503);
         assert.deepEqual(JSON.parse(logout.data), persistenceError);
-        assert.deepEqual(logout.headers['set-cookie'].map(value => value.split(';', 1)[0]),
-          ['__Host-beatgaler_session=', '__Host-beatgaler_csrf=']);
+        assert.equal(logout.headers['set-cookie'], undefined);
         assert.deepEqual(runtime.durable(), durableBefore);
         assert.equal(errors.at(-1), 'fake logout write failed');
         const replay = await post('sessions', headers);
         assert.equal(replay.status, 401);
         assert.equal(JSON.parse(replay.data).code, 'SESSION_REVOKED');
       });
+
+      await t.test('Logout confirmado limpia las cookies de sesión y CSRF', async () => {
+        const { hash, headers } = sessionFromCookies(await post('login', browser, loginBody));
+        assert.equal(runtime.durable().auth.sessions[hash].userId, account.id);
+        const logout = await post('logout', headers, { beatgalerUserId: account.beatgalerUserId });
+        assert.equal(logout.status, 200);
+        assert.deepEqual(logout.headers['set-cookie'].map(value => value.split('; ').slice(0, 3)), [
+          ['__Host-beatgaler_session=', 'Path=/', 'Max-Age=0'],
+          ['__Host-beatgaler_csrf=', 'Path=/', 'Max-Age=0'],
+        ]);
+        assert.equal(runtime.durable().auth.sessions[hash], undefined);
+      });
+
+      await t.test('Logout con runtime envenenado conserva las cookies y rechaza la sesión en el proceso', async () => {
+        const { hash, headers } = sessionFromCookies(await post('login', browser, loginBody));
+        const durableBefore = runtime.durable();
+        assert.equal(durableBefore.auth.sessions[hash].userId, account.id);
+        const failure = 'fake poisoned runtime';
+        const setup = await whileFlushing('mfa/setup', headers, {}, () => {
+          assert.match(runtime.staged().auth.users[0].pendingMfaSecret, /^[A-Z2-7]+$/);
+        }, failure, { poisonOnFailure: true });
+        assert.equal(setup.status, 503);
+
+        const logout = await post('logout', headers, { beatgalerUserId: account.beatgalerUserId });
+        assert.equal(logout.status, 503);
+        assert.deepEqual(JSON.parse(logout.data), persistenceError);
+        assert.equal(logout.headers['set-cookie'], undefined);
+        assert.equal(errors.at(-1), failure);
+        assert.equal(runtime.staged().auth.sessions[hash], undefined);
+
+        const replay = await post('sessions', headers);
+        assert.deepEqual(sessionResponses.at(-1), [401, 'SESSION_REVOKED']);
+        assert.equal(replay.status, 503);
+        assert.equal(replay.headers['set-cookie'], undefined);
+        assert.equal(errors.at(-1), failure);
+        assert.deepEqual(runtime.durable(), durableBefore);
+      });
     }, {
       requestTimeoutMs: 10_000,
       prepare(dir) {
-        restore = installFakeCutover(dir, { sends, errors, onInstall: value => { runtime = value; } });
+        restore = installFakeCutover(dir, { sends, errors, sessionResponses, onInstall: value => { runtime = value; } });
       },
     });
   } finally {

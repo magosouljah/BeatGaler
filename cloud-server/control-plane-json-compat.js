@@ -108,6 +108,7 @@ function installExpressDurabilityBarrier(expressModule, runtime, { logger = cons
         try { res.destroy(error); } catch (_) {}
         return;
       }
+      res.removeHeader('Set-Cookie');
       res.statusCode = 503;
       res.locals = res.locals || {};
       res.locals.beatGalerDurabilityBypass = true;
