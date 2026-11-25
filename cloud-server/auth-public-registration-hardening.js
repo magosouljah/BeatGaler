@@ -430,6 +430,10 @@ function installAuthPublicRegistrationHardening(express, {
         }
       } catch (error) {
         console.error('[auth] stable-id snapshot preservation failed:', error?.message || String(error));
+        // Fail closed: nunca persistir el contenido original (tokens OAuth de X, sin preservación de ids).
+        const failure = new Error('Auth registration persistence filter failed; write aborted.');
+        failure.code = 'AUTH_REGISTRATION_FILTER_FAILED';
+        throw failure;
       }
       return originalWriteFileSync.call(fs, file, next, ...rest);
     };
