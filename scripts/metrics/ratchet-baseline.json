@@ -1,7 +1,7 @@
 {
   "metrics": {
-    "P1": 22,
-    "P2": 19,
+    "P1": 10,
+    "P2": 17,
     "P3": 3,
     "S1": 10,
     "S2": 22,
@@ -11,20 +11,20 @@
     "J2": 1,
     "J3": 5,
     "B1": 5,
-    "B2": 122,
+    "B2": 119,
     "B3": 1,
     "X1": 75,
     "X2": 1404,
     "X3": 15,
     "X4": 100,
-    "H1": 248,
-    "H2": 67,
+    "H1": 246,
+    "H2": 65,
     "H3": 0,
     "H4": 69,
     "E1": 45,
     "E2": 36,
     "E3": 5,
-    "F+M": 74
+    "F+M": 71
   },
   "sourceTextTests": [
     "cloud-server/tests/account-lifecycle-request-guard.test.cjs",
@@ -34,8 +34,6 @@
     "cloud-server/tests/catalog/catalog-backup-infra.test.cjs",
     "cloud-server/tests/catalog/catalog-contract.test.cjs",
     "cloud-server/tests/catalog/catalog-native-cli.test.cjs",
-    "cloud-server/tests/direct-persistent-membership-runtime.test.cjs",
-    "cloud-server/tests/direct-persistent-session-runtime.test.cjs",
     "cloud-server/tests/password-kdf.test.cjs",
     "cloud-server/tests/plan-dev-switch-removed.test.cjs",
     "cloud-server/tests/signup-activation-safety.test.cjs",
