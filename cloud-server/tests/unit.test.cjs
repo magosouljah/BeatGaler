@@ -143,7 +143,7 @@ passed += test('pool state drops obsolete FIFO while preserving configured bots'
 }) ? 1 : 0;
 
 const { mountAccountRouteGuards } = require('../account-route-guards');
-const { installProductiveTempAuthBoundary, stripPermanentSecrets } = require('../productive-temp-auth-boundary.js');
+const { installProductiveTempAuthBoundary, stripPermanentSecrets, transformSession } = require('../productive-temp-auth-boundary.js');
 
 passed += test('productive transport boundary strips permanent credentials before client response', () => {
   const safe = stripPermanentSecrets({
@@ -171,11 +171,44 @@ passed += test('productive transport boundary strips permanent credentials befor
   assert.equal(safe.credential_version, 3);
 }) ? 1 : 0;
 
-passed += test('temporary-auth boundary declares its mode and retry marker', () => {
-  const boundarySource = fs.readFileSync(path.join(__dirname, '..', 'productive-temp-auth-boundary.js'), 'utf8');
-  assert(boundarySource.includes('mode: "galer-direct-temp-mtproto"'));
-  assert(boundarySource.includes('temp_auth_required'));
-}) ? 1 : 0;
+nodeTest('temporary-auth boundary declares its mode and never returns permanent secrets', async () => {
+  const permanent = {
+    ok: true,
+    session_id: 'session-1',
+    bot_token: 'fixture-bot-token',
+    telegram_api_id: 123,
+    telegram_api_hash: 'fixture-api-hash',
+    credential_envelope: { ciphertext: 'fixture-envelope' },
+    permanent_auth_key: 'fixture-permanent-key',
+  };
+  const state = { dcId: 2, apiId: 123, authorizedBotId: 'bot-1' };
+  const seen = [];
+  const deps = {
+    authorizePermanent: async session => { seen.push(session); return state; },
+    buildBindingEnvelope: async () => ({ encrypted_message: 'fixture-binding' }),
+  };
+  const withoutKey = await transformSession(permanent, null, deps);
+  const withKey = await transformSession(permanent, { expiresAt: 99 }, deps);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0], permanent);
+  assert.equal(withoutKey.mode, 'galer-direct-temp-mtproto');
+  assert.equal(withoutKey.temp_auth_required, true);
+  assert.equal(withKey.mode, 'galer-direct-temp-mtproto');
+  assert.equal(withKey.temp_auth_required, false);
+  assert.deepEqual(withKey.temp_auth.binding, { encrypted_message: 'fixture-binding' });
+  for (const out of [withoutKey, withKey]) {
+    const wire = JSON.stringify(out);
+    for (const secret of ['fixture-bot-token', 'fixture-api-hash', 'fixture-envelope', 'fixture-permanent-key']) {
+      assert(!wire.includes(secret), secret);
+    }
+    assert.equal(out.bot_token, undefined);
+    assert.equal(out.telegram_api_hash, undefined);
+    assert.equal(out.session_id, 'session-1');
+  }
+  const failed = await transformSession({ ...permanent, ok: false }, null, deps);
+  assert.equal(failed.mode, undefined);
+  assert.equal(failed.bot_token, undefined);
+});
 
 nodeTest('registered transport routes sanitize responses before sending them', async () => {
   const routes = new Map();
@@ -212,4 +245,4 @@ nodeTest('registered transport routes sanitize responses before sending them', a
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log(`PASS cloud/direct synchronous checks: ${passed}/13`);
+console.log(`PASS cloud/direct synchronous checks: ${passed}/12`);
