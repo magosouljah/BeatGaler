@@ -12,7 +12,6 @@ const {
   bearerTokenOptionalRequest,
   bearerTokenRequiredRequest,
   sha256String,
-  sha256StringForDirect,
   sha256Bytes,
   sha256WithEncoding,
 } = require('../auth-helpers');
@@ -82,7 +81,7 @@ const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b
 const unicodeHash = 'f7a24842833517713fb17bc0ee13c6914086fa39a68768579ad20b911487467f';
 const binaryHash = 'ea5dbf9596d187e9500f23e9a680109475341cf4e81f7e043f7d97152c10772f';
 
-for (const hash of [sha256String, sha256StringForDirect]) {
+for (const hash of [sha256String]) {
   test(hash.name, () => {
     assert.equal(hash(' Éa '), unicodeHash);
     assert.equal(hash(''), emptyHash);

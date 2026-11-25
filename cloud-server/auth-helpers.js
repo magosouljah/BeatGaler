@@ -38,10 +38,6 @@ function sha256String(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
 }
 
-// M7.8: esta copia de Direct difiere de sha256String solo en las comillas.
-function sha256StringForDirect(value) {
-  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
-}
 
 function sha256Bytes(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -60,7 +56,6 @@ module.exports = {
   bearerTokenOptionalRequest,
   bearerTokenRequiredRequest,
   sha256String,
-  sha256StringForDirect,
   sha256Bytes,
   sha256WithEncoding,
 };

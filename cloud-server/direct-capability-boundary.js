@@ -1,6 +1,6 @@
 "use strict";
 
-const { sha256StringForDirect: sha256, bearerTokenRequiredRequest: bearerToken } = require("./auth-helpers");
+const { sha256String: sha256, bearerTokenRequiredRequest: bearerToken } = require("./auth-helpers");
 
 const DEFAULT_CAPABILITY_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_TENANT_ACTIVE_CAP = 4;
