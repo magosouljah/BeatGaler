@@ -7,7 +7,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CatalogApiError, createCatalogApi, filtersKey, type CatalogApi, type CatalogContext } from "./catalogApi";
 import { browserFirstBlockCache, identityOf, type FirstBlockCache } from "./catalogFirstBlockCache";
 import { parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
-import { playbackSetKey, resolveReadyQuerySet } from "./catalogPlaybackSets";
 import { chooseLibraryComposition, isCatalogClientEnabled, type LibraryComposition } from "./catalogComposition";
 import { isMp3Master } from "./catalogFileKinds";
 import { createCatalogCommandsApi } from "./catalogCommandsApi";
@@ -22,7 +21,8 @@ import { createLazyDirectPort, type DirectPort } from "./catalogDirectTypes";
 import { createPrefixCache, type PrefixCache } from "./catalogPrefixCache";
 import { createArtworkCache, type ArtworkCache } from "./catalogArtworkCache";
 import { createCatalogLocalCaches, type CatalogLocalCaches } from "./catalogLocalCaches";
-import { MAIN_PACK_DEFAULTS, createMainPackCoordinator, type MainPackCoordinator } from "./catalogMainPack";
+import type { MainPackCoordinator } from "./catalogMainPack";
+import { createMainPackService, createPlaybackSetCache, startDirectPreconnect } from "./catalogServiceLifecycle";
 import type { LibraryCompositionState } from "./LibraryCompositionGate";
 
 export interface CatalogServices {
@@ -76,19 +76,8 @@ export function createCatalogServices({ api, accountId, context, fetchImpl, base
         return lab ? (await import("./catalogLabDirectPort")).createLabDirectPort(lab) : (await import("./catalogDirectPort")).createWebDirectPort();
       } }) : null;
   const transfer = createCatalogTransfer({ ...common, direct: directPort });
-  // E73 (D): preconexión Direct B al entrar a la Gallery con sesión válida (estos servicios solo existen tras /context autenticado). Segundo plano,
-  // tras el primer pintado; una única apertura compartida (el puerto coalesce a todos los llamadores); con la pestaña oculta espera a que sea visible
-  // para no gastar un login del bot en pestañas restauradas en segundo plano. teardown (logout/cambio de cuenta) la cancela y cierra la sesión.
-  let preconnectTimer: ReturnType<typeof setTimeout> | null = null; let preconnectVisibility: (() => void) | null = null;
   const preconnectDelay = directPreconnectDelayMs === undefined ? (direct === undefined ? 250 : null) : directPreconnectDelayMs;
-  if (directPort && preconnectDelay !== null) {
-    const fire = () => { if (typeof navigator !== "undefined" && navigator.onLine === false) return; void directPort.ready().catch(() => {}); };
-    const arm = () => { preconnectTimer = setTimeout(fire, Math.max(0, preconnectDelay)); };
-    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-      preconnectVisibility = () => { if (document.visibilityState !== "visible") return; document.removeEventListener("visibilitychange", preconnectVisibility!); preconnectVisibility = null; arm(); };
-      document.addEventListener("visibilitychange", preconnectVisibility);
-    } else arm();
-  }
+  const disposePreconnect = startDirectPreconnect(directPort, preconnectDelay);
   // Cada primer bloque confirmado por PostgreSQL renueva la copia local de arranque de su identidad exacta (cuenta/vault/era/época/generación).
   const identity = firstBlockCache?.available && context.user_id && context.vault_id && context.generation_id ? identityOf(accountId, context as CatalogContext) : null;
   const store = createCatalogQueryStore({ api, accountId, onFirstPage: identity && firstBlockCache ? (page, q) => { if (page.authorityEra === identity.era && page.epoch === identity.epoch && page.generationId === identity.generationId) void firstBlockCache.write(identity, q.queryKey, page); } : undefined });
@@ -99,39 +88,44 @@ export function createCatalogServices({ api, accountId, context, fetchImpl, base
   const artworkCache: ArtworkCache | null = artworkCacheIn !== undefined ? artworkCacheIn : typeof indexedDB !== "undefined" ? createArtworkCache() : null;
   const media = createCatalogMediaClient({ ...common, accountId: () => accountId, direct: directPort, prefixCache, artworkCache });
   const onMasterPrepared = prefixCache ? (file: Blob, spec: { sha256: string | null; mime?: string | null; filename?: string | null }) => {
-    if (spec.sha256 && (/^audio\/(mpeg|mp3)$/i.test(spec.mime ?? "") || /\.mp3$/i.test(spec.filename ?? ""))) void prefixCache.putFromBlob({ account: accountId, fileSha256: spec.sha256, blob: file }).catch(() => {});
+    if (spec.sha256 && isMp3Master(spec)) void prefixCache.putFromBlob({ account: accountId, fileSha256: spec.sha256, blob: file }).catch(() => {});
   } : undefined;
   // E75 — MAIN de prefijos: solo con plano directo, caché local y la capacidad anunciada por el servidor. El coordinador decide (con el recuento
   // de PostgreSQL) cuándo reconstruir: nunca durante un lote de subidas y una sola vez al terminar. La versión de MAIN conocida vive en este navegador.
-  const mainKey = `beatgaler:catalog-main:v1:${accountId}`;
-  const mainPack: MainPackCoordinator | null = prefixCache && directPort && context.capabilities?.prefixPacks === true
-    ? createMainPackCoordinator({ account: accountId, api: media.mainPack, cache: prefixCache, direct: directPort,
-        knownVersion: () => { try { return localStorage.getItem(mainKey); } catch { return null; } },
-        rememberVersion: (version) => { try { if (version) localStorage.setItem(mainKey, version); else localStorage.removeItem(mainKey); } catch { /* sin almacenamiento: se vuelve a comprobar */ } } })
-    : null;
+  const mainPackLifecycle = createMainPackService({ accountId, context, media, prefixCache, directPort });
+  const mainPack = mainPackLifecycle.service;
   const mutations = createCatalogMutations({ commands, transfer, accountId: () => accountId, prepareFiles: prepareCatalogFiles, onMasterPrepared,
     onTransferActivity: mainPack ? (e) => { if (e.phase === "start") mainPack.transferStarted(); else mainPack.transferFinished(e.committedMasterMp3); } : undefined });
   // Restauración desde el MAIN en segundo plano, diferida para no competir con el primer bloque ni con la Playbar.
-  const syncDelay = prefixSyncDelayMs === undefined ? MAIN_PACK_DEFAULTS.openDelayMs : prefixSyncDelayMs;
-  const syncTimer = mainPack && syncDelay !== null ? setTimeout(() => { void mainPack.open(); }, syncDelay) : null;
+  mainPackLifecycle.scheduleOpen(prefixSyncDelayMs);
   // Comandos musicales del servidor (T14): los sirve `commands` con su mismo transporte (base del Cloud, timeout, CatalogNetworkError,
   // 401 → UNAUTHENTICATED). Antes había aquí un `call` propio sin timeout ni error de red tipado (piloto F1).
   const playbackApi: PlaybackApi = commands;
-  const sets = new Map<string, Promise<{ setId: string; memberCount: number }>>();
+  const playbackSets = createPlaybackSetCache(commands, accountId);
   const playback = createCatalogPlaybackSession({
     api: playbackApi,
-    // Un conjunto fallido NO se queda en caché (antes un rechazo se reutilizaba para siempre) y el servidor puede invalidarlo (CURSOR_STALE) → `invalidateSet`.
-    resolveSet: (q) => { const k = playbackSetKey(q); if (!sets.has(k)) sets.set(k, resolveReadyQuerySet({ commands, accountId, query: q }).catch((e) => { sets.delete(k); throw e; })); return sets.get(k)!; },
-    invalidateSet: (q) => { sets.delete(playbackSetKey(q)); },
+    ...playbackSets.service,
     resolveFile: async (beatId) => { const d = await commands.getBeat(beatId); return d.playback ? { fileId: d.playback.fileId, version: d.version } : null; },
     // E71: streaming MSE (prefijo local + resto por rangos) cuando el navegador lo admite; si no, descarga completa como antes.
     acquireSource: (fileId) => media.acquireStream(fileId, "player"),
     accountId: () => accountId,
   });
+  const disposeBeforePlayback = [mainPackLifecycle.dispose, disposePreconnect];
+  const disposeAfterInteraction = [
+    () => media.teardown(),
+    () => store.teardown?.(),
+    playbackSets.dispose,
+  ];
   return Object.freeze({
     api, store, interaction, playback, media, mutations, firstBlockCache: firstBlockCache ?? null, mainPack,
     localCaches: createCatalogLocalCaches({ accountId, firstBlockCache: firstBlockCache ?? null, prefixCache, artworkCache }),
-    async teardown() { mainPack?.teardown(); if (syncTimer) clearTimeout(syncTimer); if (preconnectTimer) clearTimeout(preconnectTimer); if (preconnectVisibility && typeof document !== "undefined") document.removeEventListener("visibilitychange", preconnectVisibility); await playback.teardown(); await interaction.teardown(); media.teardown(); store.teardown?.(); sets.clear(); if (directPort) await directPort.close().catch(() => {}); },
+    async teardown() {
+      for (const dispose of disposeBeforePlayback) dispose();
+      await playback.teardown();
+      await interaction.teardown();
+      for (const dispose of disposeAfterInteraction) dispose();
+      if (directPort) await directPort.close().catch(() => {});
+    },
   });
 }
 
