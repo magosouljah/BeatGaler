@@ -39,7 +39,7 @@ Module._load = function(request, parent, isMain) {
   const { prepareAssignedLease } = require('./helpers/prepare-assigned-lease.cjs');
   const runtimePool = [{ id: 'Bot01' }];
   let monotonicClock = 100;
-  direct.__test.setMonotonicNow(() => monotonicClock);
+  direct.__testing.setMonotonicNow(() => monotonicClock);
 
   const { lease } = prepareAssignedLease({
     directTransport: direct,
@@ -48,7 +48,7 @@ Module._load = function(request, parent, isMain) {
     installationId: 'stale-operation-installation',
     chatId: '-1007000000999',
   });
-  const operation = await direct.beginOperation({
+  const operation = await direct.__testing.beginOperation({
     installationId: lease.installation_id,
     sessionId: lease.session_id,
     generation: lease.generation,
@@ -60,10 +60,10 @@ Module._load = function(request, parent, isMain) {
 
   monotonicClock += 15_001;
   const beforeRead = fs.readFileSync(stateFile, 'utf8');
-  const readOnlySnapshot = direct.__test.stateSnapshot(runtimePool);
+  const readOnlySnapshot = direct.__testing.stateSnapshot(runtimePool);
   assert.ok(readOnlySnapshot.operations[operation.operation_id], 'read-only snapshot must not reap stale operations');
   assert.equal(fs.readFileSync(stateFile, 'utf8'), beforeRead, 'read-only snapshot must not write pool state');
-  await direct.cleanupExpiredSessions();
+  await direct.__testing.cleanupExpiredSessions();
 
   let persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   assert.ok(persisted.leases[lease.session_id], 'valid lease must survive stale operation cleanup');
@@ -78,7 +78,7 @@ Module._load = function(request, parent, isMain) {
   assert.equal(reapCount(), 1, 'stale operation must emit one reap diagnostic');
 
   monotonicClock += 60_000;
-  await direct.cleanupExpiredSessions();
+  await direct.__testing.cleanupExpiredSessions();
   persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   assert.ok(persisted.leases[lease.session_id], 'later maintenance must preserve the valid lease');
   assert.equal(persisted.operations[operation.operation_id], undefined, 'stale operation must not reappear on disk');

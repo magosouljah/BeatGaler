@@ -53,7 +53,7 @@ function ensureAssignedBotAdmissible(state, transportBotId) {
 }
 
 function prepareAssignedLease({ directTransport, status, transportBotId, installationId, chatId }) {
-  const hooks = directTransport?.__test;
+  const hooks = directTransport?.__testing;
   if (typeof hooks?.mutateState !== 'function') {
     throw new Error('Direct transport persistent-session adapter requires mutateState().');
   }

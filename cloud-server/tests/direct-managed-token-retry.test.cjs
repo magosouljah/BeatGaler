@@ -65,13 +65,13 @@ function apiFailure(status, description) {
 }
 
 function resetHarness() {
-  direct.__test.resetManagedTokenFetchTestHooks();
-  direct.__test.setManagedTokenFetchRetryPolicy({ attempts: 3, baseMs: 0, maxMs: 0 });
+  direct.__testing.resetManagedTokenFetchTestHooks();
+  direct.__testing.setManagedTokenFetchRetryPolicy({ attempts: 3, baseMs: 0, maxMs: 0 });
   fs.rmSync(diagnosticsDir, { recursive: true, force: true });
 }
 
 test.after(() => {
-  direct.__test.resetManagedTokenFetchTestHooks();
+  direct.__testing.resetManagedTokenFetchTestHooks();
   Module._load = originalLoad;
   fs.rmSync(tmp, { recursive: true, force: true });
 });
@@ -79,13 +79,13 @@ test.after(() => {
 test('managed token fetch retries a transient network failure and then succeeds', async () => {
   resetHarness();
   let calls = 0;
-  direct.__test.setManagerBotFetch(async () => {
+  direct.__testing.setManagerBotFetch(async () => {
     calls += 1;
     if (calls === 1) throw transientFetchError();
     return ok(returnedSecret);
   });
 
-  assert.equal(await direct.__test.resolveManagedToken(bot), returnedSecret);
+  assert.equal(await direct.__testing.resolveManagedToken(bot), returnedSecret);
   assert.equal(calls, 2);
   const log = fs.readFileSync(diagnosticsFile, 'utf8');
   assert.match(log, /MANAGED_TOKEN_FETCH_RETRY/);
@@ -97,12 +97,12 @@ test('managed token fetch retries a transient network failure and then succeeds'
 test('managed token fetch exhausts only its bounded transient retry budget', async () => {
   resetHarness();
   let calls = 0;
-  direct.__test.setManagerBotFetch(async () => {
+  direct.__testing.setManagerBotFetch(async () => {
     calls += 1;
     throw transientFetchError();
   });
 
-  await assert.rejects(() => direct.__test.resolveManagedToken(bot), /fetch failed/);
+  await assert.rejects(() => direct.__testing.resolveManagedToken(bot), /fetch failed/);
   assert.equal(calls, 3);
   const log = fs.readFileSync(diagnosticsFile, 'utf8');
   assert.equal((log.match(/MANAGED_TOKEN_FETCH_RETRY/g) || []).length, 2);
@@ -113,9 +113,9 @@ test('managed token fetch exhausts only its bounded transient retry budget', asy
 
 test('managed token fetch bounds a hung fetch and retries its timeout', async () => {
   resetHarness();
-  direct.__test.setManagedTokenFetchRetryPolicy({ attempts: 3, baseMs: 0, maxMs: 0, timeoutMs: 5 });
+  direct.__testing.setManagedTokenFetchRetryPolicy({ attempts: 3, baseMs: 0, maxMs: 0, timeoutMs: 5 });
   let calls = 0;
-  direct.__test.setManagerBotFetch(async (_url, options) => {
+  direct.__testing.setManagerBotFetch(async (_url, options) => {
     calls += 1;
     return new Promise((_resolve, reject) => {
       // AbortSignal.timeout() intentionally does not keep Node alive; a real
@@ -128,7 +128,7 @@ test('managed token fetch bounds a hung fetch and retries its timeout', async ()
     });
   });
 
-  await assert.rejects(() => direct.__test.resolveManagedToken(bot));
+  await assert.rejects(() => direct.__testing.resolveManagedToken(bot));
   assert.equal(calls, 3);
   const log = fs.readFileSync(diagnosticsFile, 'utf8');
   assert.equal((log.match(/MANAGED_TOKEN_FETCH_RETRY/g) || []).length, 2);
@@ -139,12 +139,12 @@ test('managed token fetch bounds a hung fetch and retries its timeout', async ()
 test('managed token fetch does not retry definitive Telegram API responses', async () => {
   resetHarness();
   let calls = 0;
-  direct.__test.setManagerBotFetch(async () => {
+  direct.__testing.setManagerBotFetch(async () => {
     calls += 1;
     return apiFailure(401, 'Unauthorized');
   });
 
-  await assert.rejects(() => direct.__test.resolveManagedToken(bot), /Unauthorized/);
+  await assert.rejects(() => direct.__testing.resolveManagedToken(bot), /Unauthorized/);
   assert.equal(calls, 1);
   const log = fs.readFileSync(diagnosticsFile, 'utf8');
   assert.match(log, /MANAGED_TOKEN_FETCH_FAILED/);
@@ -154,11 +154,11 @@ test('managed token fetch does not retry definitive Telegram API responses', asy
 
 test('managed token diagnostics never serialize manager or managed token secrets', async () => {
   resetHarness();
-  direct.__test.setManagerBotFetch(async () => {
+  direct.__testing.setManagerBotFetch(async () => {
     throw transientFetchError();
   });
 
-  await assert.rejects(() => direct.__test.resolveManagedToken(bot));
+  await assert.rejects(() => direct.__testing.resolveManagedToken(bot));
   const log = fs.readFileSync(diagnosticsFile, 'utf8');
   assert.doesNotMatch(log, new RegExp(managerSecret));
   assert.doesNotMatch(log, new RegExp(returnedSecret));
@@ -168,26 +168,26 @@ test('managed token diagnostics never serialize manager or managed token secrets
 test('a fetched managed token serves concurrent and later sessions until credential version changes', async () => {
   resetHarness();
   let calls = 0;
-  direct.__test.setManagerBotFetch(async () => {
+  direct.__testing.setManagerBotFetch(async () => {
     calls += 1;
     return ok(calls === 1 ? returnedSecret : `${returnedSecret}-rotated`);
   });
 
   const first = await Promise.all([
-    direct.__test.tokenForCredentialVersion(bot, 77),
-    direct.__test.tokenForCredentialVersion(bot, 77),
+    direct.__testing.tokenForCredentialVersion(bot, 77),
+    direct.__testing.tokenForCredentialVersion(bot, 77),
   ]);
   assert.deepEqual(first, [returnedSecret, returnedSecret]);
   assert.equal(calls, 1);
 
-  direct.__test.setManagerBotFetch(async () => { throw transientFetchError(); });
-  assert.equal(await direct.__test.tokenForCredentialVersion(bot, 77), returnedSecret);
+  direct.__testing.setManagerBotFetch(async () => { throw transientFetchError(); });
+  assert.equal(await direct.__testing.tokenForCredentialVersion(bot, 77), returnedSecret);
   assert.equal(calls, 1);
 
-  direct.__test.setManagerBotFetch(async () => {
+  direct.__testing.setManagerBotFetch(async () => {
     calls += 1;
     return ok(`${returnedSecret}-rotated`);
   });
-  assert.equal(await direct.__test.tokenForCredentialVersion(bot, 78), `${returnedSecret}-rotated`);
+  assert.equal(await direct.__testing.tokenForCredentialVersion(bot, 78), `${returnedSecret}-rotated`);
   assert.equal(calls, 2);
 });

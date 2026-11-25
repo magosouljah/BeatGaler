@@ -78,7 +78,7 @@ Module._load = function(request, parent, isMain) {
     installationId: 'normal-close-installation',
     chatId: '-1007000000001',
   });
-  const firstOp = await direct.beginOperation({
+  const firstOp = await direct.__testing.beginOperation({
     installationId: first.lease.installation_id,
     sessionId: first.lease.session_id,
     generation: first.lease.generation,
@@ -87,7 +87,7 @@ Module._load = function(request, parent, isMain) {
   });
   assert.equal(firstOp.ok, true);
 
-  const stopped = await direct.stopSession({
+  const stopped = await direct.__testing.stopSession({
     installationId: first.lease.installation_id,
     sessionId: first.lease.session_id,
     generation: first.lease.generation,
@@ -95,7 +95,7 @@ Module._load = function(request, parent, isMain) {
   assert.equal(stopped.ok, true);
   assert.equal(stopped.released, true);
   assert.equal(stopped.membership_preserved, true);
-  let state = direct.__test.stateSnapshot(runtimePool);
+  let state = direct.__testing.stateSnapshot(runtimePool);
   assert.equal(state.leases[first.lease.session_id], undefined, 'normal close must delete the local lease');
   assert.equal(state.operations[firstOp.operation_id], undefined, 'normal close must delete lease-owned operations');
   assert.equal(telegramClientConstructions, 0, 'normal close must not construct MASTER TelegramClient');
@@ -107,7 +107,7 @@ Module._load = function(request, parent, isMain) {
     installationId: 'heartbeat-expired-installation',
     chatId: '-1007000000002',
   });
-  const secondOp = await direct.beginOperation({
+  const secondOp = await direct.__testing.beginOperation({
     installationId: second.lease.installation_id,
     sessionId: second.lease.session_id,
     generation: second.lease.generation,
@@ -115,12 +115,12 @@ Module._load = function(request, parent, isMain) {
     kind: 'data',
   });
   assert.equal(secondOp.ok, true);
-  direct.__test.mutateState(runtimePool, current => {
+  direct.__testing.mutateState(runtimePool, current => {
     current.leases[second.lease.session_id].last_heartbeat_at = new Date(Date.now() - 120000).toISOString();
   });
 
-  await direct.cleanupExpiredSessions();
-  state = direct.__test.stateSnapshot(runtimePool);
+  await direct.__testing.cleanupExpiredSessions();
+  state = direct.__testing.stateSnapshot(runtimePool);
   assert.equal(state.leases[second.lease.session_id], undefined, 'heartbeat cleanup must delete the expired local lease');
   assert.equal(state.operations[secondOp.operation_id], undefined, 'heartbeat cleanup must delete expired lease operations');
   assert.equal(telegramClientConstructions, 0, 'heartbeat cleanup must not construct MASTER TelegramClient');
@@ -128,7 +128,7 @@ Module._load = function(request, parent, isMain) {
   const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
   assert.equal(registry.vaults['-1007000000001'].persistent_marker, 'must-survive-cleanup');
   assert.equal(registry.vaults['-1007000000002'].persistent_marker, 'must-survive-expiry');
-  assert.equal(typeof direct.decommissionVaultMembership, 'function', 'membership removal must exist only as an explicit decommission operation');
+  assert.equal(typeof direct.__testing.decommissionVaultMembership, 'function', 'membership removal must exist only as an explicit decommission operation');
 
   console.log('PASS Direct persistent cleanup: normal close and heartbeat expiry remove local session state without MASTER or membership removal');
 })().catch(error => {

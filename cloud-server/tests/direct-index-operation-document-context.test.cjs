@@ -71,7 +71,7 @@ function context(tab, document, generation) {
     chatId,
   }).lease;
 
-  const begin = (lease, kind, documentContext) => direct.beginOperation({
+  const begin = (lease, kind, documentContext) => direct.__testing.beginOperation({
     installationId: lease.installation_id,
     sessionId: lease.session_id,
     generation: lease.generation,
@@ -89,7 +89,7 @@ function context(tab, document, generation) {
   assert.equal(recoveredRead.ok, true);
   assert.notEqual(recoveredRead.operation_id, abandonedRead.operation_id);
 
-  let state = direct.__test.stateSnapshot(runtimePool);
+  let state = direct.__testing.stateSnapshot(runtimePool);
   assert.equal(state.operations[abandonedRead.operation_id], undefined, 'superseded same-tab document must be reclaimed');
   assert.equal(state.operations[recoveredRead.operation_id].document_generation, 2);
 
@@ -114,7 +114,7 @@ function context(tab, document, generation) {
     { ok: false, wait: true, reason: 'index_busy' },
   );
 
-  await direct.endOperation({
+  await direct.__testing.endOperation({
     installationId: first.installation_id,
     sessionId: first.session_id,
     generation: first.generation,
@@ -126,9 +126,9 @@ function context(tab, document, generation) {
   assert.equal(abandonedWrite.ok, true);
   const recoveredAfterWrite = await begin(first, 'get_index', context('tab-a', 'doc-a-4', 4));
   assert.equal(recoveredAfterWrite.ok, true);
-  state = direct.__test.stateSnapshot(runtimePool);
+  state = direct.__testing.stateSnapshot(runtimePool);
   assert.equal(state.operations[abandonedWrite.operation_id], undefined, 'newer same-tab document must reclaim abandoned write owner');
-  await direct.endOperation({
+  await direct.__testing.endOperation({
     installationId: first.installation_id,
     sessionId: first.session_id,
     generation: first.generation,
@@ -153,7 +153,7 @@ function context(tab, document, generation) {
     { ok: false, wait: true, reason: 'index_busy' },
   );
 
-  await direct.endOperation({
+  await direct.__testing.endOperation({
     installationId: second.installation_id,
     sessionId: second.session_id,
     generation: second.generation,

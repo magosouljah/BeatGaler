@@ -12,6 +12,7 @@ const { attempts } = require('./helpers/catalog-net-guard.cjs');
 require('./helpers/no-dotenv.cjs');
 
 const directPath = require.resolve('../direct-transport-control');
+const { getCatalogTelegramTransport } = require('../catalog-telegram-transport');
 const chatId = '-1001234567890';
 const botId = '202';
 const botToken = 'fake-assigned-bot-token';
@@ -86,7 +87,8 @@ function fixture(t) {
     calls.push([method, token, JSON.parse(options.body)]);
     return { ok: true, json: async () => ({ ok: true, result: replies[method] }) };
   });
-  return { ...files, transport: require(directPath), calls, replies };
+  const control = require(directPath);
+  return { ...files, control, transport: getCatalogTelegramTransport(), calls, replies };
 }
 
 test('catalogBotCredential elige el bot solicitado, conserva la versiÃ³n y rechaza un ID desconocido', async (t) => {
@@ -157,7 +159,10 @@ test('ensureCatalogBotMembership verifica al bot asignado y acepta una invitaciÃ
         invited = true;
       } else if (request.className === 'channels.EditAdmin') {
         assert.equal(request.userId, entity);
-        assert.deepEqual([request.adminRights.other, request.adminRights.deleteMessages, request.adminRights.pinMessages], [true, false, false]);
+        assert.equal(request.adminRights.other, true);
+        assert.equal(request.adminRights.deleteMessages, false);
+        assert.equal(request.adminRights.editMessages, false);
+        assert.equal(request.adminRights.pinMessages, false);
       } else {
         assert.equal(request.className, 'channels.GetParticipant');
         assert.equal(request.participant, entity);
@@ -198,11 +203,11 @@ test('ensureCatalogBotMembership verifica al bot asignado y acepta una invitaciÃ
 
 test('enabled y poolStatus distinguen flag, credenciales, pool ausente y contadores efÃ­meros', (t) => {
   const f = fixture(t);
-  assert.equal(f.transport.enabled(), false);
-  assert.equal(f.transport.poolStatus().configured, false);
+  assert.equal(f.control.enabled(), false);
+  assert.equal(f.control.poolStatus().configured, false);
   process.env.BEATGALER_DIRECT_TRANSPORT = 'true';
-  assert.equal(f.transport.enabled(), true);
-  const status = f.transport.poolStatus();
+  assert.equal(f.control.enabled(), true);
+  const status = f.control.poolStatus();
   assertPublic(status);
   assert.deepEqual(status, {
     configured: true, heartbeat_interval_ms: 60000, heartbeat_timeout_ms: 300000,
@@ -213,11 +218,11 @@ test('enabled y poolStatus distinguen flag, credenciales, pool ausente y contado
     ],
   });
   delete process.env.TELEGRAM_API_HASH;
-  assert.equal(f.transport.enabled(), false);
+  assert.equal(f.control.enabled(), false);
   fs.unlinkSync(f.poolFile);
   process.env.TELEGRAM_API_HASH = apiHash;
-  assert.equal(f.transport.enabled(), false);
-  assert.deepEqual(f.transport.poolStatus(), { configured: false, bots: [], sessions: 0, operations: 0 });
+  assert.equal(f.control.enabled(), false);
+  assert.deepEqual(f.control.poolStatus(), { configured: false, bots: [], sessions: 0, operations: 0 });
 });
 
 test('stripDirectCredentials elimina las credenciales planas de su entrada vigente', () => {

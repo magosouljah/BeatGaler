@@ -8,7 +8,7 @@ const path = require('node:path');
 const { Api } = require('telegram');
 const { FloodWaitError } = require('telegram/errors');
 const { telegramRetryAfterSeconds, withTelegramFloodWait } = require('../telegram-retry');
-const { __test } = require('../direct-transport-control');
+const { __testing } = require('../direct-transport-control');
 
 const floodMessage = 'A wait of 580 seconds is required (caused by messages.UpdatePinnedMessage)';
 
@@ -65,7 +65,7 @@ test('MASTER INDEX retries the same pin only and deletes the old copy after succ
   };
   try {
     const waits = [];
-    const result = await __test.commitIndexCopyOnWriteWithMaster(
+    const result = await __testing.commitIndexCopyOnWriteWithMaster(
       masterInfo, { filePath, caption: 'BEATGALER_LIBRARY_INDEX_V1', previousMessageId: 122 },
       { sleepFn: async ms => waits.push(ms), onWait: () => {} },
     );
@@ -90,7 +90,7 @@ test('MASTER recovery pin uses the same retry and does not send a new document',
       return true;
     },
   } };
-  await __test.pinMasterIndexMessage(masterInfo, 123, {
+  await __testing.pinMasterIndexMessage(masterInfo, 123, {
     sleepFn: async ms => waits.push(ms), onWait: () => {},
   });
   assert.deepEqual(ids, [123, 123]);
@@ -111,7 +111,7 @@ test('unclassified 420 fails immediately and leaves the old INDEX in place', asy
     },
   } };
   try {
-    await assert.rejects(__test.commitIndexCopyOnWriteWithMaster(
+    await assert.rejects(__testing.commitIndexCopyOnWriteWithMaster(
       masterInfo, { filePath, caption: 'BEATGALER_LIBRARY_INDEX_V1', previousMessageId: 122 },
       { sleepFn: async () => assert.fail('unexpected sleep'), onWait: () => {} },
     ), err => err === error);

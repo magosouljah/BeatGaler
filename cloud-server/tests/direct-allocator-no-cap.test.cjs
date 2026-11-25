@@ -40,10 +40,10 @@ try {
     });
     assert.equal(result.lease.bot_id, 'Bot01');
     assert.equal(result.reused, false);
-    assert.equal(direct.__test.leasesForBot(direct.__test.stateSnapshot(pool), 'Bot01').length, index + 1);
+    assert.equal(direct.__testing.leasesForBot(direct.__testing.stateSnapshot(pool), 'Bot01').length, index + 1);
   }
-  const state = direct.__test.stateSnapshot(pool);
-  assert.equal(direct.__test.leasesForBot(state, 'Bot01').length, 5);
+  const state = direct.__testing.stateSnapshot(pool);
+  assert.equal(direct.__testing.leasesForBot(state, 'Bot01').length, 5);
   console.log('PASS Direct allocator has no artificial four-session ceiling');
 } finally {
   Module._load = originalLoad;

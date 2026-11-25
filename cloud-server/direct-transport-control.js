@@ -384,7 +384,7 @@ function stateSnapshot(pool) {
   return withPoolLock(() => normalizeState(pool));
 }
 
-const { catalogBotCredential, catalogDirectSession, ensureCatalogBotMembership } = configureCatalogTelegramTransport({
+configureCatalogTelegramTransport({
   loadPool,
   stateSnapshot,
   tokenForCredentialVersion,
@@ -1193,52 +1193,6 @@ async function activateSession({ installationId, sessionId, generation, startupT
   }
 }
 
-async function probeSessionMembership({ installationId, sessionId, generation, startupTrace = noDirectStartupTrace }) {
-  const checked = getLeaseChecked({ installationId, sessionId, generation });
-  if (!checked) throw new Error('Direct transport session is not active.');
-  startupTrace.mark('BOT_MEMBERSHIP_LEASE', {
-    lease_state: checked.lease.status,
-    vault_chat_id: String(checked.lease.chat_id),
-    transport_id: String(checked.lease.bot_id),
-  });
-  const runtime = await startupTrace.step('BOT_MEMBERSHIP_RUNTIME', () => runtimeForLease(checked.lease, { startupTrace }));
-  return probeRuntimeVaultMembership(runtime, startupTrace);
-}
-
-async function heartbeat({ installationId, sessionId, generation, credentialVersion }) {
-  const pool = loadPool();
-  const snapshot = stateSnapshot(pool);
-  const lease = snapshot.leases[String(sessionId || '')];
-  if (!lease || lease.installation_id !== String(installationId || '') || Number(lease.generation) !== Number(generation)) {
-    return { ok: false, expired: true };
-  }
-  if (leaseExpired(lease)) {
-    void cleanupLease(lease, { reason: 'heartbeat_timeout' }).catch(error => {
-      console.warn('[direct] stale heartbeat cleanup failed:', error?.message || error);
-    });
-    return { ok: false, expired: true };
-  }
-  mutateState(pool, state => {
-    const current = state.leases[lease.session_id];
-    if (current) {
-      current.last_heartbeat_at = nowIso();
-      if (current.status === 'SUSPECTED') current.status = 'ACTIVE';
-    }
-  });
-
-  const fresh = stateSnapshot(pool);
-  const botState = fresh.bots[lease.bot_id];
-  if (Number(credentialVersion || 0) !== Number(botState.credential_version)) {
-    const runtime = await runtimeForLease(fresh.leases[lease.session_id], { freshMarker: true });
-    return { ok: true, credential_refresh: sessionPublic(runtime) };
-  }
-  return {
-    ok: true,
-    status: botState.rotation_pending ? 'ROTATION_PENDING' : 'ACTIVE',
-    credential_version: botState.credential_version,
-  };
-}
-
 async function maybeRotatePendingBot(botId) {
   if (!TOKEN_ROTATION_ENABLED) {
     const pool = loadPool();
@@ -1675,16 +1629,6 @@ function startMaintenance() {
   setTimeout(() => cleanupExpiredSessions().catch(() => {}), 1000).unref?.();
 }
 
-async function verifyMessage({ installationId, sessionId, messageId }) {
-  // Compatibility endpoint only. The normal Direct app no longer calls this;
-  // successful sendFile from the client is the data-plane acknowledgement.
-  const checked = getLeaseChecked({ installationId, sessionId });
-  if (!checked) throw new Error('Direct transport session is not active.');
-  const id = Number(messageId);
-  if (!Number.isInteger(id) || id <= 0) throw new Error('Invalid Telegram message id.');
-  return true;
-}
-
 // MASTER publishes and restores the server-authoritative INDEX. Media uploads
 // and reads remain on the Direct data plane.
 async function pinMasterIndexMessage(masterInfo, messageId, retryOptions = {}) {
@@ -1713,41 +1657,6 @@ async function commitIndexCopyOnWriteWithMaster(masterInfo, { filePath, caption,
     try { await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: [Number(previousMessageId)] })); } catch (_) {}
   }
   return { messageId: Number(sent.id), backups: [] };
-}
-
-async function commitIndexCopyOnWrite({ chatId, filePath, caption, previousMessageId }) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    return await commitIndexCopyOnWriteWithMaster(masterInfo, { filePath, caption, previousMessageId });
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function publishIndexBuffer({ chatId, bytes, caption }) {
-  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'beatgaler-index-'));
-  const filePath = path.join(directory, 'library.json');
-  try {
-    fs.writeFileSync(filePath, bytes, { flag: 'wx' });
-    return await commitIndexCopyOnWrite({ chatId, filePath, caption, previousMessageId: null });
-  } finally {
-    fs.rmSync(filePath, { force: true });
-    fs.rmdirSync(directory);
-  }
-}
-
-async function pinExistingIndexMessage(chatId, messageId) {
-  const id = Number(messageId);
-  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Valid INDEX message id required.');
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [id] }))?.[0];
-    const caption = String(message?.message || '');
-    if (!message?.media || !(caption === 'BEATGALER_LIBRARY_INDEX_V1' || caption.startsWith('BEATGALER_LIBRARY_INDEX_V1\n'))) {
-      throw new Error('Stored INDEX copy is unavailable for recovery.');
-    }
-    await pinMasterIndexMessage(masterInfo, id);
-    const full = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
-    if (Number(full?.fullChat?.pinnedMsgId) !== id) throw new Error('INDEX recovery pin could not be verified.');
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
 async function downloadMessageBuffer(chatId, messageId) {
@@ -1810,58 +1719,6 @@ async function copyLegacyProjectPartFromClient(client, vault, { beatId, sourceMe
     return { sourceMessageId, messageId: Number(sent.id), documentId, sizeBytes, partIndex };
 }
 
-async function copyLegacyProjectPart({ chatId, ...input }) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    return await copyLegacyProjectPartFromClient(masterInfo.client, masterInfo.vault, input);
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function verifyLegacyProjectCopy({ chatId, beatId, sourceMessageId, messageId, documentId, sizeBytes, partIndex }) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [messageId] }))?.[0];
-    if (message?.out !== true || String(message.message || '') !== legacyProjectCaption(beatId, sourceMessageId, partIndex) ||
-        !(message.media?.document instanceof Api.Document) ||
-        String(message.media.document.id) !== documentId || Number(message.media.document.size) !== sizeBytes) {
-      throw new ProjectAccessError('MASTER legacy PROJECT copy changed.', 'PROJECT_LEGACY_UNAVAILABLE', 503);
-    }
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function publishProjectFile({ chatId, filePath, filename, beatId, sha256, sizeBytes, threadId, caption = null }) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const sent = await masterInfo.client.sendFile(masterInfo.vault, {
-      file: new CustomFile(path.basename(String(filename || 'project.zip')), sizeBytes, filePath),
-      forceDocument: true,
-      // T12: el catálogo nativo pasa su marcador `catalog:v1 op= part=`; sin `caption` se conserva el formato legacy.
-      caption: typeof caption === 'string' && caption ? caption : projectCaption(beatId, sha256),
-      ...(Number.isSafeInteger(Number(threadId)) && Number(threadId) > 0 ? { replyTo: Number(threadId) } : {}),
-      workers: 1,
-    });
-    const id = Number(sent?.id || 0);
-    const documentId = String(sent?.media?.document?.id || '');
-    if (!Number.isSafeInteger(id) || id <= 0 || !documentId) {
-      throw new ProjectAccessError('MASTER returned no PROJECT document.', 'PROJECT_BYTES_UNVERIFIED', 503);
-    }
-    const senderId = sent?.fromId?.userId != null ? String(sent.fromId.userId) : null;
-    const sentSize = Number(sent?.media?.document?.size);
-    return { messageId: id, documentId, senderId, sizeBytes: Number.isSafeInteger(sentSize) && sentSize > 0 ? sentSize : null };
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-// T12: identidad numérica del MASTER que publica PROJECT en el vault (remitente persistido antes del primer despacho, D-T09-4).
-async function masterSenderId(chatId) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const me = await masterInfo.client.getMe();
-    const id = String(me?.id ?? '');
-    if (!/^[0-9]{1,20}$/.test(id)) throw new ProjectAccessError('MASTER identity is unavailable.', 'PROJECT_ACCESS_UNAVAILABLE', 503);
-    return id;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
 async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, sha256, documentId, sizeBytes, caption = null }) {
   const message = (await client.getMessages(vault, { ids: [Number(messageId)] }))?.[0];
   const expectedCaption = typeof caption === 'string' && caption ? caption : projectCaption(beatId, sha256);
@@ -1872,137 +1729,6 @@ async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, 
     throw new ProjectAccessError('MASTER PROJECT document changed or is unavailable.', 'PROJECT_BYTES_UNVERIFIED', 503);
   }
   return true;
-}
-
-async function findProjectFile({ chatId, beatId, sha256, sizeBytes, caption: captionOverride = null }) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const caption = typeof captionOverride === 'string' && captionOverride ? captionOverride : projectCaption(beatId, sha256);
-    for (const options of [{ search: caption, limit: 100 }, { limit: 100 }]) {
-      for await (const message of masterInfo.client.iterMessages(masterInfo.vault, options)) {
-        if (message?.out !== true || String(message?.message || '') !== caption ||
-            !(message?.media?.document instanceof Api.Document) ||
-            Number(message.media.document.size) !== sizeBytes) continue;
-        return { messageId: Number(message.id), documentId: String(message.media.document.id) };
-      }
-    }
-    return null;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function verifyProjectMessage({ chatId, ...input }) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    return await verifyProjectMediaFromClient(masterInfo.client, masterInfo.vault, input);
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function deleteMessages(chatId, ids) {
-  const list = [...new Set((ids || []).map(Number).filter(n => Number.isInteger(n) && n > 0))];
-  if (!list.length) return 0;
-  const masterInfo = await masterForVault(chatId);
-  try {
-    for (let i = 0; i < list.length; i += 100) {
-      await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: list.slice(i, i + 100) }));
-    }
-    return list.length;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function deleteAndVerifyMessages(chatId, ids) {
-  const list = [...new Set((ids || []).map(Number))];
-  if (list.some(id => !Number.isSafeInteger(id) || id <= 0)) throw new Error('Invalid purge message ID.');
-  if (!list.length) throw new Error('Purge has no verified assets.');
-  const masterInfo = await masterForVault(chatId);
-  try {
-    for (let i = 0; i < list.length; i += 100) {
-      const batch = list.slice(i, i + 100);
-      const states = async () => {
-        const response = await masterInfo.client.invoke(new Api.channels.GetMessages({
-          channel: masterInfo.vault,
-          id: batch.map(id => new Api.InputMessageID({ id })),
-        }));
-        const byId = new Map((response?.messages || []).map(message => [Number(message.id), message]));
-        if (batch.some(id => !byId.has(id))) throw new Error('MASTER returned an incomplete asset verification.');
-        return byId;
-      };
-      const before = await states();
-      const existing = batch.filter(id => !(before.get(id) instanceof Api.MessageEmpty));
-      if (existing.length) {
-        await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: existing }));
-      }
-      const after = await states();
-      if (batch.some(id => !(after.get(id) instanceof Api.MessageEmpty))) {
-        throw new Error('MASTER could not verify permanent asset deletion.');
-      }
-    }
-    return list.length;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function getPinnedMessage(chatId) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const full = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
-    const pinnedId = Number(full?.fullChat?.pinnedMsgId || 0);
-    if (!Number.isInteger(pinnedId) || pinnedId <= 0) return null;
-    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [pinnedId] }))?.[0];
-    if (!message) return null;
-    return { message_id: Number(message.id), caption: String(message.message || ''), text: String(message.message || ''), has_media: Boolean(message.media) };
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function readPinnedIndexBuffer(chatId) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const full = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
-    const id = Number(full?.fullChat?.pinnedMsgId || 0);
-    if (!Number.isSafeInteger(id) || id <= 0) return null;
-    const message = (await masterInfo.client.getMessages(masterInfo.vault, { ids: [id] }))?.[0];
-    if (!message?.media) throw new Error('Pinned INDEX has no downloadable media.');
-    const raw = await masterInfo.client.downloadMedia(message, {});
-    if (!Buffer.isBuffer(raw)) throw new Error('Pinned INDEX download returned no buffer.');
-    const checked = await masterInfo.client.invoke(new Api.channels.GetFullChannel({ channel: masterInfo.vault }));
-    if (Number(checked?.fullChat?.pinnedMsgId || 0) !== id) {
-      throw new Error('Pinned INDEX changed during download.');
-    }
-    return { message_id: id, caption: String(message.message || ''), raw };
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-function topicIdFromCreateUpdates(updates) {
-  for (const update of updates?.updates || []) {
-    const message = update?.message;
-    if (message?.id && message?.action?.className === 'MessageActionTopicCreate') return Number(message.id);
-  }
-  for (const update of updates?.updates || []) if (update?.message?.id) return Number(update.message.id);
-  return null;
-}
-
-async function createForumTopic(chatId, title) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const updates = await masterInfo.client.invoke(new Api.channels.CreateForumTopic({ channel: masterInfo.vault, title: String(title || 'Untitled Beat').slice(0, 128) }));
-    const topicId = topicIdFromCreateUpdates(updates);
-    if (!Number.isInteger(topicId) || topicId <= 0) throw new Error('MASTER created a forum topic but no topic id was returned.');
-    return topicId;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function editForumTopic(chatId, topicId, title) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    await masterInfo.client.invoke(new Api.channels.EditForumTopic({ channel: masterInfo.vault, topicId: Number(topicId), title: String(title || 'Untitled Beat').slice(0, 128) }));
-    return true;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
-async function deleteForumTopic(chatId, topicId) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    await masterInfo.client.invoke(new Api.channels.DeleteTopicHistory({ channel: masterInfo.vault, topMsgId: Number(topicId) }));
-    return true;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
 function poolStatus() {
@@ -2049,80 +1775,32 @@ function recordIndexPointer(chatId, pointer = {}) {
   return registry.vaults[key];
 }
 
-function recordDiagnostic(event, fields = {}) {
-  diag(String(event || 'DIRECT_DIAGNOSTIC'), fields);
-}
-
-function getIndexPointer(chatId) {
-  const key = String(chatId || '').trim();
-  const registry = loadVaultRegistry();
-  const row = registry.vaults[key] || {};
-  return {
-    message_id: Number(row.current_index_message_id || 0),
-    file_id: row.current_index_file_id || null,
-    updated_at: row.current_index_updated_at || null,
-  };
-}
 module.exports = {
-  TOKEN_ROTATION_ENABLED,
-  recordDiagnostic,
-  recordIndexPointer,
-  getIndexPointer,
   enabled,
-  startSession,
-  activateSession,
-  probeSessionMembership,
-  heartbeat,
-  beginOperation,
-  renewOperation,
-  endOperation,
-  stopSession,
-  decommissionVaultMembership,
-  verifyMessage,
-  commitIndexCopyOnWrite,
-  publishIndexBuffer,
-  pinExistingIndexMessage,
-  restrictBotPinRights,
-  downloadMessageBuffer,
-  publishProjectFile,
-  masterSenderId,
-  catalogBotCredential,
-  catalogDirectSession,
-  ensureCatalogBotMembership,
-  copyLegacyProjectPart,
-  copyLegacyProjectPartFromClient,
-  directBotAdminRights,
-  verifyLegacyProjectCopy,
-  verifyProjectMessage,
-  verifyProjectMediaFromClient,
-  findProjectFile,
-  deleteMessages,
-  deleteAndVerifyMessages,
-  getPinnedMessage,
-  readPinnedIndexBuffer,
-  createForumTopic,
-  editForumTopic,
-  deleteForumTopic,
   poolStatus,
-  cleanupExpiredSessions,
-  __test: {
+  __testing: {
+    TOKEN_ROTATION_ENABLED,
+    beginOperation,
+    renewOperation,
+    endOperation,
+    stopSession,
+    decommissionVaultMembership,
+    downloadMessageBuffer,
+    copyLegacyProjectPartFromClient,
+    verifyProjectMediaFromClient,
+    cleanupExpiredSessions,
     sessionPublic,
     pinMasterIndexMessage,
     commitIndexCopyOnWriteWithMaster,
-    normalizeState,
     stateSnapshot,
     mutateState,
     setMonotonicNow(fn) {
       monotonicNowImpl = typeof fn === 'function' ? fn : () => performance.now();
     },
     leasesForBot,
-    activeOpsForBot,
     inviteAndPromote,
-    botMembershipError,
-    probeRuntimeVaultMembership,
     resolveManagedToken,
     tokenForCredentialVersion,
-    transientManagedTokenFetchError,
     setManagerBotFetch(fn) {
       managerBotFetch = typeof fn === 'function' ? fn : (...args) => fetch(...args);
     },

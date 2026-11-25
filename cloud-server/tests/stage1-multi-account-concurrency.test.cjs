@@ -117,8 +117,8 @@ function opArgs(lease, kind) {
   const vaultB = leases[3];
   assert.equal(vaultA.bot_id, 'Bot01');
   assert.equal(vaultB.bot_id, 'Bot01');
-  const opA = await direct.beginOperation(opArgs(vaultA, 'replace_index'));
-  const opB = await direct.beginOperation(opArgs(vaultB, 'get_index'));
+  const opA = await direct.__testing.beginOperation(opArgs(vaultA, 'replace_index'));
+  const opB = await direct.__testing.beginOperation(opArgs(vaultB, 'get_index'));
   assert.equal(opA.ok, true, 'vault A operation should start');
   assert.equal(opB.ok, true, 'vault B must not be blocked by vault A on the same bot');
   status = direct.poolStatus();
@@ -134,33 +134,33 @@ function opArgs(lease, kind) {
     installationId: 'stage1-install-0-device-2',
     chatId: vaultA.chat_id,
   }).lease;
-  const blockedSameVault = await direct.beginOperation(opArgs(secondDevice, 'get_index'));
+  const blockedSameVault = await direct.__testing.beginOperation(opArgs(secondDevice, 'get_index'));
   assert.equal(blockedSameVault.ok, false);
   assert.equal(blockedSameVault.wait, true);
   assert.equal(blockedSameVault.reason, 'index_busy');
 
-  await direct.endOperation({
+  await direct.__testing.endOperation({
     installationId: vaultA.installation_id,
     sessionId: vaultA.session_id,
     generation: vaultA.generation,
     operationId: opA.operation_id,
   });
-  const admittedSameVault = await direct.beginOperation(opArgs(secondDevice, 'get_index'));
+  const admittedSameVault = await direct.__testing.beginOperation(opArgs(secondDevice, 'get_index'));
   assert.equal(admittedSameVault.ok, true, 'same vault must proceed once its previous INDEX operation ends');
 
-  await direct.endOperation({
+  await direct.__testing.endOperation({
     installationId: vaultB.installation_id,
     sessionId: vaultB.session_id,
     generation: vaultB.generation,
     operationId: opB.operation_id,
   });
-  await direct.endOperation({
+  await direct.__testing.endOperation({
     installationId: secondDevice.installation_id,
     sessionId: secondDevice.session_id,
     generation: secondDevice.generation,
     operationId: admittedSameVault.operation_id,
   });
-  await direct.stopSession({
+  await direct.__testing.stopSession({
     installationId: secondDevice.installation_id,
     sessionId: secondDevice.session_id,
     generation: secondDevice.generation,
@@ -185,10 +185,10 @@ function opArgs(lease, kind) {
   // Simulate one browser disappearing. Only that expired session is reaped;
   // the other 79 accounts stay active and persistent membership is untouched.
   const expired = leases[1];
-  direct.__test.mutateState(bots.map(bot => ({ id: bot.id })), state => {
+  direct.__testing.mutateState(bots.map(bot => ({ id: bot.id })), state => {
     state.leases[expired.session_id].last_heartbeat_at = new Date(Date.now() - 120000).toISOString();
   });
-  await direct.cleanupExpiredSessions();
+  await direct.__testing.cleanupExpiredSessions();
 
   status = direct.poolStatus();
   assert.equal(status.sessions, 79, 'heartbeat cleanup must remove exactly the expired account');

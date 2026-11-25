@@ -88,7 +88,7 @@ const pool = [
 ];
 
 passed += test('Direct defaults keep token rotation disabled during normal sessions', () => {
-  assert.equal(direct.TOKEN_ROTATION_ENABLED, false);
+  assert.equal(direct.__testing.TOKEN_ROTATION_ENABLED, false);
 }) ? 1 : 0;
 
 passed += test('Direct heartbeat contract remains 60 seconds / 5 minutes', () => {
@@ -103,7 +103,7 @@ passed += test('repeated sessions use only the explicitly assigned bot', () => {
     const result = prepare('Bot02', `install-${i}`, `vault-${i}`);
     assert.equal(result.lease.bot_id, 'Bot02');
   }
-  assert.equal(direct.__test.leasesForBot(direct.__test.stateSnapshot(pool), 'Bot02').length, 6);
+  assert.equal(direct.__testing.leasesForBot(direct.__testing.stateSnapshot(pool), 'Bot02').length, 6);
 }) ? 1 : 0;
 
 passed += test('assigned bot wins despite higher active load and stale FIFO order', () => {
@@ -119,7 +119,7 @@ passed += test('assigned bot wins despite higher active load and stale FIFO orde
   }));
   const result = prepare('Bot01', 'new', 'new');
   assert.equal(result.lease.bot_id, 'Bot01');
-  assert.equal(direct.__test.leasesForBot(direct.__test.stateSnapshot(pool), 'Bot01').length, 3);
+  assert.equal(direct.__testing.leasesForBot(direct.__testing.stateSnapshot(pool), 'Bot01').length, 3);
 }) ? 1 : 0;
 
 passed += test('quarantined and rotating assigned bots fail without fallback', () => {
@@ -130,13 +130,13 @@ passed += test('quarantined and rotating assigned bots fail without fallback', (
   }));
   assert.throws(() => prepare('Bot01', 'blocked1', 'vault1'), { code: 'TRANSPORT_ASSIGNMENT_BOT_QUARANTINED' });
   assert.throws(() => prepare('Bot02', 'blocked2', 'vault2'), { code: 'TRANSPORT_ASSIGNMENT_BOT_ROTATING' });
-  assert.equal(Object.keys(direct.__test.stateSnapshot(pool).leases).length, 0);
+  assert.equal(Object.keys(direct.__testing.stateSnapshot(pool).leases).length, 0);
   assert.equal(prepare('Bot03', 'new2', 'new2').lease.bot_id, 'Bot03');
 }) ? 1 : 0;
 
 passed += test('pool state drops obsolete FIFO while preserving configured bots', () => {
   fs.writeFileSync(stateFile, JSON.stringify({ version:4, queue:['Bot01','Bot01','unknown'], bots:{}, leases:{}, operations:{}, metrics:{}, rotation:{} }));
-  const state = direct.__test.stateSnapshot(pool);
+  const state = direct.__testing.stateSnapshot(pool);
   assert.equal(state.queue, undefined);
   assert.deepEqual(Object.keys(state.bots).sort(), ['Bot01','Bot02','Bot03']);
   assert.deepEqual(direct.poolStatus().queue, []);
