@@ -1,6 +1,7 @@
 import { platform } from "../../platform";
 import { playTrace } from "../playback/playTrace";
 import { getWebAccountGeneration, setActiveWebAccountId } from "./activeWebAccount";
+import { installWebFetchBoundary } from "./webFetchBoundary";
 import { WEB_SESSION_MARKER_KEY, WEB_CSRF_SESSION_KEY as CSRF_KEY } from "./webSessionBootstrap";
 
 const TOKEN_KEY = "beatgaler:account-session:v1";
@@ -31,33 +32,9 @@ function trustedRememberedApi(value: string | null): value is string {
   return value === REMOTE_API || (!!LOCAL_API && value === LOCAL_API);
 }
 
-function isBeatGalerApiRequest(input: RequestInfo | URL): boolean {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const sameOriginProxy = sameOriginProxyApi();
-  return !!sameOriginProxy && (url === sameOriginProxy || url.startsWith(`${sameOriginProxy}/`));
-}
-
-function installWebCredentialedFetchBoundary(): void {
-  if (platform.kind !== "web" || typeof window === "undefined") return;
-  const taggedWindow = window as Window & { __beatgalerCredentialedFetchInstalled?: boolean };
-  if (taggedWindow.__beatgalerCredentialedFetchInstalled) return;
-  taggedWindow.__beatgalerCredentialedFetchInstalled = true;
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = ((input: RequestInfo | URL, init: RequestInit = {}) => {
-    if (!isBeatGalerApiRequest(input)) return nativeFetch(input, init);
-    const requestInput = typeof Request !== "undefined" && input instanceof Request ? input : null;
-    const headers = new Headers(init.headers || requestInput?.headers);
-    headers.set("X-BeatGaler-Client", "web");
-    const method = String(init.method || requestInput?.method || "GET").toUpperCase();
-    if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method)) {
-      const csrf = currentWebCsrfToken();
-      if (csrf) headers.set("X-BeatGaler-CSRF", csrf);
-    }
-    return nativeFetch(input, { ...init, headers, credentials: "include" });
-  }) as typeof window.fetch;
-}
-
-installWebCredentialedFetchBoundary();
+// El parche del fetch global vive en webFetchBoundary (único). Se instala al importar para que ninguna petición de
+// arranque escape de él; main.tsx lo invoca de nuevo (no-op).
+installWebFetchBoundary();
 
 export type OAuthProvider = "google" | "x";
 export type BeatGalerPlanId = "free" | "paid_entry" | "highest_paid";

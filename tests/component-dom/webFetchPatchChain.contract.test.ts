@@ -23,12 +23,11 @@ const origin = () => window.location.origin;
 
 async function installLikeProduction(): Promise<void> {
   vi.resetModules();
-  delete (window as any).__beatgalerCredentialedFetchInstalled;
-  delete (window as any).__beatgalerCsrfFetchCoordinatorInstalled;
+  delete (window as any).__beatgalerWebFetchBoundaryInstalled;
   window.fetch = native as unknown as typeof window.fetch;
-  await import("../../src/features/auth/webSession"); // instala la frontera interna al importar
-  const { installWebCsrfFetchCoordinator } = await import("../../src/features/auth/webCsrfFetchCoordinator");
-  installWebCsrfFetchCoordinator(); // como main.tsx, después
+  await import("../../src/features/auth/webSession"); // instala el parche único al importar
+  const { installWebFetchBoundary } = await import("../../src/features/auth/webFetchBoundary");
+  installWebFetchBoundary(); // como main.tsx, después (no-op)
 }
 
 beforeEach(async () => {
@@ -46,8 +45,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete (document as any).cookie;
-  delete (window as any).__beatgalerCredentialedFetchInstalled;
-  delete (window as any).__beatgalerCsrfFetchCoordinatorInstalled;
+  delete (window as any).__beatgalerWebFetchBoundaryInstalled;
   window.fetch = originalFetch;
   vi.restoreAllMocks();
 });
@@ -351,17 +349,16 @@ describe("cadena de parches de fetch (orden de producción)", () => {
     it("reinstalar ambos parches (mismas banderas) no apila capas ni cambia window.fetch", async () => {
       cookieHeader = `${CSRF_COOKIE}=csrf-A`;
       const patched = window.fetch;
-      const { installWebCsrfFetchCoordinator } = await import("../../src/features/auth/webCsrfFetchCoordinator");
-      installWebCsrfFetchCoordinator();
-      installWebCsrfFetchCoordinator();
+      const { installWebFetchBoundary } = await import("../../src/features/auth/webFetchBoundary");
+      installWebFetchBoundary();
+      installWebFetchBoundary();
       vi.resetModules();
       await import("../../src/features/auth/webSession"); // 2.ª evaluación: bandera ya puesta
       expect(window.fetch).toBe(patched);
       nativeResponses = [() => json(403, { code: "CSRF_REQUIRED" }), () => json(200, {})];
       await window.fetch(`${origin()}/beatgaler-api/x`, { method: "POST" });
       expect(native).toHaveBeenCalledTimes(2); // 1 + 1 reintento, no más
-      expect((window as any).__beatgalerCsrfFetchCoordinatorInstalled).toBe(true);
-      expect((window as any).__beatgalerCredentialedFetchInstalled).toBe(true);
+      expect((window as any).__beatgalerWebFetchBoundaryInstalled).toBe(true);
     });
   });
 

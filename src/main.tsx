@@ -4,7 +4,7 @@ import { lazy, Suspense } from "react";
 import { platform } from "./platform";
 import WebExperience from "./app/WebExperience";
 import { installStartupTrace } from "./features/perf/startupTrace";
-import { installWebCsrfFetchCoordinator } from "./features/auth/webCsrfFetchCoordinator";
+import { installWebFetchBoundary } from "./features/auth/webFetchBoundary";
 import { playTrace } from "./features/playback/playTrace";
 import { PlatformProvider } from "./platform/react";
 import "./styles/design-foundations.css";
@@ -23,7 +23,7 @@ const DesktopApp = lazy(async () => {
 
 playTrace("APP_ENTRY_EXECUTE");
 installStartupTrace();
-installWebCsrfFetchCoordinator();
+installWebFetchBoundary();
 
 function GlobalStyles() {
   return (

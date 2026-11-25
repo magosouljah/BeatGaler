@@ -7,10 +7,6 @@ import {
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const REMOTE_API_HOST = "desktop-7l93a0j.tailabe8ff.ts.net";
 
-type BeatGalerWindow = Window & {
-  __beatgalerCsrfFetchCoordinatorInstalled?: boolean;
-};
-
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.toString();
@@ -157,13 +153,4 @@ export function createWebCsrfCoordinatedFetch(delegate: typeof window.fetch): ty
 
     return response;
   }) as typeof window.fetch;
-}
-
-export function installWebCsrfFetchCoordinator(): void {
-  if (typeof window === "undefined") return;
-  const taggedWindow = window as BeatGalerWindow;
-  if (taggedWindow.__beatgalerCsrfFetchCoordinatorInstalled) return;
-  taggedWindow.__beatgalerCsrfFetchCoordinatorInstalled = true;
-  const delegate = window.fetch.bind(window);
-  window.fetch = createWebCsrfCoordinatedFetch(delegate);
 }
