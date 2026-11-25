@@ -142,19 +142,22 @@ function installRuntimeOperability(express, { env = process.env, processLike = p
   if (!application || application.__beatgalerRuntimePatchInstalled) return;
   application.__beatgalerRuntimePatchInstalled = true;
   const config = runtimeConfig(env);
-  const originalUse = application.use;
+  application.__beatgalerRuntimeConfig = config;
   const originalListen = application.listen;
 
-  application.use = function runtimePatchedUse(...handlers) {
-    installRoutesAndProxy(this, config);
-    return originalUse.apply(this, handlers);
-  };
   application.listen = function runtimePatchedListen(...args) {
     installRoutesAndProxy(this, config);
     const server = configureHttpServer(originalListen.apply(this, args), config);
     installGracefulShutdown(server, { processLike, config, logger });
     return server;
   };
+}
+
+function wrapRuntimeUse(routePathOrHandlers, handlers) {
+  const { app, next } = this;
+  const config = app.__beatgalerRuntimeConfig;
+  if (config) installRoutesAndProxy(app, config);
+  return next(routePathOrHandlers, ...handlers);
 }
 
 function _resetForTests() {
@@ -170,5 +173,6 @@ module.exports = {
   configureHttpServer,
   installGracefulShutdown,
   installRuntimeOperability,
+  wrapRuntimeUse,
   _resetForTests,
 };

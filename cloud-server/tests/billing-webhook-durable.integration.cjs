@@ -7,6 +7,7 @@ const { Client, Pool } = require('pg');
 const express = require('express');
 const { webhooks } = require('@polar-sh/sdk/2026-04');
 const { createAccessRuntime } = require('../access-runtime');
+const { mountAccountRouteGuards, ROUTE_GUARD_TABLE } = require('../account-route-guards');
 const { installSessionSecurity } = require('../session-security');
 const { createPolarWebhookRoute, installPolarWebhookRoute } = require('../billing-webhook-route');
 const webhookRuntime = require('../billing-webhook-runtime');
@@ -101,6 +102,42 @@ async function expectCode(promise, ErrorClass, code) {
   });
 }
 
+function mountSessionAndPolar(app, currentInbox) {
+  const sessionsAtRawParser = [];
+  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+  app.use((_req, _res, next) => next());
+  installPolarWebhookRoute(app, {
+    raw(options) {
+      const parse = express.raw(options);
+      return (req, res, next) => {
+        sessionsAtRawParser.push(req.beatgalerSessionSecurity);
+        return parse(req, res, next);
+      };
+    },
+  }, { currentInbox });
+  return sessionsAtRawParser;
+}
+
+test('Polar reaches the raw parser after the session exemption', async () => {
+  installSessionSecurity(express, { dataDir: __dirname });
+  const app = express();
+  const inbox = { async receive() { return { state: 'RECEIVED' }; } };
+  const sessionsAtRawParser = mountSessionAndPolar(app, () => inbox);
+  const server = await new Promise(resolve => {
+    const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/webhooks/polar`, {
+      method: 'POST', headers: { authorization: 'Bearer forged' }, body: '{}',
+    });
+    assert.deepEqual(sessionsAtRawParser, [null], 'session must run and exempt Polar before raw parsing');
+    assert.equal(response.status, 202);
+    assert.equal((await response.json()).state, 'RECEIVED');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('Billing V1 webhook inbox persists first, deduplicates, retries and recovers leases in PostgreSQL', { skip: !ADMIN_URL }, async t => {
   const suffix = `${process.pid}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
   const dbName = `beatgaler_webhook_v1_${suffix}`.replace(/[^a-zA-Z0-9_]/g, '_');
@@ -139,11 +176,10 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
         verifyWebhook: ({ rawBody, headers }) => webhooks.validateEvent(new Uint8Array(rawBody), headers, secret),
       };
       assert.equal(webhookRuntime.configure({ pool, adapter, env: { POLAR_SANDBOX_WEBHOOK_SECRET: secret } }).ready, true);
-      const app = express();
       // The production session middleware is installed before the raw route.
       installSessionSecurity(express, { dataDir: __dirname });
-      app.use((_req, _res, next) => next());
-      installPolarWebhookRoute(app, express, { currentInbox: webhookRuntime.current });
+      const app = express();
+      const sessionsAtRawParser = mountSessionAndPolar(app, webhookRuntime.current);
       app.use(express.json({ limit: '256kb' }));
       app.post('/ordinary-json', (req, res) => res.json(req.body));
       const server = await new Promise(resolve => {
@@ -171,6 +207,7 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
       try {
         const before = await access.resolveUserPlan({ id: 'webhook_user_1' });
         const first = await deliver(raw, { ...headers, authorization: 'Bearer forged', cookie: '__Host-beatgaler_session=forged' });
+        assert.deepEqual(sessionsAtRawParser, [null], 'session must run and exempt Polar before raw parsing');
         assert.equal(first.status, 202);
         assert.equal(first.body.state, 'RECEIVED');
         assert.equal(first.body.duplicate, false);

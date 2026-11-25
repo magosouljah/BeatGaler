@@ -1,4 +1,6 @@
 'use strict';
+
+const { mountAccountRouteGuards, ROUTE_GUARD_TABLE } = require('../account-route-guards');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -86,7 +88,7 @@ test('graceful shutdown exits after grace even if background handles keep the pr
   } finally { clearInterval(keepAlive); }
 });
 
-test('express patch installs routes/proxy and wraps listen without server-core edits', () => {
+test('instance guard table installs routes/proxy and the listen patch applies timeouts', () => {
   const routes = [];
   const processLike = new EventEmitter();
   const server = { close() {}, closeIdleConnections() {}, closeAllConnections() {}, setTimeout(ms) { this.socketTimeout = ms; } };
@@ -97,9 +99,11 @@ test('express patch installs routes/proxy and wraps listen without server-core e
     listen() { return server; },
   };
   runtime.installRuntimeOperability({ application }, { env: { NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test', BEATGALER_TRUST_PROXY_HOPS: '1' }, processLike, logger: { log() {}, error() {} } });
-  application.use(() => {});
-  const result = application.listen(4000);
-  assert.equal(application['trust proxy'], 1);
+  const app = Object.create(application);
+  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+  app.use(() => {});
+  const result = app.listen(4000);
+  assert.equal(app['trust proxy'], 1);
   assert.deepEqual(routes.map(([path]) => path), ['/healthz', '/readyz']);
   assert.equal(result.requestTimeout, 30000);
 });
@@ -113,7 +117,9 @@ test('health and readiness expose the configured exact source SHA for deploy com
   runtime.installRuntimeOperability({ application }, { env: {
     NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'production', BEATGALER_SOURCE_SHA: 'b'.repeat(40),
   }, processLike: new EventEmitter(), logger: { log() {}, error() {} } });
-  application.use(() => {});
+  const app = Object.create(application);
+  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+  app.use(() => {});
   const response = () => ({ statusCode: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
   const health = response();
   routes.get('/healthz')({}, health);
