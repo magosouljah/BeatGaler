@@ -1,7 +1,6 @@
-// Caracterización M7.7b: contrato combinado de los DOS parches de `window.fetch`
-// (webSession.installWebCredentialedFetchBoundary + webCsrfFetchCoordinator) instalados en el
-// MISMO orden que producción: webSession se evalúa al importar (interno), main.tsx llama después a
-// installWebCsrfFetchCoordinator() (externo). Cadena: coordinador -> frontera de credenciales -> fetch nativo.
+// Caracterización M7.7b (fijada en 1357aab con los DOS parches antiguos; desde M7.7b los instala uno solo,
+// webFetchBoundary.installWebFetchBoundary). Cadena: coordinador CSRF -> frontera de credenciales (solo Web) -> fetch nativo.
+// Las aserciones son el contrato: no se cambian al refactorizar.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WEB_CSRF_SESSION_KEY } from "../../src/features/auth/webSessionBootstrap";
 
