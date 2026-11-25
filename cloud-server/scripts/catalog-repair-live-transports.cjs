@@ -5,6 +5,12 @@
 const fs=require('node:fs');
 const {Pool}=require('pg');
 const {createNativeTransportProvisioner}=require('../catalog/native-transport-provisioning');
+// Mismo cableado que catalog-assembly.js: almacén de asignaciones sobre el pool y transporte Telegram compartido (carga perezosa).
+function buildProvisioner(pool,log,deps={}){
+ const createStore=deps.createStore||(p=>require('../direct-vault-assignment').createDirectVaultAssignmentStore(p));
+ const getTransport=deps.getTransport||(()=>require('../catalog-telegram-transport').getCatalogTelegramTransport());
+ return createNativeTransportProvisioner({pool,assignmentStore:createStore(pool),transport:getTransport(),log});
+}
 async function main(){
  const apply=process.argv.length===3 && process.argv[2]==='--apply';
  const dry=process.argv.length===3 && process.argv[2]==='--dry-run';
@@ -27,7 +33,7 @@ async function main(){
    console.log('NATIVE_LIBRARIES='+accounts.length);
    console.log('MISSING_BOT_ASSIGNMENTS='+accounts.filter(x=>!x.transport_bot_id).length);
    if(dry){console.log('DRY_RUN_PASS_NO_WRITES');return;}
-   const provisioner=createNativeTransportProvisioner({pool,log:(...parts)=>console.log(parts.map(x=>String(x).slice(0,75)).join(' '))});
+   const provisioner=buildProvisioner(pool,(...parts)=>console.log(parts.map(x=>String(x).slice(0,75)).join(' ')));
    let ready=0;
    for(let i=0;i<accounts.length;i++){
       try{
@@ -45,4 +51,5 @@ async function main(){
    if(ready!==accounts.length||verified!==accounts.length)process.exitCode=3;
  }finally{await pool.end();}
 }
-main().catch(e=>{console.error('REPAIR_STOP',e.code||e.message);process.exitCode=3});
+if(require.main===module)main().catch(e=>{console.error('REPAIR_STOP',e.code||e.message);process.exitCode=3});
+module.exports={buildProvisioner};

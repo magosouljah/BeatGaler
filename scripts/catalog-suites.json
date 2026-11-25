@@ -244,6 +244,17 @@
           ],
           "kind": "node-test",
           "network": "deny"
+        },
+        {
+          "id": "x71-repair-live-transports-wiring",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-repair-live-transports-wiring.test.cjs"
+          ],
+          "kind": "node-test",
+          "network": "deny"
         }
       ]
     },
