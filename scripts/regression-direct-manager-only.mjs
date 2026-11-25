@@ -103,10 +103,10 @@ if (!server.includes('MASTER intentionally creates NO index')) fail('MASTER may 
 
 // Heartbeats/optional token rotation concern ephemeral leases, never ownership.
 if (!control.includes("getManagedBotToken")) fail('001BeatGaler no longer has its manager-only token role.');
-if (!control.includes("DIRECT_TOKEN_ROTATION_ENABLED || 'false'")) fail('Token rotation is not disabled by default for V5 testing.');
+if (!control.includes("directEnv.tokenRotationEnabled() || 'false'")) fail('Token rotation is not disabled by default for V5 testing.');
 if (!envExample.includes('DIRECT_TOKEN_ROTATION_ENABLED=false')) fail('V5 test-mode no-revoke setting is missing from .env.example.');
-if (!control.includes('DIRECT_HEARTBEAT_INTERVAL_MS || 60_000')) fail('Heartbeat default is no longer 60 seconds.');
-if (!control.includes('DIRECT_HEARTBEAT_TIMEOUT_MS || 5 * 60_000')) fail('Heartbeat timeout default is no longer 5 minutes.');
+if (!control.includes('directEnv.heartbeatIntervalMs() || 60_000')) fail('Heartbeat default is no longer 60 seconds.');
+if (!control.includes('directEnv.heartbeatTimeoutMs() || 5 * 60_000')) fail('Heartbeat timeout default is no longer 5 minutes.');
 if (!control.includes("normalizedKind === 'replace_index'")) fail('Per-vault single-index swaps are no longer serialized across installations.');
 if (!control.includes("reason: 'index_busy'")) fail('Concurrent index writers no longer wait instead of racing index replacement.');
 
