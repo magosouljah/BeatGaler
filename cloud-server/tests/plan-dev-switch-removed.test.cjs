@@ -9,17 +9,52 @@ const { createCheckoutHandlers } = require('../billing-web-checkout-route');
 const root = path.resolve(__dirname, '../..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
-test('no production route, security exception, helper or local startup flag can simulate plan changes', () => {
-  const server = read('cloud-server/server-core.js');
+test('the running Cloud has no route, env switch or caller-selected plan to simulate plan changes', async () => {
+  const { account, withCloud } = require('./helpers/composition-cloud.cjs');
+  const browser = { 'x-beatgaler-client': 'web', origin: 'http://127.0.0.1', host: '127.0.0.1' };
+  await withCloud(async (_app, send) => {
+    const login = await send('POST', '/auth/login', {
+      headers: browser,
+      body: { email: account.email, password: account.password, beatgalerUserId: account.beatgalerUserId },
+    });
+    assert.equal(login.status, 200);
+    const session = {
+      ...browser,
+      cookie: login.headers['set-cookie'].map(cookie => cookie.split(';', 1)[0]).join('; '),
+      'x-beatgaler-csrf': JSON.parse(login.data).csrf_token,
+      'x-beatgaler-installation-id': account.beatgalerUserId,
+    };
+    const plan = async () => JSON.parse((await send('GET', '/plans/me?plan_id=paid', { headers: session })).data).plan;
+    const before = await plan();
+    assert.equal(before.base_plan_id, 'free');
+
+    for (const headers of [session, browser]) {
+      const response = await send('POST', '/plans/dev-switch', { headers, body: { plan_id: 'paid' } });
+      assert.equal(response.status, 404, 'no handler may exist for /plans/dev-switch, with or without a session');
+    }
+    assert.deepEqual(await plan(), before, 'neither the removed route nor a plan_id query may change the plan');
+
+    const selected = await send('POST', '/billing/checkout', {
+      headers: session,
+      body: { offerId: 'annual_offer', requestId: 'request_test', plan_id: 'paid' },
+    });
+    assert.equal(selected.status, 400);
+    assert.equal(JSON.parse(selected.data).code, 'BILLING_CHECKOUT_INVALID_REQUEST');
+    const offer = await send('POST', '/billing/checkout', { headers: session, body: { offerId: 'annual_offer', requestId: 'request_test' } });
+    assert.equal(offer.status, 503, 'the real checkout route stays mounted behind its provider');
+    assert.equal(JSON.parse(offer.data).code, 'BILLING_CHECKOUT_UNAVAILABLE');
+    assert.equal((await send('POST', '/billing/checkout', { headers: browser, body: {} })).status, 401);
+    assert.deepEqual(await plan(), before);
+  }, { prepare() { process.env.BEATGALER_DEV_PLAN_SWITCH = '1'; } });
+});
+
+test('no helper or local startup flag can simulate plan changes', () => {
   const session = read('cloud-server/session-security.js');
   const plans = read('cloud-server/plans.js');
   const startup = read('start-beatgaler-cloud.ps1');
-  for (const source of [server, session, plans, startup]) {
+  for (const source of [session, plans, startup]) {
     assert.doesNotMatch(source, /\/plans\/dev-switch|BEATGALER_DEV_PLAN_SWITCH|setBasePlanForUser/);
   }
-  assert.match(server, /app\.post\("\/billing\/checkout", webCheckoutHandlers\.create\)/);
-  assert.match(server, /app\.get\("\/plans\/me", createPlanMeHandler/);
-  assert.doesNotMatch(server, /req\.body\?\.plan_id|req\.body\.plan_id/);
 });
 
 test('client exposes only real checkout and no simulated commercial plan control', () => {
