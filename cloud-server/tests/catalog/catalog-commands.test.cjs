@@ -41,18 +41,42 @@ test('rechaza un job de reanudación de 65 caracteres antes de consultar SQL', a
 test('reanuda con el mismo job id cuando mide exactamente 64 caracteres', async () => {
   const operationId = 'o'.repeat(31);
   const revision = '123456789012345678';
+  const jobId = `job-op-${operationId}-resume-${revision}`;
+  const library = { ...LIB, revision };
   const operation = { operation_id: operationId, status: 'CONFLICT', total_frozen: '3', confirmed: '1', not_executed: '0' };
-  const pool = fakePool({ lib: { ...LIB, revision }, onQuery(sql) {
+  const jobs = [];
+  const pool = fakePool({ lib: library, onQuery(sql, params) {
     if (sql.includes('FROM catalog_operations o')) return { rows: [operation] };
     if (sql.startsWith("UPDATE catalog_operations SET status = 'RUNNING'")) operation.status = 'RUNNING';
+    if (sql.startsWith('INSERT INTO catalog_jobs')) jobs.push(params);
+    if (sql.includes('FROM catalog_jobs')) {
+      assert.match(sql, /job_id = \$1 AND user_id = \$2 AND operation_id = \$3/);
+      return { rows: jobs.filter((job) => job[0] === params[0] && job[1] === params[1] && job[3] === params[2]) };
+    }
   } });
+  const service = make(pool);
+  const input = { ...H, userId: 'u1', operationId, revision };
 
-  const result = await make(pool).resumeOperation({ ...H, userId: 'u1', operationId, revision });
+  const result = await service.resumeOperation(input);
 
   assert.equal(result.status, 'RUNNING');
   assert.equal(result.resumed, true);
-  const jobs = pool.statements.filter(({ sql }) => sql.startsWith('INSERT INTO catalog_jobs'));
-  assert.deepEqual(jobs.map(({ params }) => params[0]), [`job-op-${operationId}-resume-${revision}`]);
+  assert.deepEqual(jobs.map(([id]) => id), [jobId]);
+
+  const sinceResume = pool.statements.length;
+  assert.deepEqual(await service.resumeOperation(input), { ...result, replay: true });
+  const newRevision = '123456789012345679';
+  library.revision = newRevision;
+  await assert.rejects(service.resumeOperation({ ...input, revision: newRevision }), {
+    status: 409, code: 'OPERATION_TRANSITION_INVALID', detail: { status: 'RUNNING' },
+  });
+
+  operation.status = 'COMPLETED';
+  operation.confirmed = operation.total_frozen;
+  const replay = await service.resumeOperation(input);
+  assert.deepEqual([replay.status, replay.progress.confirmed, replay.resumed, replay.replay], ['COMPLETED', 3, true, true]);
+  assert.deepEqual(jobs.map(([id]) => id), [jobId]);
+  assert.deepEqual(pool.statements.slice(sinceResume).filter(({ sql }) => /^(UPDATE|INSERT|DELETE)\b/.test(sql)), []);
 });
 
 test('una operación BLOCKED se puede cancelar y rechaza la reanudación con 409', async () => {

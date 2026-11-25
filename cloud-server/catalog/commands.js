@@ -604,7 +604,11 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
     return libraryTx.mutate(userId, { era, epoch }, async ({ client, ctx, uid, enqueue }) => {
       const o = (await client.query(`${OP_SQL} FOR UPDATE OF o`, [uid, operationId])).rows[0];
       if (!o) throw notFound('operation');
-      if (o.status !== 'CONFLICT') throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
+      if (o.status !== 'CONFLICT') {
+        const { rows } = await client.query("SELECT 1 FROM catalog_jobs WHERE job_id = $1 AND user_id = $2 AND operation_id = $3 AND kind = 'OPERATION_STEP'", [jobId, uid, operationId]);
+        if (rows.length) return opDto(o, { resumed: true, replay: true });
+        throw new CatalogQueryError('OPERATION_TRANSITION_INVALID', 409, `operation is ${o.status}`, { status: o.status });
+      }
       if (requestedRevision !== ctx.revision) throw new CatalogQueryError('REVISION_MISMATCH', 409, 'revision provided is not the current one', { current_revision: ctx.revision });
       await client.query(`UPDATE catalog_operations SET status = 'RUNNING', expected_revision = $3::bigint, conflict_batch_seq = NULL WHERE user_id = $1 AND operation_id = $2`, [uid, operationId, ctx.revision]);
       await enqueue({ jobId, kind: 'OPERATION_STEP', operationId, payload: { operationId, resumedAt: ctx.revision } });

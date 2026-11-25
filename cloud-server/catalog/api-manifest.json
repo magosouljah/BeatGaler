@@ -577,8 +577,8 @@
       "path": "/operations/:id/resume",
       "status": "delivered",
       "task": "T07",
-      "body": "{revision (actual, explícita)}",
-      "response": "operation RUNNING",
+      "body": "{revision (explícita; actual para reanudar desde CONFLICT)}",
+      "response": "200 operation RUNNING {resumed:true}; fuera de CONFLICT, si existe el job de reanudación de esa revisión, usuario y operación, 200 operation actual {resumed:true,replay:true} sin escrituras ni otro job",
       "errors": [
         "400 INPUT_INVALID (id o revisión inválidos, o id del job de reanudación >64 caracteres)",
         "409 OPERATION_TRANSITION_INVALID",
