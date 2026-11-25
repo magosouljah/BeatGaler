@@ -1,6 +1,7 @@
 import type { CatalogQueryFilters, CatalogSort } from "./catalogApi";
 import type { CatalogInteractionStore, InteractionQuery, SelectionStatus } from "./catalogInteractionStore";
-import { LEGACY_UNRESOLVABLE_COPY, parseLegacyBgPage, readNavigationState, type createHistoryWriter } from "./catalogNavigation";
+import { LEGACY_UNRESOLVABLE_COPY, createHistoryWriter, parseLegacyBgPage, readNavigationState } from "./catalogNavigation";
+import { playbackFiltersKey } from "./catalogQueryIdentity";
 import type { CatalogPlaybackSession } from "./catalogPlaybackSession";
 import type { CatalogQueryStore, CatalogStoreSnapshot } from "./catalogQueryStore";
 
@@ -10,6 +11,12 @@ interface FilterDraft {
   search: string;
   includedTags: ReadonlySet<string>;
   excludedTags: ReadonlySet<string>;
+}
+
+interface QueryFacets {
+  revision: string;
+  tags: string[];
+  freq: Map<string, number>;
 }
 
 interface QuerySessionPorts {
@@ -23,8 +30,6 @@ interface QuerySessionPorts {
   history: Pick<ReturnType<typeof createHistoryWriter>, "pushQuery" | "replaceAnchor">;
   schedule: (callback: () => void, ms: number) => () => void;
 }
-
-export { playbackFiltersKey } from "./catalogQueryIdentity";
 
 export function createCatalogQuerySession({ store, interaction, playback, history, schedule }: QuerySessionPorts) {
   function start({ snapshot, readSearch, readHistoryState, setDraft, setNotice }: {
@@ -89,7 +94,7 @@ export function createCatalogQuerySession({ store, interaction, playback, histor
     history.replaceAnchor({ filters: snapshot.filters, sort: snapshot.sort, anchor: snapshot.firstOrdinal > 0 ? snapshot.resumeCursor : null });
   }
 
-  function loadFacets(snapshot: CatalogStoreSnapshot, receive: (facets: { revision: string; tags: string[]; freq: Map<string, number> }) => void): (() => void) | undefined {
+  function loadFacets(snapshot: CatalogStoreSnapshot, receive: (facets: QueryFacets) => void): (() => void) | undefined {
     const { revision, provisional, status } = snapshot;
     if (!revision || provisional || !["ready", "empty", "no-results"].includes(status)) return;
     let cancelled = false;
@@ -118,4 +123,139 @@ export function createCatalogQuerySession({ store, interaction, playback, histor
   }
 
   return { start, deferFilters, setSort, syncPlayback, syncRevision, syncQueryHistory, syncAnchor, loadFacets, syncResidentFlags, refreshAfterMutation, reloadLibrary };
+}
+
+interface GalleryQueryView {
+  catalog: CatalogStoreSnapshot;
+  draft: FilterDraft;
+  facets: QueryFacets;
+}
+
+export function createGalleryQuerySession(initialFilters: CatalogQueryFilters) {
+  const history = createHistoryWriter();
+  const listeners = new Set<() => void>();
+  let draft = toDraft(initialFilters);
+  let facets: QueryFacets = { revision: "", tags: [], freq: new Map() };
+  let started = false;
+  let lastQueryKey: string | null = null;
+  let cancelFilters: (() => void) | undefined;
+  let cancelFacets: (() => void) | undefined;
+  let previous: {
+    catalog: CatalogStoreSnapshot;
+    draft: FilterDraft;
+    fallbackRevision: string;
+    revision: string;
+    filtersKey: string;
+    residentKey: string;
+    query: ReturnType<typeof createCatalogQuerySession>;
+  } | null = null;
+
+  function toDraft({ q, includeTags, excludeTags }: CatalogQueryFilters): FilterDraft {
+    return { search: q, includedTags: new Set(includeTags), excludedTags: new Set(excludeTags) };
+  }
+
+  function emit(): void { for (const listener of listeners) listener(); }
+
+  function updateDraft(next: FilterDraft): void {
+    draft = next;
+    emit();
+  }
+
+  function setSearch(search: string): void {
+    if (search !== draft.search) updateDraft({ ...draft, search });
+  }
+
+  function handleTagClick(tag: string, event: { altKey?: boolean }): void {
+    const target = event?.altKey ? "excludedTags" : "includedTags";
+    const opposite = event?.altKey ? "includedTags" : "excludedTags";
+    const toggled = new Set(draft[target]);
+    if (!toggled.delete(tag)) toggled.add(tag);
+    const next = { ...draft, [target]: toggled };
+    if (draft[opposite].has(tag)) {
+      const remaining = new Set(draft[opposite]);
+      remaining.delete(tag);
+      next[opposite] = remaining;
+    }
+    updateDraft(next);
+  }
+
+  function clearTagFilters(): void {
+    updateDraft({ ...draft, includedTags: new Set(), excludedTags: new Set() });
+  }
+
+  function bind({ store, interaction, playback }: Pick<QuerySessionPorts, "interaction" | "playback"> & { store: CatalogQueryStore }) {
+    const query = createCatalogQuerySession({
+      store, interaction, playback, history,
+      schedule(callback, ms) {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
+    });
+    let view: GalleryQueryView | undefined;
+    function getSnapshot(): GalleryQueryView {
+      const catalog = store.getSnapshot();
+      if (!view || view.catalog !== catalog || view.draft !== draft || view.facets !== facets) {
+        view = { catalog, draft, facets };
+      }
+      return view;
+    }
+
+    function subscribe(listener: () => void): () => void {
+      const unsubscribe = store.subscribe(listener);
+      listeners.add(listener);
+      return () => { unsubscribe(); listeners.delete(listener); };
+    }
+
+    // El store puede publicar varias veces antes de que React confirme un render.
+    // Las reacciones usan esa vista confirmada y conservan el orden de los efectos originales.
+    function commit({ catalog, draft }: GalleryQueryView, publishedQuery: InteractionQuery, fallbackRevision: string, setNotice: (notice: string) => void): void {
+      const { revision } = publishedQuery;
+      const filtersKey = playbackFiltersKey(catalog.filters);
+      const residentKey = `${catalog.firstOrdinal}:${catalog.endOrdinal}:${catalog.queryGeneration}`;
+      const before = previous;
+      const old = before?.catalog;
+      const serviceChanged = before?.query !== query;
+      previous = { catalog, draft, fallbackRevision, revision, filtersKey, residentKey, query };
+
+      if (!started) {
+        started = true;
+        query.start({
+          snapshot: catalog,
+          readSearch: () => typeof window !== "undefined" ? window.location.search : "",
+          readHistoryState: () => typeof window !== "undefined" ? window.history.state : null,
+          setDraft: (filters) => updateDraft(toDraft(filters)),
+          setNotice,
+        });
+      }
+      if (old?.queryKey !== catalog.queryKey || old.status !== catalog.status) {
+        lastQueryKey = query.syncQueryHistory(catalog, lastQueryKey);
+      }
+      if (old?.resumeCursor !== catalog.resumeCursor || old.status !== catalog.status) query.syncAnchor(catalog);
+      if (!before || serviceChanged || before.fallbackRevision !== fallbackRevision ||
+          before.draft.search !== draft.search || before.draft.includedTags !== draft.includedTags ||
+          before.draft.excludedTags !== draft.excludedTags) {
+        cancelFilters?.();
+        cancelFilters = query.deferFilters(draft, fallbackRevision);
+      }
+      if (before?.filtersKey !== filtersKey || old?.sort !== catalog.sort || before.revision !== revision) query.syncPlayback(publishedQuery);
+      if (serviceChanged || old?.revision !== catalog.revision) query.syncRevision(catalog.revision);
+      if (serviceChanged || old?.revision !== catalog.revision || old.status !== catalog.status || old.provisional !== catalog.provisional) {
+        cancelFacets?.();
+        cancelFacets = query.loadFacets(catalog, (next) => { facets = next; emit(); });
+      }
+      if (serviceChanged || before?.residentKey !== residentKey) query.syncResidentFlags(catalog.blocks);
+    }
+
+    const { setSort, refreshAfterMutation, reloadLibrary } = query;
+    return { subscribe, getSnapshot, commit, setSort, refreshAfterMutation, reloadLibrary };
+  }
+
+  function dispose(): void {
+    history.cancelPending();
+    cancelFilters?.();
+    cancelFacets?.();
+    previous = null;
+  }
+
+  return { bind, dispose, setSearch, handleTagClick, clearTagFilters };
 }
