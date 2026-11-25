@@ -1,7 +1,6 @@
-// Caracterización M7.7b: contrato combinado de los DOS parches de `window.fetch`
-// (webSession.installWebCredentialedFetchBoundary + webCsrfFetchCoordinator) instalados en el
-// MISMO orden que producción: webSession se evalúa al importar (interno), main.tsx llama después a
-// installWebCsrfFetchCoordinator() (externo). Cadena: coordinador -> frontera de credenciales -> fetch nativo.
+// Caracterización M7.7b (fijada en 1357aab con los DOS parches antiguos; desde M7.7b los instala uno solo,
+// webFetchBoundary.installWebFetchBoundary). Cadena: coordinador CSRF -> frontera de credenciales (solo Web) -> fetch nativo.
+// Las aserciones son el contrato: no se cambian al refactorizar.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WEB_CSRF_SESSION_KEY } from "../../src/features/auth/webSessionBootstrap";
 
@@ -23,12 +22,11 @@ const origin = () => window.location.origin;
 
 async function installLikeProduction(): Promise<void> {
   vi.resetModules();
-  delete (window as any).__beatgalerCredentialedFetchInstalled;
-  delete (window as any).__beatgalerCsrfFetchCoordinatorInstalled;
+  delete (window as any).__beatgalerWebFetchBoundaryInstalled;
   window.fetch = native as unknown as typeof window.fetch;
-  await import("../../src/features/auth/webSession"); // instala la frontera interna al importar
-  const { installWebCsrfFetchCoordinator } = await import("../../src/features/auth/webCsrfFetchCoordinator");
-  installWebCsrfFetchCoordinator(); // como main.tsx, después
+  await import("../../src/features/auth/webSession"); // instala el parche único al importar
+  const { installWebFetchBoundary } = await import("../../src/features/auth/webFetchBoundary");
+  installWebFetchBoundary(); // como main.tsx, después (no-op)
 }
 
 beforeEach(async () => {
@@ -46,8 +44,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete (document as any).cookie;
-  delete (window as any).__beatgalerCredentialedFetchInstalled;
-  delete (window as any).__beatgalerCsrfFetchCoordinatorInstalled;
+  delete (window as any).__beatgalerWebFetchBoundaryInstalled;
   window.fetch = originalFetch;
   vi.restoreAllMocks();
 });
@@ -351,17 +348,16 @@ describe("cadena de parches de fetch (orden de producción)", () => {
     it("reinstalar ambos parches (mismas banderas) no apila capas ni cambia window.fetch", async () => {
       cookieHeader = `${CSRF_COOKIE}=csrf-A`;
       const patched = window.fetch;
-      const { installWebCsrfFetchCoordinator } = await import("../../src/features/auth/webCsrfFetchCoordinator");
-      installWebCsrfFetchCoordinator();
-      installWebCsrfFetchCoordinator();
+      const { installWebFetchBoundary } = await import("../../src/features/auth/webFetchBoundary");
+      installWebFetchBoundary();
+      installWebFetchBoundary();
       vi.resetModules();
       await import("../../src/features/auth/webSession"); // 2.ª evaluación: bandera ya puesta
       expect(window.fetch).toBe(patched);
       nativeResponses = [() => json(403, { code: "CSRF_REQUIRED" }), () => json(200, {})];
       await window.fetch(`${origin()}/beatgaler-api/x`, { method: "POST" });
       expect(native).toHaveBeenCalledTimes(2); // 1 + 1 reintento, no más
-      expect((window as any).__beatgalerCsrfFetchCoordinatorInstalled).toBe(true);
-      expect((window as any).__beatgalerCredentialedFetchInstalled).toBe(true);
+      expect((window as any).__beatgalerWebFetchBoundaryInstalled).toBe(true);
     });
   });
 

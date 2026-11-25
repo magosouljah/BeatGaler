@@ -58,7 +58,7 @@ describe("task 9.3 startup bootstrap extraction", () => {
   // webGalleryDirectAuthBoundary.test.tsx y catalogDirect.test.ts («preconexión»). Aquí solo queda el cableado de entrada.
   it("keeps public startup isolated and mounts the Gallery workspace only behind the confirmed account", () => {
     expect(main).toContain("installStartupTrace();");
-    expect(main).toContain("installWebCsrfFetchCoordinator();");
+    expect(main).toContain("installWebFetchBoundary();");
     expect(main).toContain('import WebExperience from "./app/WebExperience";');
     expect(main).toContain('platform.kind === "web" ? <WebExperience />');
     expect(main).not.toContain("preconnectRememberedWebDirect();");

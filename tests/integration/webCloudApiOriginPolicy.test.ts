@@ -12,13 +12,13 @@ describe("Web Cloud API origin policy", () => {
     vi.restoreAllMocks();
     window.localStorage.clear();
     window.sessionStorage.clear();
-    delete (window as Window & { __beatgalerCredentialedFetchInstalled?: boolean }).__beatgalerCredentialedFetchInstalled;
+    delete (window as Window & { __beatgalerWebFetchBoundaryInstalled?: boolean }).__beatgalerWebFetchBoundaryInstalled;
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
   afterEach(() => {
     window.fetch = originalFetch;
-    delete (window as Window & { __beatgalerCredentialedFetchInstalled?: boolean }).__beatgalerCredentialedFetchInstalled;
+    delete (window as Window & { __beatgalerWebFetchBoundaryInstalled?: boolean }).__beatgalerWebFetchBoundaryInstalled;
     vi.doUnmock("../../src/platform");
   });
 
