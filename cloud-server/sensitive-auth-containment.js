@@ -43,7 +43,6 @@ function installSensitiveAuthContainment(express, runtime, { pool = null } = {})
   const application = express?.application;
   if (!application || !runtime || application.__beatgalerSensitiveAuthContainmentInstalled) return;
   application.__beatgalerSensitiveAuthContainmentInstalled = true;
-  const previousPost = application.post;
 
   function sessionInfo(req) {
     try { return runtime._test.sessionInfoFromRequest(req); }
@@ -133,25 +132,32 @@ function installSensitiveAuthContainment(express, runtime, { pool = null } = {})
     next();
   }
 
-  application.post = function sensitiveAuthPost(routePath, ...handlers) {
+  application.__beatgalerSensitiveAuthContainmentPost = function sensitiveAuthPost(routePath, handlers) {
+    const { next } = this;
     const pathName = String(routePath || '');
     if (pathName === '/auth/email/change') {
-      return previousPost.call(this, routePath, blockLegacyEmailChange, ...handlers);
+      return next(routePath, blockLegacyEmailChange, ...handlers);
     }
     if (pathName === '/auth/password/change') {
-      return previousPost.call(this, routePath, protectPasswordChange, ...handlers);
+      return next(routePath, protectPasswordChange, ...handlers);
     }
     if (pathName === '/auth/oauth/start') {
-      return previousPost.call(this, routePath, protectProviderLink, ...handlers);
+      return next(routePath, protectProviderLink, ...handlers);
     }
     if (pathName === '/auth/oauth/disconnect') {
-      return previousPost.call(this, routePath, protectProviderUnlink, ...handlers);
+      return next(routePath, protectProviderUnlink, ...handlers);
     }
-    return previousPost.call(this, routePath, ...handlers);
+    return next(routePath, ...handlers);
   };
 }
 
+function wrapSensitiveAuthContainmentPost(routePath, handlers) {
+  const register = this.app.__beatgalerSensitiveAuthContainmentPost;
+  return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
+}
+
 module.exports = {
+  wrapSensitiveAuthContainmentPost,
   normalizedEmail,
   passwordMaterial,
   hasVerifiedUniqueEmail,

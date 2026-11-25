@@ -284,20 +284,25 @@ function installProviderReauthRoutes(express, coordinator) {
   const application = express?.application;
   if (!application || application.__beatgalerD8ProviderReauthRoutesInstalled) return;
   application.__beatgalerD8ProviderReauthRoutesInstalled = true;
-  const previousPost = application.post;
-  const previousGet = application.get;
+  application.__beatgalerD8ProviderReauthCoordinator = coordinator;
+}
 
-  application.post = function patchedD8ProviderReauthPost(routePath, ...handlers) {
-    const pathName = String(routePath || '');
-    if (pathName === '/auth/oauth/start') return previousPost.call(this, routePath, coordinator.start, ...handlers);
-    if (pathName === '/auth/oauth/poll') return previousPost.call(this, routePath, coordinator.poll, ...handlers);
-    return previousPost.call(this, routePath, ...handlers);
-  };
-  application.get = function patchedD8ProviderReauthGet(routePath, ...handlers) {
-    const pathName = String(routePath || '');
-    if (pathName === '/auth/oauth/:provider/callback') return previousGet.call(this, routePath, coordinator.callback, ...handlers);
-    return previousGet.call(this, routePath, ...handlers);
-  };
+function wrapD8ProviderReauthPost(routePath, handlers) {
+  const { app, next } = this;
+  const coordinator = app.__beatgalerD8ProviderReauthCoordinator;
+  const pathName = String(routePath || '');
+  if (coordinator && pathName === '/auth/oauth/start') return next(routePath, coordinator.start, ...handlers);
+  if (coordinator && pathName === '/auth/oauth/poll') return next(routePath, coordinator.poll, ...handlers);
+  return next(routePath, ...handlers);
+}
+
+function wrapD8ProviderReauthGet(routePath, handlers) {
+  const { app, next } = this;
+  const coordinator = app.__beatgalerD8ProviderReauthCoordinator;
+  if (coordinator && String(routePath || '') === '/auth/oauth/:provider/callback') {
+    return next(routePath, coordinator.callback, ...handlers);
+  }
+  return next(routePath, ...handlers);
 }
 
 function applyD8RoResolutions(express, runtime, options = {}) {
@@ -313,6 +318,8 @@ module.exports = {
   installImmediateAccountDeletion,
   createProviderReauthCoordinator,
   installProviderReauthRoutes,
+  wrapD8ProviderReauthPost,
+  wrapD8ProviderReauthGet,
   applyD8RoResolutions,
   OAUTH_FLOW_TTL_MS,
 };

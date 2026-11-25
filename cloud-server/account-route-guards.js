@@ -4,6 +4,13 @@ const { wrapRuntimeUse } = require('./runtime-operability');
 const { wrapSecurityHeadersUse } = require('./security-headers');
 const { wrapSessionSecurityUse, wrapSessionSecurityPost } = require('./session-security');
 const { wrapLifecycleRequestGuardUse } = require('./account-lifecycle-request-guard');
+const { wrapLegacyMediaUploadPost } = require('./legacy-media-upload-disable');
+const { wrapAuthPublicRegistrationPost, wrapAuthPublicRegistrationGet } = require('./auth-public-registration-hardening');
+const { wrapPendingSignupPost } = require('./pending-signup-boundary');
+const { wrapAccountLifecyclePost } = require('./account-lifecycle');
+const { wrapStagedEmailChangePost } = require('./staged-email-change-routes');
+const { wrapSensitiveAuthContainmentPost } = require('./sensitive-auth-containment');
+const { wrapD8ProviderReauthPost, wrapD8ProviderReauthGet } = require('./d8-ro-resolutions');
 const { wrapHttpContainmentPost, wrapHttpContainmentGet } = require('./http-containment');
 const { wrapDirectCapabilityPost } = require('./direct-capability-boundary');
 const { wrapSensitiveAuthCapabilityRevocationPost } = require('./sensitive-auth-capability-revocation');
@@ -11,13 +18,21 @@ const { wrapDurableAuthAbusePost } = require('./auth-durable-abuse-controls');
 const { wrapAuthAbusePost } = require('./auth-abuse-controls');
 const { wrapProductiveTempAuthPost } = require('./productive-temp-auth-boundary');
 
-// Each wrap delegates to the entries installed before it. The POST/GET suffix
-// delegates to the earlier prototype guards through the original app methods.
+// Each guard delegates to the entries installed before it, ending at the original Express method.
 const ROUTE_GUARD_TABLE = Object.freeze([
   { id: 'runtime-operability', method: 'use', wrap: wrapRuntimeUse },
   { id: 'security-headers', method: 'use', wrap: wrapSecurityHeadersUse },
   { id: 'session-security', method: 'use', wrap: wrapSessionSecurityUse },
   { id: 'account-lifecycle-request-guard', method: 'use', wrap: wrapLifecycleRequestGuardUse },
+  { id: 'legacy-media-upload-disable', method: 'post', wrap: wrapLegacyMediaUploadPost },
+  { id: 'auth-public-registration-hardening', method: 'post', wrap: wrapAuthPublicRegistrationPost },
+  { id: 'auth-public-registration-hardening', method: 'get', wrap: wrapAuthPublicRegistrationGet },
+  { id: 'pending-signup-boundary', method: 'post', wrap: wrapPendingSignupPost },
+  { id: 'account-lifecycle', method: 'post', wrap: wrapAccountLifecyclePost },
+  { id: 'staged-email-change-routes', method: 'post', wrap: wrapStagedEmailChangePost },
+  { id: 'sensitive-auth-containment', method: 'post', wrap: wrapSensitiveAuthContainmentPost },
+  { id: 'd8-ro-resolutions', method: 'post', wrap: wrapD8ProviderReauthPost },
+  { id: 'd8-ro-resolutions', method: 'get', wrap: wrapD8ProviderReauthGet },
   { id: 'session-security', method: 'post', wrap: wrapSessionSecurityPost },
   { id: 'http-containment', method: 'post', wrap: wrapHttpContainmentPost },
   { id: 'http-containment', method: 'get', wrap: wrapHttpContainmentGet },
@@ -28,8 +43,7 @@ const ROUTE_GUARD_TABLE = Object.freeze([
   { id: 'productive-temp-auth-boundary', method: 'post', wrap: wrapProductiveTempAuthPost },
 ]);
 
-// These routes are registered on the first app.post(), by the earlier prototype
-// guards and the session-security table entry.
+// These routes are registered on the first app.post() by the corresponding guards.
 const SELF_REGISTERED_ROUTES = Object.freeze([
   '/auth/signup/verify',
   '/auth/signup/resend',

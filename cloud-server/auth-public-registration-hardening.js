@@ -315,25 +315,24 @@ function installAuthPublicRegistrationHardening(express, {
     next();
   }
 
-  const previousPost = application.post;
-  const previousGet = application.get;
-
-  application.post = function hardenedAuthPost(routePath, ...handlers) {
+  application.__beatgalerAuthPublicRegistrationPost = function hardenedAuthPost(routePath, handlers) {
+    const { next } = this;
     const pathName = String(routePath || '');
     const extras = [];
     if (pathName.startsWith('/auth/')) extras.push((req, res, next) => sanitizeAuthJson(pathName, req, res, next));
     if (pathName === '/auth/login') extras.push(emailOnlyLogin);
     if (pathName === '/auth/oauth/start') extras.push(decorateOAuthStart);
     if (pathName === '/auth/oauth/disconnect') extras.push(disconnectProvider);
-    return previousPost.call(this, routePath, ...extras, ...handlers);
+    return next(routePath, ...extras, ...handlers);
   };
 
-  application.get = function hardenedAuthGet(routePath, ...handlers) {
+  application.__beatgalerAuthPublicRegistrationGet = function hardenedAuthGet(routePath, handlers) {
+    const { next } = this;
     const pathName = String(routePath || '');
     if (pathName === '/auth/oauth/:provider/callback') {
-      return previousGet.call(this, routePath, oauthCallbackContext, sanitizeOAuthHtml, ...handlers);
+      return next(routePath, oauthCallbackContext, sanitizeOAuthHtml, ...handlers);
     }
-    return previousGet.call(this, routePath, ...handlers);
+    return next(routePath, ...handlers);
   };
 
   if (!globalThis[FETCH_PATCH] && typeof globalThis.fetch === 'function') {
@@ -444,7 +443,19 @@ function installAuthPublicRegistrationHardening(express, {
   }
 }
 
+function wrapAuthPublicRegistrationPost(routePath, handlers) {
+  const register = this.app.__beatgalerAuthPublicRegistrationPost;
+  return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
+}
+
+function wrapAuthPublicRegistrationGet(routePath, handlers) {
+  const register = this.app.__beatgalerAuthPublicRegistrationGet;
+  return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
+}
+
 module.exports = {
+  wrapAuthPublicRegistrationGet,
+  wrapAuthPublicRegistrationPost,
   installAuthPublicRegistrationHardening,
   normalizeEmail,
   validEmail,

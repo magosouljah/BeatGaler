@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { mountAccountRouteGuards } = require('../account-route-guards');
 const {
   normalizeEmail,
   validEmail,
@@ -266,6 +267,7 @@ const passwordChecks = (async () => {
       async prepareDisconnect(input) { calls.push(input); return { ok: true }; },
     }),
   });
+  mountAccountRouteGuards(app);
   app.post('/auth/oauth/disconnect', () => {});
   const middleware = routes.get('/auth/oauth/disconnect')[1];
   await new Promise((resolve, reject) => {
@@ -282,6 +284,7 @@ const passwordChecks = (async () => {
     getAccountLifecycle: () => ({ _test: { accountsSnapshot: () => ({ users: [{ id: 'usr_stable', email: 'old@example.com' }] }) } }),
     getAuthPool: () => ({ async query() { queries += 1; return { rows: [] }; } }),
   });
+  mountAccountRouteGuards(loginApp);
   loginApp.post('/auth/login', () => {});
   const loginGuard = loginRoutes.get('/auth/login')[1];
   const loginResult = await new Promise(resolve => {

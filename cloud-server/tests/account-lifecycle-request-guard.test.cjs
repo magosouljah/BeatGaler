@@ -75,15 +75,6 @@ async function main() {
     assert.equal(nextCalled, true, 'public requests without a bearer remain reachable');
   }
 
-  const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
-  const sessionInstall = serverSource.indexOf('installSessionSecurity(express');
-  const lifecycleGuardInstall = serverSource.indexOf('installLifecycleRequestGuard(express');
-  const roResolutionInstall = serverSource.indexOf('applyD8RoResolutions(express');
-  assert.ok(sessionInstall >= 0 && lifecycleGuardInstall > sessionInstall,
-    'lifecycle guard must be installed after SessionSecurity so Web cookies/rotation aliases are normalized first');
-  assert.ok(roResolutionInstall >= 0 && roResolutionInstall < sessionInstall,
-    'D8 RO OAuth route interception must register before server-core while SessionSecurity still normalizes requests at runtime');
-
   {
     const express = { application: { use: registerMiddleware } };
     installSessionSecurity(express, { dataDir: dir, now: () => now });

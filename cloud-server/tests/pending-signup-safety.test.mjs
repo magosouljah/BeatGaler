@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const { mountAccountRouteGuards } = require('../account-route-guards');
 const { createPendingSignupService } = require('../pending-signup-service');
 const { hashPassword } = require('../password-kdf');
 const {
@@ -386,6 +387,7 @@ assert.equal(retryDelay(100), 3_600_000);
     activation: async () => { activations += 1; return { status: 'ACTIVE', account: { token: 'session', user: { id: 'usr_1' } } }; },
     env: { BEATGALER_PUBLIC_REGISTRATION: '0' },
   });
+  mountAccountRouteGuards(app);
   app.post('/auth/register', () => {});
   const result = await new Promise(resolve => {
     const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { resolve(body); } };
@@ -409,6 +411,7 @@ assert.equal(retryDelay(100), 3_600_000);
       : { status: 'ACTIVE', session_required: true }; },
     env: { BEATGALER_PUBLIC_REGISTRATION: '0' },
   });
+  mountAccountRouteGuards(app);
   app.post('/auth/register', () => {});
   async function poll() {
     return new Promise(resolve => {
@@ -433,6 +436,7 @@ assert.equal(retryDelay(100), 3_600_000);
     },
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
+  mountAccountRouteGuards(app);
   app.post('/auth/register', () => {});
   const headers = new Map();
   const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; },
@@ -460,6 +464,7 @@ assert.equal(retryDelay(100), 3_600_000);
       expires_at: new Date(Date.now() + 60_000).toISOString() }; } },
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
+  mountAccountRouteGuards(app);
   app.post('/auth/register', () => {});
   const headers = new Map();
   const res = { statusCode: 200, status(code) { this.statusCode = code; return this; },
@@ -487,6 +492,7 @@ assert.equal(retryDelay(100), 3_600_000);
     activation: async () => ({ status: 'ACTIVE', account: { token: 'session', user: { id: 'usr_1' } } }),
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
+  mountAccountRouteGuards(app);
   app.post('/auth/register', () => {});
   const response = () => {
     const headers = new Map();
@@ -518,6 +524,7 @@ assert.equal(retryDelay(100), 3_600_000);
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
   const app = express();
+  mountAccountRouteGuards(app);
   app.post('/webhooks/polar', (_req, res) => res.sendStatus(204));
   app.use(express.json({ limit: '256kb' }));
   const server = app.listen(0, '127.0.0.1');

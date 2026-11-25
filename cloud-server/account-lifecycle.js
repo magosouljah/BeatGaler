@@ -819,7 +819,6 @@ function installAccountLifecycle(express, options = {}) {
   application.__beatgalerAccountLifecycleRuntime = runtime;
   runtime.installPersistenceFilter();
   passwordKdf.setPasswordAuthorityResolver?.(userId => runtime.passwordOverrideForUser(userId));
-  const previousPost = application.post;
 
   function ensureManagementRoutes(app) {
     if (app.__beatgalerAccountLifecycleRoutesInstalled || app.__beatgalerAccountLifecycleRoutesInstalling) return;
@@ -854,8 +853,9 @@ function installAccountLifecycle(express, options = {}) {
     }
   }
 
-  application.post = function patchedAccountLifecyclePost(routePath, ...handlers) {
-    if (!this.__beatgalerAccountLifecycleRoutesInstalling) ensureManagementRoutes(this);
+  application.__beatgalerAccountLifecyclePost = function patchedAccountLifecyclePost(routePath, handlers) {
+    const { app, next } = this;
+    if (!app.__beatgalerAccountLifecycleRoutesInstalling) ensureManagementRoutes(app);
     const pathName = String(routePath || '');
     const extras = [];
     if (pathName.startsWith('/auth/')) {
@@ -872,12 +872,18 @@ function installAccountLifecycle(express, options = {}) {
     if (USER_DECORATION_ROUTES.has(pathName) || NOTIFICATION_ROUTES.has(pathName) || pathName === '/auth/mfa/enable') {
       extras.push((req, res, next) => runtime._test.responseDecorator(pathName, req, res, next));
     }
-    return previousPost.call(this, routePath, ...extras, ...handlers);
+    return next(routePath, ...extras, ...handlers);
   };
   return runtime;
 }
 
+function wrapAccountLifecyclePost(routePath, handlers) {
+  const register = this.app.__beatgalerAccountLifecyclePost;
+  return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
+}
+
 module.exports = {
+  wrapAccountLifecyclePost,
   installAccountLifecycle,
   createAccountLifecycleRuntime,
   RECOVERY_PREFIX,
