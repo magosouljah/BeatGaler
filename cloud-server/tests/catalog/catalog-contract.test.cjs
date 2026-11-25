@@ -128,7 +128,7 @@ test('E77: sin rutas ni métodos de transporte de bytes en el Cloud; el módulo 
   const gateway = require('../../catalog/transport-gateway.js');
   const g = gateway.createTelegramGateway({ client: { invoke: async () => ({}) }, sdk: { Api: {}, bigInt: () => 0 }, senderId: '20', resolvePeer: async () => ({}) });
   assert.deepEqual(Object.keys(g).filter((k) => typeof g[k] === 'function').sort(), ['deleteMessage', 'probeAbsence', 'searchByRandomId', 'verifyMessage'], 'el gateway solo expone RPC de metadatos');
-  const runtime = ['server.js', 'server-core.js', 'catalog-worker.js', 'catalog-gateway-runtime.js', ...fs.readdirSync(path.join(__dirname, '..', '..', 'catalog')).filter((f) => f.endsWith('.js')).map((f) => path.join('catalog', f))];
+  const runtime = ['catalog-worker.js', 'catalog-gateway-runtime.js', ...fs.readdirSync(path.join(__dirname, '..', '..', 'catalog')).filter((f) => f.endsWith('.js')).map((f) => path.join('catalog', f))];
   for (const f of runtime) assert.equal(read(f).split(/\r?\n/).filter((l) => !l.trim().startsWith('//')).join(' ').includes('telegram-file-io'), false, `${f} no debe cargar el módulo de operador`);
   const manifest = JSON.parse(read('catalog', 'api-manifest.json'));
   assert.equal(manifest.endpoints.some((e) => ['/transfer/upload', '/media/', '/capability'].some((x) => e.path.includes(x)) || e.path.endsWith('/project')), false, 'el manifiesto no declara rutas de bytes');
@@ -168,23 +168,47 @@ test('E77: el router montado rechaza las rutas retiradas de bytes', async (t) =>
   }
 });
 
-test('T25: INDEX retirado del runtime — ni rutas legacy de INDEX/transporte/bytes ni módulos INDEX cargados por el servidor', () => {
+test('T25: INDEX retirado del runtime — el Cloud arrancado no atiende rutas legacy de INDEX/transporte/bytes ni carga módulos INDEX', async () => {
+  const { account, withCloud } = require('../helpers/composition-cloud.cjs');
   const root = path.join(__dirname, '..', '..');
-  const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
-  const code = (f) => read(f).split(/\r?\n/).filter((l) => !l.trim().startsWith('//')).join('\n');
-  const core = code('server-core.js'); const server = code('server.js');
   const RETIRED = ['/transport/index/', '/transport/project/', '/transport/session/', '/transport/operation/', '/transport/quota/', '/transport/topic/',
     '/transport/trash/', '/transport/upload/', '/transport/routing/', '/library/upsert', '/library/get', '/library/artwork', '/library/move-to-trash-batch',
     '/library/cleanup-garbage', '/metadata/upsert', '/metadata/artwork', '/beats/upload', '/beats/download', '/beats/stream', '/beats/delete-topic',
     '/cloud-files/upload', '/projects/upload'];
-  const calls = [...core.matchAll(/app\.(get|post|put|patch|delete|use)\(\s*["'`]([^"'`]+)/g)].map((m) => m[2]);
-  assert.ok(calls.length > 10, 'inventario de rutas de server-core');
-  for (const r of RETIRED) assert.equal(calls.some((p) => p.startsWith(r)), false, `server-core.js registra ${r}`);
-  for (const m of ['library-index-publication', 'vault-index-pointer-store', 'startup-routing-index', 'atomic-library-index', 'direct-index-pin-authority',
-    'project-upload-route', 'project-upload-admission', 'project-upload-authority', 'library-beat-quota', 'library-trash-assets']) {
-    assert.equal(fs.existsSync(path.join(root, `${m}.js`)), false, `${m}.js debe estar eliminado`);
-    assert.equal(core.includes(`./${m}`) || server.includes(`./${m}`), false, `el runtime no debe cargar ${m}`);
-  }
-  for (const s of ['ensureAll()', 'recoverAll()', 'publishIndexBuffer', 'UpdatePinnedMessage']) assert.equal(server.includes(s) || core.includes(s), false, `arranque/rutas sin ${s}`);
+  const MODULES = ['library-index-publication', 'vault-index-pointer-store', 'startup-routing-index', 'atomic-library-index', 'direct-index-pin-authority',
+    'project-upload-route', 'project-upload-admission', 'project-upload-authority', 'library-beat-quota', 'library-trash-assets'];
+  for (const m of MODULES) assert.equal(fs.existsSync(path.join(root, `${m}.js`)), false, `${m}.js debe estar eliminado`);
+  const browser = { 'x-beatgaler-client': 'web', origin: 'http://127.0.0.1', host: '127.0.0.1' };
+  await withCloud(async (_app, send) => {
+    // El arranque real no importa módulos INDEX ni el módulo de operador, y no intenta ninguna red
+    // (el guard de red de withCloud falla si arranque/rutas llamasen a Telegram, p. ej. UpdatePinnedMessage).
+    const loaded = Object.keys(require.cache).map((f) => path.basename(f, '.js'));
+    for (const m of [...MODULES, 'telegram-file-io']) assert.equal(loaded.includes(m), false, `el runtime no debe cargar ${m}`);
+
+    const login = await send('POST', '/auth/login', {
+      headers: browser, body: { email: account.email, password: account.password, beatgalerUserId: account.beatgalerUserId },
+    });
+    assert.equal(login.status, 200);
+    const session = {
+      ...browser,
+      cookie: login.headers['set-cookie'].map((c) => c.split(';', 1)[0]).join('; '),
+      'x-beatgaler-csrf': JSON.parse(login.data).csrf_token,
+      'x-beatgaler-installation-id': account.beatgalerUserId,
+    };
+    const outcome = async (method, url, headers) => {
+      const r = await send(method, url, { headers, body: method === 'POST' ? {} : undefined });
+      return { status: r.status, type: r.headers['content-type'], body: r.headers['content-type']?.startsWith('application/json') ? r.data : 'text' };
+    };
+    // Una ruta retirada responde igual que una ruta que nunca existió (mismo guard y mismo fallback).
+    for (const [label, headers] of [['sin sesión', browser], ['con sesión', session]]) {
+      for (const method of ['GET', 'POST']) {
+        const unknown = await outcome(method, '/zz-never-existed/x', headers);
+        for (const r of RETIRED) {
+          const url = r.endsWith('/') ? `${r}x` : r;
+          assert.deepEqual(await outcome(method, url, headers), unknown, `${method} ${url} ${label} conserva un handler`);
+        }
+      }
+    }
+  });
 });
 

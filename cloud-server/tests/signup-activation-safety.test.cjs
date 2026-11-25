@@ -18,11 +18,10 @@ const {
   storageGroupMatchesAccount,
 } = require('../master-storage');
 const {
-  REQUIRED_MARKERS,
-  validateCoreSource,
   bridgeSuffix,
 } = require('../server-core-auth-bridge-loader');
 const { emailHash } = require('../email-verification-authority');
+const { account, withCloud } = require('./helpers/composition-cloud.cjs');
 
 async function main() {
   assert.equal(stableUserId('psu_abc'), stableUserId('psu_abc'));
@@ -43,14 +42,40 @@ async function main() {
   }
 
   {
-    const core = fs.readFileSync(path.join(__dirname, '..', 'server-core.js'), 'utf8');
-    assert.equal(validateCoreSource(core), true);
-    for (const marker of REQUIRED_MARKERS) assert.equal(core.includes(marker), true);
     const suffix = bridgeSuffix();
     assert.equal(suffix.includes('__beatgalerAuthBridge'), true);
     assert.equal(suffix.includes('app.post('), false, 'activation bridge must not create a hidden HTTP route');
     assert.equal(suffix.includes('invokeLegacy'), false, 'activation bridge must not call legacy auth handlers');
   }
+
+  await withCloud(async (_app, send) => {
+    // Cloud carga el server-core REAL a través del cargador: si cambia un
+    // marcador o el parche es ambiguo, el arranque falla antes de llegar aquí.
+    const bridge = require('../server-core').__beatgalerAuthBridge;
+    for (const name of ['userIdByUsername', 'adoptIdentityUser', 'setUsernameByUserId', 'adoptOrCreatePasswordUser', 'disconnectProviderByUserId']) {
+      assert.equal(typeof bridge?.[name], 'function', `bridge.${name}`);
+    }
+    assert.equal(bridge.userIdByUsername(account.username), account.id);
+
+    const adopted = bridge.adoptIdentityUser({ id: 'usr_adopted', username: 'adopted_one', email: 'adopted@example.test' });
+    assert.deepEqual(adopted, { userId: 'usr_adopted', username: 'adopted_one', storageReady: false });
+    assert.equal(bridge.userIdByUsername('adopted_one'), 'usr_adopted');
+    assert.throws(() => bridge.adoptIdentityUser({ id: 'usr_other', username: 'adopted_one' }),
+      error => error?.code === 'AUTH_BRIDGE_USERNAME_CONFLICT');
+    assert.deepEqual(bridge.setUsernameByUserId('usr_adopted', 'renamed_one'), { found: true, userId: 'usr_adopted', username: 'renamed_one' });
+    bridge.disconnectProviderByUserId('usr_adopted', 'x');
+    const saved = JSON.parse(fs.readFileSync(path.join(process.env.BEATGALER_STATE_DIR, 'accounts-data.json'), 'utf8')).users;
+    assert.deepEqual(saved.map(user => user.id).sort(), ['usr_adopted', account.id]);
+    assert.equal(saved.find(user => user.id === 'usr_adopted').username, 'renamed_one');
+
+    const browser = { 'x-beatgaler-client': 'web', origin: 'http://127.0.0.1', host: '127.0.0.1' };
+    const login = identifier => send('POST', '/auth/login', {
+      headers: browser,
+      body: { identifier, password: account.password, beatgalerUserId: account.beatgalerUserId },
+    });
+    assert.equal((await login(account.email)).status, 200, 'login resolves the account by email');
+    assert.equal((await login(account.username)).status, 401, 'login must not resolve accounts by username');
+  });
 
   {
     const heldLocks = new Set();

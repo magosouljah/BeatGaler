@@ -11,9 +11,6 @@ const main = read("src/main.tsx");
 const webSession = read("src/features/auth/webSession.ts");
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
 const capabilities = JSON.parse(read("src-tauri/capabilities/default.json"));
-const serverCore = read("cloud-server/server-core.js");
-const server = read("cloud-server/server.js");
-const headers = read("cloud-server/security-headers.js");
 const tempAuthBoundary = read("cloud-server/productive-temp-auth-boundary.js");
 
 if (!vite.includes("beatgaler-productive-trust-boundary")) fail("productive Vite trust-boundary transform is missing");
@@ -50,12 +47,7 @@ for (const forbidden of ["fs:default", "fs:allow-create", "fs:allow-rename", "fs
   if (permissions.has(forbidden)) fail(`unnecessary filesystem permission returned: ${forbidden}`);
 }
 
-if (!serverCore.includes("BEATGALER_ALLOWED_ORIGINS")) fail("Cloud CORS allowlist disappeared");
-if (serverCore.includes("Access-Control-Allow-Credentials")) fail("Cloud CORS must not enable credentialed cookies");
-if (!server.includes("installSecurityHeaders(express)")) fail("API security-header bootstrap is not installed");
-for (const header of ["X-Content-Type-Options", "X-Frame-Options", "Referrer-Policy", "Permissions-Policy", "Content-Security-Policy", "Cache-Control"]) {
-  if (!headers.includes(header)) fail(`API security header missing: ${header}`);
-}
+// CORS allow-list and API security headers: behaviour test cloud-server/tests/cloud-cors-security-headers.test.cjs (runs the real Cloud).
 
 if (!tempAuthBoundary.includes('const cacheKey = `${transportId}:${credentialVersion}`') ||
     !tempAuthBoundary.includes('permanentByTransport.set(cacheKey, promise)')) fail("per-bot permanent authorization coalescing is missing");
@@ -83,4 +75,4 @@ if (existsSync(dist)) {
   }
 }
 
-console.log("PASS Task 5.1 hardening: source-level Web Cloud origin, local ID3, CSP/CORS headers, reduced Tauri FS scopes, safe refresh, and per-bot permanent auth coalescing");
+console.log("PASS Task 5.1 hardening: source-level Web Cloud origin, local ID3, CSP, reduced Tauri FS scopes, safe refresh, and per-bot permanent auth coalescing");
