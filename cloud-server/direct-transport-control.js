@@ -417,26 +417,8 @@ function leasesForBot(state, botId) {
 function activeOpsForBot(state, botId) {
   return Object.values(state.operations).filter(op => op.bot_id === botId);
 }
-function findLeaseByInstallation(state, installationId) {
-  return Object.values(state.leases).find(lease => lease.installation_id === installationId && lease.status !== 'CLEANED') || null;
-}
 function leaseExpired(lease) {
   return Date.now() - parseTime(lease?.last_heartbeat_at) >= HEARTBEAT_TIMEOUT_MS;
-}
-
-function finalizeLease(sessionId) {
-  const pool = loadPool();
-  return mutateState(pool, state => {
-    const lease = state.leases[sessionId];
-    if (!lease) return null;
-    lease.status = 'ACTIVE';
-    lease.last_heartbeat_at = nowIso();
-    const metric = state.metrics[lease.bot_id];
-    metric.sessions_today = Number(metric.sessions_today || 0) + 1;
-    metric.total_sessions = Number(metric.total_sessions || 0) + 1;
-    metric.last_used_at = nowIso();
-    return { ...lease };
-  });
 }
 
 function deleteLease(sessionId) {
@@ -747,29 +729,6 @@ async function inviteAndPromote(master, vault, botEntity) {
   }));
 }
 
-async function restrictBotPinRights(chatId, botId) {
-  const config = loadPool().find(bot => String(bot.id) === String(botId));
-  if (!config) throw new Error('Assigned Direct bot is unavailable.');
-  let username = config.telegram_username;
-  let userId = config.telegram_user_id;
-  if (!username && !userId) {
-    const identity = await resolveBotIdentityViaHttp(config.managed
-      ? await resolveManagedToken(config) : config.token);
-    username = identity.telegram_username;
-    userId = identity.telegram_user_id;
-  }
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const entity = await masterInfo.client.getEntity(userId || `@${username}`);
-    await masterInfo.client.invoke(new Api.channels.EditAdmin({
-      channel: masterInfo.vault,
-      userId: entity,
-      adminRights: directBotAdminRights(),
-      rank: 'BeatGaler',
-    }));
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
-}
-
 function botMembershipError(error) {
   const message = String(error?.errorMessage || error?.message || error || '');
   const status = Number(error?.http_status || error?.api_error_code || 0) || null;
@@ -778,99 +737,6 @@ function botMembershipError(error) {
     status,
     absent: /chat not found|bot was kicked|bot is not a member|forbidden|USER_NOT_PARTICIPANT|CHANNEL_PRIVATE/i.test(message),
   };
-}
-
-function membershipAbsentError(error, runtime) {
-  const detail = botMembershipError(error);
-  if (!detail.absent) return error;
-  const failure = new Error(`Transport bot ${runtime.bot.id} cannot observe vault ${runtime.chatId}.`);
-  failure.code = 'TRANSPORT_BOT_MEMBERSHIP_ABSENT';
-  failure.telegram_error = detail.message;
-  failure.http_status = detail.status;
-  return failure;
-}
-
-async function probeRuntimeVaultMembership(runtime, startupTrace = noDirectStartupTrace) {
-  startupTrace.mark('BOT_MEMBERSHIP_PROBE', {
-    membership_state: 'probing',
-    vault_chat_id: String(runtime.chatId),
-    channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
-    transport_id: runtime.bot.id,
-    expected_bot_id: runtime.bot.telegram_user_id || null,
-  });
-  try {
-    const chat = await startupTrace.step('BOT_MEMBERSHIP_GET_CHAT', () => managerBotApiCall(runtime.token, 'getChat', {
-      chat_id: String(runtime.chatId),
-    }));
-    const observedChatId = String(chat?.id || '');
-    if (observedChatId !== String(runtime.chatId)) {
-      const mismatch = new Error(`Transport bot observed vault ${observedChatId || '<none>'}, expected ${runtime.chatId}.`);
-      mismatch.code = 'TRANSPORT_BOT_VAULT_MISMATCH';
-      throw mismatch;
-    }
-    const proof = {
-      state: 'bot_visible',
-      source: 'bot_api_getChat',
-      vault_chat_id: String(runtime.chatId),
-      channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
-      transport_id: runtime.bot.id,
-      expected_bot_id: runtime.bot.telegram_user_id || null,
-    };
-    startupTrace.mark('BOT_MEMBERSHIP_VISIBLE', {
-      membership_state: proof.state,
-      membership_source: proof.source,
-      vault_chat_id: proof.vault_chat_id,
-      channel_id: proof.channel_id,
-      transport_id: proof.transport_id,
-      expected_bot_id: proof.expected_bot_id,
-    });
-    return proof;
-  } catch (error) {
-    const failure = membershipAbsentError(error, runtime);
-    const detail = botMembershipError(error);
-    diag('BOT_MEMBERSHIP_PROBE_FAILED', {
-      transport_id: runtime.bot.id,
-      membership_state: detail.absent ? 'absent' : 'probe_failed',
-      ...managedTokenErrorDiagnostic(error),
-    });
-    startupTrace.mark('BOT_MEMBERSHIP_NOT_VISIBLE', {
-      membership_state: detail.absent ? 'absent' : 'probe_failed',
-      membership_source: 'bot_api_getChat',
-      vault_chat_id: String(runtime.chatId),
-      channel_id: String(runtime.chatId).startsWith('-100') ? String(runtime.chatId).slice(4) : null,
-      transport_id: runtime.bot.id,
-      expected_bot_id: runtime.bot.telegram_user_id || null,
-      probe_error_code: detail.status,
-    });
-    throw failure;
-  }
-}
-
-async function cleanupLegacyVisibleHandshakes(master, vault) {
-  // One-time migration cleanup for protocol messages created by V4/V4.1.
-  // Current Direct transport NEVER posts a handshake message.
-  const ids = [];
-  try {
-    for await (const message of master.iterMessages(vault, { limit: 250 })) {
-      const text = String(message?.message || message?.text || '').trim();
-      if (!text) continue;
-      if (
-        text.startsWith('/beatgaler_transport') ||
-        text.startsWith('/beatgaler_ready') ||
-        text.includes('BEATGALER_DIRECT_') ||
-        text.includes('BEATGALER_HANDSHAKE_')
-      ) {
-        const id = Number(message.id || 0);
-        if (Number.isInteger(id) && id > 0) ids.push(id);
-      }
-    }
-    for (let i = 0; i < ids.length; i += 100) {
-      await master.invoke(new Api.channels.DeleteMessages({ channel: vault, id: ids.slice(i, i + 100) }));
-    }
-    if (ids.length) console.log(`[direct] LEGACY_HANDSHAKES_REMOVED count=${ids.length}`);
-  } catch (error) {
-    console.warn('[direct] legacy handshake cleanup skipped:', error?.message || error);
-  }
 }
 
 async function kickAndUnban(master, vault, botEntity) {
@@ -1070,127 +936,6 @@ function getLeaseChecked({ installationId, sessionId, generation, allowExpired =
   if (generation != null && Number(generation) !== Number(lease.generation)) return null;
   if (!allowExpired && leaseExpired(lease)) return null;
   return { pool, state, lease };
-}
-
-async function startSession({ installationId, chatId, protocol = null, startupTrace = noDirectStartupTrace }) {
-  if (!enabled()) throw new Error('Telegram Direct transport is not configured on this server.');
-  startMaintenance();
-  const installation = String(installationId || '').trim();
-  const vaultId = String(chatId || '').trim();
-  if (!installation || !vaultId) throw new Error('installationId and chatId are required.');
-
-  const pool = loadPool();
-  const snapshot = stateSnapshot(pool);
-  const existing = findLeaseByInstallation(snapshot, installation);
-  if (existing) {
-    if (!leaseExpired(existing) && existing.chat_id === vaultId && existing.status !== 'STOPPING') {
-      startupTrace.mark("LEASE_SELECTED", { server_lease: "reused", lease_state: existing.status });
-      const runtime = await startupTrace.step("START_RUNTIME", () => runtimeForLease(existing, { startupTrace }));
-      mutateState(pool, state => {
-        if (state.leases[existing.session_id]) {
-          // The desktop helper will call /activate only after its raw Telegram
-          // membership listener is running. ACTIVE is preserved for an already
-          // leased vault; ASSIGNING is finalized by activateSession.
-          state.leases[existing.session_id].last_heartbeat_at = nowIso();
-        }
-      });
-      return sessionPublic(runtime, existing.status, { protocol });
-    }
-  }
-
-  // PostgreSQL's session wrapper must prepare the exact assigned lease first.
-  // Never choose a different bot from ephemeral load when that contract fails.
-  const error = new Error('A persistent-assignment lease is required before Direct startup.');
-  error.code = 'TRANSPORT_ASSIGNMENT_LEASE_REQUIRED';
-  throw error;
-}
-
-async function activateSession({ installationId, sessionId, generation, startupTrace = noDirectStartupTrace }) {
-  const checked = getLeaseChecked({ installationId, sessionId, generation });
-  if (!checked) throw new Error('Direct transport session is not active.');
-  startupTrace.mark("ACTIVATE_LEASE", { lease_state: checked.lease.status });
-  const runtime = await startupTrace.step("ACTIVATE_RUNTIME", () => runtimeForLease(checked.lease));
-  const masterInfo = await startupTrace.step("ACTIVATE_MASTER", () => masterForVault(checked.lease.chat_id));
-  try {
-    const botEntity = await startupTrace.step("ACTIVATE_GET_ENTITY", () => runtime.bot.telegram_username
-      ? masterInfo.client.getEntity(`@${runtime.bot.telegram_username}`)
-      : masterInfo.client.getEntity(runtime.bot.telegram_user_id));
-
-    // IMPORTANT: no Telegram handshake message is sent. The desktop BOT client
-    // starts a raw-update listener first; only then MASTER adds/promotes the bot.
-    // Telegram's participant/service update contains the Channel entity as seen
-    // by THIS bot account, including its own access_hash.
-    startupTrace.mark("ACTIVATE_INVITE_PROMOTE", { invite_promote_executed: true });
-    await startupTrace.step("ACTIVATE_INVITE_PROMOTE", () => inviteAndPromote(masterInfo.client, masterInfo.vault, botEntity));
-
-    // Do not tell Desktop that activation is complete until MASTER can read the
-    // bot back as a real participant of this exact vault. Telegram may still
-    // need a short propagation window before Bot API getChat sees membership,
-    // so Desktop has a second same-bot retry barrier after this confirmation.
-    {
-      const started = Date.now();
-      const deadline = started + 15_000;
-      let attempt = 0;
-      while (true) {
-        attempt += 1;
-        try {
-          const participant = await startupTrace.step("ACTIVATE_GET_PARTICIPANT", () => masterInfo.client.invoke(new Api.channels.GetParticipant({
-            channel: masterInfo.vault,
-            participant: botEntity,
-          })));
-          if (participant?.participant) {
-            startupTrace.mark("ACTIVATE_MEMBERSHIP", { membership_confirmed: true, attempt });
-            diag('SESSION_MEMBERSHIP_CONFIRMED', { session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, attempt, ms: Date.now() - started });
-            break;
-          }
-        } catch (error) {
-          const message = String(error?.errorMessage || error?.message || error);
-          if (!/USER_NOT_PARTICIPANT|PARTICIPANT_ID_INVALID|CHANNEL_PRIVATE/i.test(message) || Date.now() >= deadline) throw error;
-          diag('SESSION_MEMBERSHIP_WAIT', { session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, attempt, ms: Date.now() - started, error: message });
-        }
-        if (Date.now() >= deadline) throw new Error('MASTER could not confirm transport bot membership in the vault within 15 seconds.');
-        await new Promise(resolve => setTimeout(resolve, Math.min(1500, 250 * attempt)));
-      }
-
-      // MASTER membership is not yet a readiness proof for the bot's own
-      // authorization. Do not release /activate until the assigned bot can
-      // observe this exact vault through Telegram itself.
-      let botAttempt = 0;
-      while (true) {
-        botAttempt += 1;
-        try {
-          await probeRuntimeVaultMembership(runtime, startupTrace);
-          startupTrace.mark('ACTIVATE_BOT_MEMBERSHIP', { membership_confirmed: true, attempt: botAttempt });
-          break;
-        } catch (error) {
-          if (error?.code !== 'TRANSPORT_BOT_MEMBERSHIP_ABSENT' || Date.now() >= deadline) throw error;
-          startupTrace.mark('ACTIVATE_BOT_MEMBERSHIP_WAIT', { membership_confirmed: false, attempt: botAttempt });
-          await new Promise(resolve => setTimeout(resolve, Math.min(1500, 250 * botAttempt)));
-        }
-      }
-    }
-
-    await startupTrace.step("ACTIVATE_CLEANUP", () => cleanupLegacyVisibleHandshakes(masterInfo.client, masterInfo.vault));
-    runtime.masterId = masterInfo.config?.id || 'Master01';
-    const finalized = finalizeLease(checked.lease.session_id);
-    console.log(`[direct] SESSION_READY installation=${String(installationId).slice(0, 8)}… transport=${runtime.bot.id} master=${runtime.masterId}`);
-    diag('SESSION_READY', { installation: String(installationId).slice(0, 8), session_id: checked.lease.session_id, transport_id: runtime.bot.id, vault: checked.lease.chat_id, master: runtime.masterId });
-    return {
-      ok: true,
-      activated: true,
-      status: finalized?.status || 'ACTIVE',
-      membership: {
-        state: 'bot_visible',
-        source: 'bot_api_getChat',
-        vault_chat_id: String(checked.lease.chat_id),
-        channel_id: String(checked.lease.chat_id).startsWith('-100') ? String(checked.lease.chat_id).slice(4) : null,
-        transport_id: runtime.bot.id,
-        expected_bot_id: runtime.bot.telegram_user_id || null,
-      },
-    };
-  } finally {
-    try { await startupTrace.step("ACTIVATE_DISCONNECT", () => masterInfo.client.disconnect()); } catch (_) {}
-  }
 }
 
 async function maybeRotatePendingBot(botId) {
@@ -1757,23 +1502,6 @@ function poolStatus() {
 }
 
 startMaintenance();
-
-
-function recordIndexPointer(chatId, pointer = {}) {
-  const key = String(chatId || '').trim();
-  if (!key) throw new Error('chatId is required for index pointer.');
-  const registry = loadVaultRegistry();
-  const current = registry.vaults[key] || {};
-  registry.vaults[key] = {
-    ...current,
-    current_index_message_id: Number(pointer.messageId || 0) || null,
-    current_index_file_id: String(pointer.fileId || '').trim() || null,
-    current_index_updated_at: nowIso(),
-  };
-  writeJsonAtomic(VAULT_REGISTRY_FILE, registry);
-  diag('INDEX_POINTER_COMMIT', { vault: key, message_id: registry.vaults[key].current_index_message_id, has_file_id: Boolean(registry.vaults[key].current_index_file_id) });
-  return registry.vaults[key];
-}
 
 module.exports = {
   enabled,
