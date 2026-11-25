@@ -32,7 +32,7 @@ const SC = {
   ],
   'B  Edit a beat\'s metadata (Drawer Save -> SQL UPDATE)': [
     ['src/components/Drawer.tsx', 'onWebSave'],
-    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.saveWebDrawer'],
+    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.editor.saveWebDrawer'],
     ['src/features/library/catalog/useCatalogGalleryScope.ts', 'saveDrawerToCatalog'],
     ['src/features/library/catalog/catalogBeatEditor.ts', 'mutations.patchBeat'],
     ['src/features/library/catalog/catalogMutations.ts', 'async function patchBeat'],
@@ -56,7 +56,7 @@ const SC = {
   ],
   'C  Upload a beat (Add beat -> Direct B -> worker commit)': [
     ['src/components/AddBeatModal.tsx', 'onAdd'],
-    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.addBeatsAndReview'],
+    ['src/features/library/catalog/CatalogAppShell.tsx', 'scope.imports.addBeatsAndReview'],
     ['src/features/library/catalog/useCatalogGalleryScope.ts', 'saveReview'],
     ['src/features/library/catalog/catalogImportSession.ts', 'mutations.importBeat'],
     ['src/features/library/catalog/catalogImportPlan.ts', 'resolveImportPlan'],
