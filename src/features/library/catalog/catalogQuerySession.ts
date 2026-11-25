@@ -24,9 +24,7 @@ interface QuerySessionPorts {
   schedule: (callback: () => void, ms: number) => () => void;
 }
 
-export function playbackFiltersKey({ q, includeTags, excludeTags, state, includeMode }: CatalogQueryFilters): string {
-  return `${q}|${includeTags.join(",")}|${excludeTags.join(",")}|${state}|${includeMode}`;
-}
+export { playbackFiltersKey } from "./catalogQueryIdentity";
 
 export function createCatalogQuerySession({ store, interaction, playback, history, schedule }: QuerySessionPorts) {
   function start({ snapshot, readSearch, readHistoryState, setDraft, setNotice }: {

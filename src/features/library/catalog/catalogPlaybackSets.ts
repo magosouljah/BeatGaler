@@ -6,7 +6,7 @@ import type { CatalogCommandsApi } from "./catalogCommandsApi";
 export const PLAYBACK_SET_READY_TIMEOUT_MS = 15_000;
 export const PLAYBACK_SET_POLL_MS = 120;
 export interface PlaybackSetQuery { filters: CatalogQueryFilters; sort: CatalogSort; revision: string }
-export const playbackSetKey = (q: PlaybackSetQuery): string => JSON.stringify([q.filters, q.sort, q.revision]);
+export { playbackSetKey } from "./catalogQueryIdentity";
 
 export async function resolveReadyQuerySet({ commands, accountId, query, timeoutMs = PLAYBACK_SET_READY_TIMEOUT_MS, pollMs = PLAYBACK_SET_POLL_MS, sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)), now = Date.now }: {
   commands: Pick<CatalogCommandsApi, "createQuerySet" | "getQuerySet">; accountId: string; query: PlaybackSetQuery; timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number;
