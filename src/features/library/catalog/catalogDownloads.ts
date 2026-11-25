@@ -80,14 +80,16 @@ export interface GalleryDownloadsPorts {
 export function createGalleryDownloadsStore(ports: () => GalleryDownloadsPorts) {
   let snap: GalleryDownloadsSnapshot = { cloudFiles: null, downloadBusy: null, downloaded: new Set() };
   const listeners = new Set<() => void>();
+  let openToken = 0; // gana la ÚLTIMA apertura solicitada; cerrar también invalida respuestas pendientes
   const set = (patch: Partial<GalleryDownloadsSnapshot>) => { snap = { ...snap, ...patch }; for (const l of [...listeners]) l(); };
 
   function openDownloads(beat: Beat) {
     const { mutations, rejectOfflineMutation, setNotice } = ports();
     if (rejectOfflineMutation("Downloading")) return;
     set({ downloaded: new Set() });
-    void mutations.listBeatFiles(beat.id).then((files) => set({ cloudFiles: { beat, files } })).catch((error) =>
-      setNotice(`No se pudo leer los archivos del beat: ${String((error as { message?: unknown })?.message ?? error)}`));
+    const token = ++openToken;
+    void mutations.listBeatFiles(beat.id).then((files) => { if (token === openToken) set({ cloudFiles: { beat, files } }); }).catch((error) =>
+      token === openToken && setNotice(`No se pudo leer los archivos del beat: ${String((error as { message?: unknown })?.message ?? error)}`));
   }
 
   function downloadKind(kind: DownloadKind) {
@@ -113,7 +115,7 @@ export function createGalleryDownloadsStore(ports: () => GalleryDownloadsPorts) 
     }).finally(() => set({ downloadBusy: null }));
   }
 
-  function closeDownloads() { set({ cloudFiles: null, downloadBusy: null }); }
+  function closeDownloads() { openToken++; set({ cloudFiles: null, downloadBusy: null }); }
 
   return {
     openDownloads, downloadKind, closeDownloads,
