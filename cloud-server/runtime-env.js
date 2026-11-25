@@ -63,8 +63,14 @@ function criticalPathTraceFile() {
   return String(process.env.STAGE1_CRITICAL_PATH_CLOUD_TRACE_FILE || '').trim() || null;
 }
 
+// Las fábricas reciben `env` explícito del compositor; sin él, error claro.
+function requiredEnv() {
+  throw new TypeError('env required');
+}
+
 module.exports = {
   getRuntimeEnv,
+  requiredEnv,
   WORKER_FLAG,
   catalogWorkerEnv,
   serverEnv,

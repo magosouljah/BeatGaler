@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const crypto = require('node:crypto');
 const { hashPassword } = require('./password-kdf');
 
@@ -19,7 +19,7 @@ function coded(message, code, extras = {}) {
 function createPendingSignupService({
   pool,
   runtime,
-  env = getRuntimeEnv(),
+  env = requiredEnv(),
   now = () => Date.now(),
 } = {}) {
   if (!pool || typeof pool.connect !== 'function') throw new Error('Pending signup service requires PostgreSQL.');

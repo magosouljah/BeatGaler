@@ -9,7 +9,6 @@
 //  - Conjuntos de consulta (C12-r4 §3): create/step/cancel/release con lotes ≤ 240 invocables por el arnés; T10 los programa.
 // Sin importar transporte: solo SQL + crypto.
 
-const { getRuntimeEnv } = require('../runtime-env');
 const crypto = require('crypto');
 const { canonicalJson } = require('./authority');
 const { CatalogQueryError, createCursorSigner, keysFromEnv } = require('./cursor');
@@ -206,7 +205,7 @@ function contextDto(lib) {
   };
 }
 
-function createCatalogQueries({ pool = null, authority = null, env = getRuntimeEnv(), cursorKeys = null, now = () => Date.now(), randomUUID = () => crypto.randomUUID() } = {}) {
+function createCatalogQueries({ pool = null, authority = null, env, cursorKeys = null, now = () => Date.now(), randomUUID = () => crypto.randomUUID() } = {}) {
   if (!authority || typeof authority.availability !== 'function') throw new Error('createCatalogQueries requires the catalog authority');
   const keyring = cursorKeys ? { keys: cursorKeys, source: 'explicit' } : keysFromEnv(env);
   const signer = createCursorSigner({ keys: keyring.keys });

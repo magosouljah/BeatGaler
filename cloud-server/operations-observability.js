@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const SAFE_LEVELS = new Set(['info', 'warn', 'error']);
 const SWITCHES = Object.freeze(['billingWrites', 'directOperations', 'backgroundWorkers']);
 
@@ -35,7 +35,7 @@ function createMetrics() {
   });
 }
 
-function alertRoute(condition, env = getRuntimeEnv()) {
+function alertRoute(condition, env = requiredEnv()) {
   const routes = {
     auth_failure_spike: env.BEATGALER_ALERT_AUTH_ROUTE,
     api_error_spike: env.BEATGALER_ALERT_API_ROUTE,
@@ -60,7 +60,7 @@ function alertRoute(condition, env = getRuntimeEnv()) {
   return route ? { condition, route, routable: true } : { condition, route: null, routable: false };
 }
 
-function killSwitches(env = getRuntimeEnv()) {
+function killSwitches(env = requiredEnv()) {
   const result = {};
   for (const name of SWITCHES) {
     const key = `BEATGALER_KILL_${name.replace(/[A-Z]/g, c => `_${c}`).toUpperCase()}`;

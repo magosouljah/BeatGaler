@@ -1,6 +1,6 @@
 "use strict";
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const crypto = require("crypto");
 
 const AUTH_ROUTES = new Set([
@@ -25,7 +25,7 @@ function opaque(value) {
 }
 
 function createAuthAbuseControls(options = {}) {
-  const env = options.env || getRuntimeEnv();
+  const env = options.env || requiredEnv();
   const now = options.now || (() => Date.now());
   const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const windowMs = Math.max(1_000, Number(env.BEATGALER_AUTH_RATE_WINDOW_MS || 60_000));

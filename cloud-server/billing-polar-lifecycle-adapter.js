@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const {
   POLAR_SDK_ENTRY,
   PolarSandboxConfigError,
@@ -146,8 +146,8 @@ function createPolarLifecycleAdapter(options = {}) {
     throw new PolarSandboxConfigError('Polar environment is unsupported.', 'POLAR_CONFIG_ENVIRONMENT_MISMATCH');
   }
   const config = options.config || (environment === 'sandbox'
-    ? readPolarSandboxConfig(options.env || getRuntimeEnv())
-    : readPolarProductionConfig(options.env || getRuntimeEnv()));
+    ? readPolarSandboxConfig(options.env || requiredEnv())
+    : readPolarProductionConfig(options.env || requiredEnv()));
   assertPolarConfig(config, environment);
   const catalog = options.catalog || (environment === 'sandbox'
     ? createSandboxCommercialCatalog(config) : createProductionCommercialCatalog(config));

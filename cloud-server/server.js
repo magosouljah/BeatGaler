@@ -47,12 +47,12 @@ const directPersistentAssignments = require("./direct-persistent-assignment-runt
 
 const { prepareControlPlaneCutover, assembleServerCatalog } = require("./catalog-assembly");
 
-installRuntimeOperability(express);
+installRuntimeOperability(express, { env: getRuntimeEnv() });
 installSecurityHeaders(express);
 installLegacyMediaUploadDisable(express);
 
 async function start() {
-  assertProductionStateDir();
+  assertProductionStateDir(getRuntimeEnv());
   const pgConfig = postgresConfig(getRuntimeEnv());
   let pool = null;
   let authDeliveryWorker = null;
@@ -61,6 +61,7 @@ async function start() {
 
   if (pgConfig.enabled) {
     const started = await startPostgresControlPlane({
+      env: getRuntimeEnv(),
       onMigrationError: () => operationsRuntime.recordCondition('migration_failure'),
     });
     pool = started.pool;
@@ -219,14 +220,14 @@ async function start() {
     getCapabilityStore: () => directCapabilities?.store || null,
   });
   installLifecycleRequestGuard(express, accountLifecycle);
-  installHttpContainment(express, { dataDir: STATE_DIR, installationClaimCoordinator });
-  directCapabilities = installDirectCapabilityBoundary(express, { pool });
+  installHttpContainment(express, { dataDir: STATE_DIR, installationClaimCoordinator, env: getRuntimeEnv() });
+  directCapabilities = installDirectCapabilityBoundary(express, { pool, env: getRuntimeEnv() });
   installSensitiveAuthCapabilityRevocation(express, { store: directCapabilities?.store });
   // PostgreSQL is mandatory in production. These shared buckets therefore
   // coordinate auth abuse controls across every production process/restart;
   // the existing in-memory layer remains as an additional low-latency guard.
   installDurableAuthAbuseControls(express, { pool, runtime: accountLifecycle, env: getRuntimeEnv() });
-  installAuthAbuseControls(express);
+  installAuthAbuseControls(express, { env: getRuntimeEnv() });
   installProductiveTempAuthBoundary(express);
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"} pending-signup=${pendingSignupEnabled ? 'configured' : 'disabled'}`);
 

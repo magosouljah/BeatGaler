@@ -7,7 +7,7 @@
 //  - Límite de token 16 KiB. Sin expiración temporal: revisión/era/época/generación/perfil invalidan (lo decide queries.js).
 // Sin DB ni red.
 
-const { getRuntimeEnv } = require('../runtime-env');
+const { requiredEnv } = require('../runtime-env');
 const crypto = require('crypto');
 const { canonicalJson, CatalogAuthorityError } = require('./authority');
 
@@ -38,7 +38,7 @@ function normalizeKeys(keys) {
 
 // Claves desde el entorno: JSON [{kid, secret(hex|utf8), retired?}]. Sin variable → clave efímera del proceso
 // (válida solo en LOCAL/CI de un proceso; T16 exige la variable en entornos activados).
-function keysFromEnv(env = getRuntimeEnv(), { allowEphemeral = true, randomBytes = crypto.randomBytes } = {}) {
+function keysFromEnv(env = requiredEnv(), { allowEphemeral = true, randomBytes = crypto.randomBytes } = {}) {
   const raw = env[CURSOR_KEYS_ENV];
   if (raw && String(raw).trim()) {
     let parsed;

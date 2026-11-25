@@ -1,11 +1,11 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const { developmentEnvelopeKeyConfig } = require('./secret-envelope-provider');
 
 const SNAPSHOT_SHA_RE = /^[0-9a-f]{64}$/;
 
-function controlPlaneAuthorityConfig(env = getRuntimeEnv()) {
+function controlPlaneAuthorityConfig(env = requiredEnv()) {
   const authority = String(env.BEATGALER_CONTROL_PLANE_AUTHORITY || 'json').trim().toLowerCase();
   if (!['json', 'postgres'].includes(authority)) {
     throw new Error('BEATGALER_CONTROL_PLANE_AUTHORITY must be json or postgres.');

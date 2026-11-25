@@ -330,7 +330,7 @@ test("sensitive account routes revoke the whole authenticated capability set and
     },
   };
   const fakeExpress = createFakeExpress();
-  installDirectCapabilityBoundary(fakeExpress, { store });
+  installDirectCapabilityBoundary(fakeExpress, { store, env: process.env });
   const app = Object.create(fakeExpress.application);
   mountAccountRouteGuards(app);
   const cases = [
@@ -361,7 +361,7 @@ test("sensitive account route fails closed when durable capability revocation fa
     },
   };
   const fakeExpress = createFakeExpress();
-  installDirectCapabilityBoundary(fakeExpress, { store });
+  installDirectCapabilityBoundary(fakeExpress, { store, env: process.env });
   const app = Object.create(fakeExpress.application);
   mountAccountRouteGuards(app);
   app.post("/auth/password/change", (_req, res) => res.json({ ok: true }));

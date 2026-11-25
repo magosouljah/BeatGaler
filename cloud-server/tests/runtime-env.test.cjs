@@ -39,3 +39,11 @@ test('runtime environment keeps the live object and parses the current values on
   assert.ok(Number.isNaN(catalogWorkerEnv.healthIntervalMs()));
   assert.equal(criticalPathTraceFile(), null);
 });
+
+test('las fábricas sin env explícito fallan con un error claro', () => {
+  const { postgresConfig } = require('../postgres-runtime-config');
+  const { createOperationsRuntime } = require('../operations-runtime');
+  assert.throws(() => postgresConfig(), { name: 'TypeError', message: 'env required' });
+  assert.throws(() => createOperationsRuntime({}), { name: 'TypeError', message: 'env required' });
+  assert.equal(postgresConfig({}).enabled, false);
+});

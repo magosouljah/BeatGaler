@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const { normalizeEmail, validEmailAsProvided: validEmail } = require('./auth-helpers');
 const crypto = require('node:crypto');
 const { hashPassword } = require('./password-kdf');
@@ -28,7 +28,7 @@ function requirePassword(password) {
   return value;
 }
 
-function requirePepper(env = getRuntimeEnv()) {
+function requirePepper(env = requiredEnv()) {
   const pepper = String(env.BEATGALER_SIGNUP_PEPPER || '').trim();
   if (!pepper) {
     const error = new Error('BEATGALER_SIGNUP_PEPPER is required for pending signup challenges.');
@@ -95,7 +95,7 @@ function pendingPublic(row) {
 function createPendingSignupRuntime({
   pool,
   keyring,
-  env = getRuntimeEnv(),
+  env = requiredEnv(),
   now = () => Date.now(),
   randomBytes = crypto.randomBytes,
 } = {}) {

@@ -1,9 +1,9 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { getRuntimeEnv, requiredEnv } = require('./runtime-env');
 const { structuredEvent, createMetrics, alertRoute } = require('./operations-observability');
 
-function createOperationsRuntime({ env = getRuntimeEnv(), logger = console, now = () => Date.now() } = {}) {
+function createOperationsRuntime({ env = requiredEnv(), logger = console, now = () => Date.now() } = {}) {
   const metrics = createMetrics();
   const windows = new Map();
   let postgresUnavailable = false;
@@ -71,5 +71,6 @@ function createOperationsRuntime({ env = getRuntimeEnv(), logger = console, now 
   return Object.freeze({ recordHttp, recordReadiness, recordPool, recordCondition, snapshot: () => metrics.snapshot() });
 }
 
-const operationsRuntime = createOperationsRuntime();
+// Singleton de carga del módulo: mismo objeto vivo process.env que el default anterior.
+const operationsRuntime = createOperationsRuntime({ env: getRuntimeEnv() });
 module.exports = { createOperationsRuntime, operationsRuntime };

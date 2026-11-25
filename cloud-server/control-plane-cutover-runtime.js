@@ -1,6 +1,6 @@
 'use strict';
 
-const { getRuntimeEnv } = require('./runtime-env');
+const { requiredEnv } = require('./runtime-env');
 const { accountsDataPath } = require('./auth-helpers');
 const fs = require('fs');
 const path = require('path');
@@ -14,7 +14,7 @@ const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = requ
 const { assertNativeStartupCompatible } = require('./catalog/authority');
 const { STATE_DIR, statePath } = require('./state-dir');
 
-async function prepareControlPlaneCutover({ pool, env = getRuntimeEnv(), secretProviderOptions } = {}) {
+async function prepareControlPlaneCutover({ pool, env = requiredEnv(), secretProviderOptions } = {}) {
   const config = controlPlaneAuthorityConfig(env);
   const authPath = accountsDataPath(STATE_DIR);
   const persistentPath = statePath('cloud-data.json');

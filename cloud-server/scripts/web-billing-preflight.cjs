@@ -4,7 +4,7 @@ require('dotenv').config({ quiet: true });
 const { createWebBillingRuntime } = require('../billing-web-runtime');
 
 async function main() {
-  const runtime = createWebBillingRuntime();
+  const runtime = createWebBillingRuntime({ env: process.env });
   const result = await runtime.initialize();
   if (!result.ready) {
     console.error(`[web-billing-preflight] FAIL ${result.failureCode}`);

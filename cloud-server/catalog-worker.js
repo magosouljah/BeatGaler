@@ -10,7 +10,7 @@ const { assembleWorkerCatalog } = require('./catalog-assembly');
 
 async function main() {
   if (!catalogWorkerEnv.enabled()) { console.log(`[catalog-worker] disabled (${WORKER_FLAG} != true)`); return 0; }
-  const started = await startPostgresControlPlane({});
+  const started = await startPostgresControlPlane({ env: getRuntimeEnv() });
   const pool = started.pool;
   const catalog = await assembleWorkerCatalog({ pool, env: getRuntimeEnv() });
   if (!catalog) return 2;
