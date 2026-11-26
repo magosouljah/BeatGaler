@@ -37,13 +37,17 @@ const gateway = g.createTelegramGateway(tgOptions(client)); // Cloud: solo metad
 const browser = telegramOp.createOperatorTelegram(tgOptions(server.session({ selfId: '20' }))); // el «navegador»: lee y envía bytes al fake
 global.__lab = { server, gateway, browser, seeded: false };
 
-const wrap = (mod, name, patch) => { const orig = mod[name]; mod[name] = (options) => orig(options && patch(options)); };
+// Captura la última instancia que devuelve cada fábrica del Cloud (sustituye a los antiguos currentX()).
+const made = {};
+const wrap = (mod, name, patch, key) => { const orig = mod[name]; mod[name] = (options) => { const inst = orig(patch && options ? patch(options) : options); if (key) made[key] = inst; return inst; }; };
 // LAB: sin cuota de plan (Access sandbox no configurado); el límite real de beats es asunto de billing, no de V09/V10.
-wrap(catalogOperations, 'configureCatalogOperations', (o) => ({ ...o, resolveAccess: async () => ({ maxBeats: null }) }));
-wrap(catalogPurge, 'configureCatalogPurge', (o) => ({ ...o, gateway }));
-wrap(catalogPrefixPacks, 'configurePrefixPacks', (o) => ({ ...o, gateway }));
-const origDirect = catalogDirect.configureCatalogDirect;
-catalogDirect.configureCatalogDirect = (options) => {
+wrap(catalogOperations, 'buildCatalogOperations', (o) => ({ ...o, resolveAccess: async () => ({ maxBeats: null }) }), 'operations');
+wrap(catalogCommands, 'buildCatalogCommands', null, 'commands');
+wrap(catalogQueries, 'buildCatalogQueries', null, 'queries');
+wrap(catalogPurge, 'buildCatalogPurge', (o) => ({ ...o, gateway }), 'purge');
+wrap(catalogPrefixPacks, 'buildPrefixPacks', (o) => ({ ...o, gateway }));
+const origDirect = catalogDirect.buildCatalogDirect;
+catalogDirect.buildCatalogDirect = (options) => {
   // LAB: tope de PROJECT holgado (Access sandbox no configurado). La sesión MTProto real no se usa: el navegador del LAB va por el doble HTTP.
   const direct = origDirect(options && { ...options, resolveProjectAccess: async () => ({ maxBytes: 200 * 1024 * 1024 }) });
   if (direct) setTimeout(() => { startWorkerAndSeed(options.pool, direct).catch((e) => console.error('[lab] seed failed', e.stack || e.message, JSON.stringify(e.detail || null), e.cause && (e.cause.message || e.cause))); }, 50);
@@ -88,7 +92,7 @@ function loadAudio() {
 }
 
 async function startWorkerAndSeed(pool, direct) {
-  const ops = catalogOperations.currentCatalogOperations(); const cmd = catalogCommands.currentCatalogCommands(); const q = catalogQueries.currentCatalogQueries(); const purge = catalogPurge.currentCatalogPurge();
+  const ops = made.operations; const cmd = made.commands; const q = made.queries; const purge = made.purge;
   const worker = createCatalogWorker({ pool, operations: ops, queries: q, commands: cmd, transport: gateway, purge, owner: 'lab-inproc', log: (...a) => console.warn('[lab-worker]', ...a), options: { pollMs: 500, globalConcurrency: 2 } });
   worker.start?.(); global.__lab.worker = worker;
   const { userId } = cfg.account;

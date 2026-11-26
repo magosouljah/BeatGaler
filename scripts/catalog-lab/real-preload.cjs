@@ -65,18 +65,22 @@ const chatGuard = (chatId) => { if (String(chatId) !== String(d.chats[0])) throw
 // Línea base: último mensaje del chat antes de operar (la limpieza nunca toca ids ≤ base).
 (async () => { try { const m = await openMaster(); const h = await m.client.getMessages(await m.client.getInputEntity(d.chats[0]), { limit: 1 }); fs.writeFileSync(path.join(L.STATE_DIR, 'baseline.json'), JSON.stringify({ chatId: String(d.chats[0]), lastMessageId: h && h[0] ? Number(h[0].id) : 0, at: new Date().toISOString() })); console.log('[real] línea base registrada'); } catch (e) { console.error('[real] sin línea base:', e.code || e.message); } })();
 
-const wrap = (mod, name, patch) => { const orig = mod[name]; mod[name] = (options) => orig(options && patch(options)); };
-wrap(catalogOperations, 'configureCatalogOperations', (o) => ({ ...o, resolveAccess: async () => ({ maxBeats: null }) }));
+// Captura la última instancia que devuelve cada fábrica del Cloud (sustituye a los antiguos currentX()).
+const made = {};
+const wrap = (mod, name, patch, key) => { const orig = mod[name]; mod[name] = (options) => { const inst = orig(patch && options ? patch(options) : options); if (key) made[key] = inst; return inst; }; };
+wrap(catalogOperations, 'buildCatalogOperations', (o) => ({ ...o, resolveAccess: async () => ({ maxBeats: null }) }), 'operations');
+wrap(catalogCommands, 'buildCatalogCommands', null, 'commands');
+wrap(catalogQueries, 'buildCatalogQueries', null, 'queries');
 // E75: el MAIN de prefijos lo sube el navegador; el Cloud solo usa el gateway para COMPROBAR el mensaje publicado (metadatos, sin bytes).
-wrap(require(R + 'catalog/prefix-packs'), 'configurePrefixPacks', (o) => ({ ...o, gateway: getGateway(o.pool) }));
-wrap(catalogPurge, 'configureCatalogPurge', (o) => ({ ...o, gateway: getGateway(o.pool) }));
+wrap(require(R + 'catalog/prefix-packs'), 'buildPrefixPacks', (o) => ({ ...o, gateway: getGateway(o.pool) }));
+wrap(catalogPurge, 'buildCatalogPurge', (o) => ({ ...o, gateway: getGateway(o.pool) }), 'purge');
 // E77: único transporte de archivos = Direct B. El worker en proceso arranca al configurarse el plano directo; tope de PROJECT holgado en el LAB.
-const origDirect = catalogDirect.configureCatalogDirect;
-catalogDirect.configureCatalogDirect = (options) => {
+const origDirect = catalogDirect.buildCatalogDirect;
+catalogDirect.buildCatalogDirect = (options) => {
   const transport = origDirect(options && { ...options, resolveProjectAccess: async () => ({ maxBytes: 200 * 1024 * 1024 }) });
   if (options && options.pool) getGateway(options.pool);
   if (transport) setTimeout(() => {
-    const worker = createCatalogWorker({ pool: options.pool, operations: catalogOperations.currentCatalogOperations(), queries: catalogQueries.currentCatalogQueries(), commands: catalogCommands.currentCatalogCommands(), transport: gateway, purge: catalogPurge.currentCatalogPurge(), owner: 'lab-real-inproc', log: (...a) => console.warn('[real-worker]', ...a), options: { pollMs: 500, globalConcurrency: 2 } });
+    const worker = createCatalogWorker({ pool: options.pool, operations: made.operations, queries: made.queries, commands: made.commands, transport: gateway, purge: made.purge, owner: 'lab-real-inproc', log: (...a) => console.warn('[real-worker]', ...a), options: { pollMs: 500, globalConcurrency: 2 } });
     worker.start?.(); global.__labReal = { worker, runtime };
     console.log('[real] worker en proceso activo; gateway REAL de solo metadatos (Bot20) sobre el chat del descriptor');
   }, 0);

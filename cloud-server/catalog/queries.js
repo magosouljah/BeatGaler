@@ -570,16 +570,12 @@ function createCatalogQueries({ pool = null, authority = null, env, cursorKeys =
   });
 }
 
-// Singleton para server-core (la autoridad ya no es singleton desde M4.1b: catalog-boot.js).
-let configured = null;
-function configureCatalogQueries(options = null) {
-  configured = options && options.pool && options.authority ? createCatalogQueries(options) : null;
-  return configured;
+function buildCatalogQueries(options = null) {
+  return options && options.pool && options.authority ? createCatalogQueries(options) : null;
 }
-function currentCatalogQueries() { return configured; }
 
 module.exports = {
   LIMIT_DEFAULT, LIMIT_MAX, FILES_LIMIT_MAX, FACETS_LIMIT_MAX, QUERY_SET_BATCH_MAX, Q_MAX_BYTES, PAGE_MAX_BYTES, STATEMENT_TIMEOUT_MS, API_TIMEOUT_MS, LEGACY_OFFSET_MAX, LEGACY_BLOCK,
   SORT_PROFILE, SEARCH_PROFILE, NAME_COLLATION, STATES, SORTS, INCLUDE_MODES, TUPLES,
-  CatalogQueryError, parseListRequest, filterHashOf, canonicalQ, likePattern, searchMode, planSearch, GRAM_GIN_MAX, filterSql, byteSort, createCatalogQueries, configureCatalogQueries, currentCatalogQueries,
+  CatalogQueryError, parseListRequest, filterHashOf, canonicalQ, likePattern, searchMode, planSearch, GRAM_GIN_MAX, filterSql, byteSort, createCatalogQueries, buildCatalogQueries,
 };

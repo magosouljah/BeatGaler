@@ -107,8 +107,6 @@ function createCatalogMedia({ pool = null, authority = null, accessTtlMs = ACCES
   return Object.freeze({ issueAccess, confirmBytes, metrics, limits: Object.freeze({ ACCESS_TTL_MS: accessTtlMs }) });
 }
 
-let configured = null;
-function configureCatalogMedia(options = null) { configured = options && options.pool && options.authority ? createCatalogMedia(options) : null; return configured; }
-function currentCatalogMedia() { return configured; }
+function buildCatalogMedia(options = null) { return options && options.pool && options.authority ? createCatalogMedia(options) : null; }
 
-module.exports = { ACCESS_TTL_MS, createCatalogMedia, configureCatalogMedia, currentCatalogMedia };
+module.exports = { ACCESS_TTL_MS, createCatalogMedia, buildCatalogMedia };

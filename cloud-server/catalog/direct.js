@@ -218,7 +218,6 @@ function createCatalogDirect({ pool = null, authority = null, operations = null,
   return Object.freeze({ startSession, prewarm, issueSendTicket, reportSend, submitReceipt, listAttempts, metrics, SESSION_PROTOCOL, TICKET_TTL_MS });
 }
 
-let configured = null;
 // Access para PROJECT (mismo criterio que project-access.js): plan con upload_project y tope de bytes vigente.
 function createProjectAccessResolver({ resolveUserAccess } = {}) {
   if (typeof resolveUserAccess !== 'function') throw new Error('resolveUserAccess is required');
@@ -232,7 +231,6 @@ function createProjectAccessResolver({ resolveUserAccess } = {}) {
   };
 }
 
-function configureCatalogDirect(options = null) { configured = options && options.pool && options.authority && options.operations ? createCatalogDirect(options) : null; return configured; }
-function currentCatalogDirect() { return configured; }
+function buildCatalogDirect(options = null) { return options && options.pool && options.authority && options.operations ? createCatalogDirect(options) : null; }
 
-module.exports = { SESSION_PROTOCOL, createProjectAccessResolver, createCatalogDirect, configureCatalogDirect, currentCatalogDirect };
+module.exports = { SESSION_PROTOCOL, createProjectAccessResolver, createCatalogDirect, buildCatalogDirect };
