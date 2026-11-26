@@ -57,7 +57,7 @@ const bot = new Proxy({}, {
   ),
 });
 
-const bootGuards = require('./cloud-boot').takeCloudBoot().guards; const app = express(); require('./account-route-guards').mountAccountRouteGuards(app, undefined, bootGuards);
+const cloudBoot = require('./cloud-boot').takeCloudBoot(); const bootGuards = cloudBoot.guards; const app = express(); require('./account-route-guards').mountAccountRouteGuards(app, undefined, bootGuards);
 const criticalPathTrace = require("./stage1-critical-path-trace");
 const { operationsRuntime } = require('./operations-runtime');
 
@@ -116,7 +116,7 @@ app.use('/catalog/v1/prefix-packs/main', express.json({ limit: '6mb' }));
 app.use(express.json({ limit: "256kb" }));
 // T06: API nativa /catalog/v1 (solo lectura + provision). Sin autoridad configurada responde 503 CATALOG_UNAVAILABLE.
 // T16: rondas, medios, purge y transferencias montados; sin gateway real responden 503 TRANSFER_UNAVAILABLE / jobs en reintento (fail-closed).
-const assertVaultRebindAllowed = require('./catalog-boot').mountCatalog(app, (req, res) => authenticatedUser(req, res));
+const assertVaultRebindAllowed = require('./catalog-boot').mountCatalog(app, (req, res) => authenticatedUser(req, res), cloudBoot.catalog);
 const { statePath } = require("./state-dir");
 const DATA_FILE = statePath("cloud-data.json");
 const AUTH_DATA_FILE = statePath("accounts-data.json");

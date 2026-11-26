@@ -2,23 +2,15 @@
 
 const { createCatalogRouter } = require('./catalog/routes');
 
-// server-core consumes this handoff when it mounts its Express instance.
-let pendingCatalog;
-
 async function assertVaultRebindAllowedIfConfigured(authority, input) {
   if (!authority) return { native: false, configured: false };
   return authority.assertVaultRebindAllowed(input);
 }
 
-function configureCatalogBoot(services, assertVaultRebindAllowed) {
-  pendingCatalog = { services, assertVaultRebindAllowed };
-}
-
-function mountCatalog(app, authenticate) {
-  const catalog = pendingCatalog;
+// `catalog` ({ services, assertVaultRebindAllowed }) comes from the boot context (cloud-boot); absent => empty router (503).
+function mountCatalog(app, authenticate, catalog) {
   app.use(createCatalogRouter({ ...catalog?.services, authenticate, log: console.warn }));
-  pendingCatalog = undefined;
   return catalog?.assertVaultRebindAllowed ?? (input => assertVaultRebindAllowedIfConfigured(null, input));
 }
 
-module.exports = { configureCatalogBoot, mountCatalog, assertVaultRebindAllowedIfConfigured };
+module.exports = { mountCatalog, assertVaultRebindAllowedIfConfigured };

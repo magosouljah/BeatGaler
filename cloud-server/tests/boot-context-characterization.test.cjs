@@ -113,7 +113,9 @@ async function serverCoreScenario() {
 
 async function catalogScenario() {
   const express = require('express');
-  const { configureCatalogBoot, mountCatalog } = require('../catalog-boot');
+  const { mountCatalog } = require('../catalog-boot');
+  const { prepareCloudBoot, prepareCloudCatalog, takeCloudBoot } = require('../cloud-boot');
+  const origWarn = console.warn; console.warn = () => {};
   const authenticate = (req, res) => {
     if (req.get('authorization') === 'Bearer fixture') return { id: 'catalog-user' };
     res.status(401).json({ code: 'UNAUTHENTICATED' });
@@ -129,17 +131,19 @@ async function catalogScenario() {
     server.close();
     return result;
   }
-  const unconfigured = await context((() => { const app = express(); mountCatalog(app, authenticate); return app; })());
-  configureCatalogBoot({
+  const unconfigured = await context((() => { const app = express(); mountCatalog(app, authenticate, takeCloudBoot().catalog); return app; })());
+  prepareCloudBoot();
+  prepareCloudCatalog({
     authority: { resolveContext: async ({ userId }) => ({ library_id: `library-${userId}` }) },
     queries: {},
   }, async () => ({ native: true }));
   const configuredApp = express();
-  const guard = mountCatalog(configuredApp, authenticate);
+  const guard = mountCatalog(configuredApp, authenticate, takeCloudBoot().catalog);
   const configured = await context(configuredApp);
   const guardResult = await guard({});
   // El traspaso se consume en el montaje: una segunda instancia vuelve a estar sin configurar.
-  const consumed = await context((() => { const app = express(); mountCatalog(app, authenticate); return app; })());
+  const consumed = await context((() => { const app = express(); mountCatalog(app, authenticate, takeCloudBoot().catalog); return app; })());
+  console.warn = origWarn;
   return { unconfigured, configured, guardResult, consumed };
 }
 

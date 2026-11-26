@@ -5,7 +5,7 @@ const { once } = require('node:events');
 const test = require('node:test');
 const express = require('express');
 const { CatalogAuthorityError } = require('../catalog/authority');
-const { configureCatalogBoot, mountCatalog, assertVaultRebindAllowedIfConfigured } = require('../catalog-boot');
+const { mountCatalog, assertVaultRebindAllowedIfConfigured } = require('../catalog-boot');
 const { account, withCloud } = require('./helpers/composition-cloud.cjs');
 
 const authenticate = (req, res) => {
@@ -14,9 +14,9 @@ const authenticate = (req, res) => {
   return null;
 };
 
-async function mount(t) {
+async function mount(t, catalog) {
   const app = express();
-  const guard = mountCatalog(app, authenticate);
+  const guard = mountCatalog(app, authenticate, catalog);
   const server = app.listen(0, '127.0.0.1');
   t.after(() => new Promise((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
@@ -76,8 +76,7 @@ test('el arranque real monta el router con los servicios ensamblados y autentica
 
 test('sin servicios, autoridad o consultas, conserva la respuesta 503', async (t) => {
   for (const services of [undefined, { queries: {} }, { authority: {} }]) {
-    if (services) configureCatalogBoot(services);
-    const { get } = await mount(t);
+    const { get } = await mount(t, services && { services });
     const response = await get('context');
     assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), {
@@ -96,8 +95,7 @@ test('la guarda montada delega en la autoridad que recibió y propaga su rechazo
       throw refusal;
     },
   };
-  configureCatalogBoot({ authority }, value => assertVaultRebindAllowedIfConfigured(authority, value));
-  const mounted = await mount(t);
+  const mounted = await mount(t, { services: { authority }, assertVaultRebindAllowed: value => assertVaultRebindAllowedIfConfigured(authority, value) });
   const unconfigured = await mount(t);
   await assert.rejects(mounted.guard(input), error => error === refusal);
   assert.deepEqual(await unconfigured.guard(input), { native: false, configured: false });
