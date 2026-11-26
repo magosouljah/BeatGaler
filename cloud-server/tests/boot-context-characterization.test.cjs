@@ -53,8 +53,7 @@ async function guardedApp(installs) {
   const app = express();
   const ctx = createGuardContext();
   mountAccountRouteGuards(app, undefined, ctx);
-  const target = { application: app };
-  if (installs.includes('runtime')) require('../runtime-operability').installRuntimeOperability(target, { env: { NODE_ENV: 'test' } });
+  if (installs.includes('runtime')) require('../runtime-operability').installRuntimeOperability(ctx, { env: { NODE_ENV: 'test' } });
   if (installs.includes('headers')) require('../security-headers').installSecurityHeaders(ctx);
   if (installs.includes('legacy')) require('../legacy-media-upload-disable').installLegacyMediaUploadDisable(ctx);
   app.use((_req, res, next) => { res.setHeader('x-mw', '1'); next(); });
@@ -79,9 +78,8 @@ async function serverCoreScenario() {
     return lookup(host, options, callback);
   };
   // Misma secuencia que server.js antes de cargar server-core.
-  const express = require('express');
-  require('../runtime-operability').installRuntimeOperability(express, { env: process.env });
   const guards = require('../account-route-guards').createGuardContext();
+  require('../runtime-operability').installRuntimeOperability(guards, { env: process.env });
   require('../security-headers').installSecurityHeaders(guards);
   require('../legacy-media-upload-disable').installLegacyMediaUploadDisable(guards);
   require('../cloud-boot').prepareCloudBoot({ guards });

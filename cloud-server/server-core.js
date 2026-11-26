@@ -57,7 +57,7 @@ const bot = new Proxy({}, {
   ),
 });
 
-const app = express(); require('./account-route-guards').mountAccountRouteGuards(app, undefined, require('./cloud-boot').takeCloudBoot().guards);
+const bootGuards = require('./cloud-boot').takeCloudBoot().guards; const app = express(); require('./account-route-guards').mountAccountRouteGuards(app, undefined, bootGuards);
 const criticalPathTrace = require("./stage1-critical-path-trace");
 const { operationsRuntime } = require('./operations-runtime');
 
@@ -1349,7 +1349,7 @@ app.get("/transport/status", (req, res) => {
 });
 
 
-exports.listenCloudServer = () => app.listen(PORT, "0.0.0.0", () => {
+exports.listenCloudServer = () => require("./runtime-operability").listenWithRuntime(app, bootGuards.entries.runtime, PORT, "0.0.0.0", () => {
   console.log(`BeatGaler Cloud API escuchando en http://0.0.0.0:${PORT}`);
   console.log(`Transport: Telegram Direct MTProto (MASTER + managed bot pool)`);
 });

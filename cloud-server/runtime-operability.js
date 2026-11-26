@@ -88,9 +88,11 @@ async function readinessSnapshot({ config = runtimeConfig(), dependencies = runt
   return { ok: true, status: 'ready', dependencies: { postgres: pool ? 'ready' : 'disabled' } };
 }
 
+const routesInstalled = new WeakSet();
+
 function installRoutesAndProxy(app, config) {
-  if (app.__beatgalerRuntimeRoutesInstalled) return;
-  app.__beatgalerRuntimeRoutesInstalled = true;
+  if (routesInstalled.has(app)) return;
+  routesInstalled.add(app);
   app.set('trust proxy', config.trustProxy);
   app.get('/healthz', (_req, res) => {
     res.status(200).json({ ok: true, status: draining ? 'draining' : 'live', environment: config.deploymentEnv, sourceSha: config.sourceSha });
@@ -138,25 +140,24 @@ function installGracefulShutdown(server, { processLike = process, config = runti
   return close;
 }
 
-function installRuntimeOperability(express, { env = requiredEnv(), processLike = process, logger = console } = {}) {
-  const application = express?.application;
-  if (!application || application.__beatgalerRuntimePatchInstalled) return;
-  application.__beatgalerRuntimePatchInstalled = true;
-  const config = runtimeConfig(env);
-  application.__beatgalerRuntimeConfig = config;
-  const originalListen = application.listen;
+// Per-instance runtime: the boot context carries the config; listenWithRuntime and the use-guard read it.
+function installRuntimeOperability(ctx, { env = requiredEnv(), processLike = process, logger = console } = {}) {
+  if (!ctx?.entries || ctx.entries.runtime) return;
+  ctx.entries.runtime = { config: runtimeConfig(env), processLike, logger };
+}
 
-  application.listen = function runtimePatchedListen(...args) {
-    installRoutesAndProxy(this, config);
-    const server = configureHttpServer(originalListen.apply(this, args), config);
-    installGracefulShutdown(server, { processLike, config, logger });
-    return server;
-  };
+// Same order as the former listen patch: routes/proxy, bind, HTTP limits, ordered shutdown. Without runtime: plain listen.
+function listenWithRuntime(app, runtime, ...args) {
+  if (!runtime) return app.listen(...args);
+  installRoutesAndProxy(app, runtime.config);
+  const server = configureHttpServer(app.listen(...args), runtime.config);
+  installGracefulShutdown(server, { processLike: runtime.processLike, config: runtime.config, logger: runtime.logger });
+  return server;
 }
 
 function wrapRuntimeUse(routePathOrHandlers, handlers) {
-  const { app, next } = this;
-  const config = app.__beatgalerRuntimeConfig;
+  const { app, next, ctx } = this;
+  const config = ctx?.entries.runtime?.config;
   if (config) installRoutesAndProxy(app, config);
   return next(routePathOrHandlers, ...handlers);
 }
@@ -174,6 +175,7 @@ module.exports = {
   configureHttpServer,
   installGracefulShutdown,
   installRuntimeOperability,
+  listenWithRuntime,
   wrapRuntimeUse,
   _resetForTests,
 };

@@ -49,8 +49,8 @@ const directPersistentAssignments = require("./direct-persistent-assignment-runt
 
 const { prepareControlPlaneCutover, assembleServerCatalog } = require("./catalog-assembly");
 
-installRuntimeOperability(express, { env: getRuntimeEnv() });
 const guardContext = createGuardContext();
+installRuntimeOperability(guardContext, { env: getRuntimeEnv() });
 installSecurityHeaders(guardContext);
 installLegacyMediaUploadDisable(guardContext);
 prepareCloudBoot({ guards: guardContext });

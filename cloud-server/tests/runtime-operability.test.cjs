@@ -1,6 +1,6 @@
 'use strict';
 
-const { mountAccountRouteGuards, ROUTE_GUARD_TABLE } = require('../account-route-guards');
+const { mountAccountRouteGuards, createGuardContext, ROUTE_GUARD_TABLE } = require('../account-route-guards');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
@@ -98,11 +98,12 @@ test('instance guard table installs routes/proxy and the listen patch applies ti
     set(key, value) { this[key] = value; return this; },
     listen() { return server; },
   };
-  runtime.installRuntimeOperability({ application }, { env: { NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test', BEATGALER_TRUST_PROXY_HOPS: '1' }, processLike, logger: { log() {}, error() {} } });
+  const ctx = createGuardContext();
+  runtime.installRuntimeOperability(ctx, { env: { NODE_ENV: 'test', BEATGALER_DEPLOYMENT_ENV: 'test', BEATGALER_TRUST_PROXY_HOPS: '1' }, processLike, logger: { log() {}, error() {} } });
   const app = Object.create(application);
-  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE, ctx);
   app.use(() => {});
-  const result = app.listen(4000);
+  const result = runtime.listenWithRuntime(app, ctx.entries.runtime, 4000);
   assert.equal(app['trust proxy'], 1);
   assert.deepEqual(routes.map(([path]) => path), ['/healthz', '/readyz']);
   assert.equal(result.requestTimeout, 30000);
@@ -114,11 +115,12 @@ test('health and readiness expose the configured exact source SHA for deploy com
     use() { return this; }, get(path, handler) { routes.set(path, handler); return this; },
     set() { return this; }, listen() { return { setTimeout() {}, close() {}, closeIdleConnections() {} }; },
   };
-  runtime.installRuntimeOperability({ application }, { env: {
+  const ctx = createGuardContext();
+  runtime.installRuntimeOperability(ctx, { env: {
     NODE_ENV: 'production', BEATGALER_DEPLOYMENT_ENV: 'production', BEATGALER_SOURCE_SHA: 'b'.repeat(40),
   }, processLike: new EventEmitter(), logger: { log() {}, error() {} } });
   const app = Object.create(application);
-  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE, ctx);
   app.use(() => {});
   const response = () => ({ statusCode: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } });
   const health = response();
