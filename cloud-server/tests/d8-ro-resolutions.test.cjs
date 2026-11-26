@@ -173,6 +173,18 @@ async function main() {
     }),
   });
   installImmediateAccountDeletion(runtime, { now: () => clock, randomBytes: size => Buffer.alloc(size, 7) });
+  {
+    // M7.5b-B8: una segunda instalación sobre el mismo runtime no vuelve a parchear
+    // (ni sustituye el borrado ni sus opciones).
+    const installedDelete = runtime.api.data.deleteAccount;
+    const originalProvide = runtime.provide;
+    let provideCalls = 0;
+    runtime.provide = (...args) => { provideCalls += 1; return originalProvide(...args); };
+    assert.equal(installImmediateAccountDeletion(runtime, { now: () => clock, randomBytes: size => Buffer.alloc(size, 9) }), runtime);
+    runtime.provide = originalProvide;
+    assert.equal(provideCalls, 0, 'second install must not patch the runtime again');
+    assert.equal(runtime.api.data.deleteAccount, installedDelete);
+  }
   assert.equal(runtime.retentionConfigured, true);
   assert.deepEqual(runtime.api.state.stateSnapshot().tombstones, {}, 'legacy recoverable tombstones must be purged');
 
