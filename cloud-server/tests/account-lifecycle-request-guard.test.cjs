@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createAccountLifecycleRuntime } = require('../account-lifecycle');
-const { mountAccountRouteGuards, ROUTE_GUARD_TABLE } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards, ROUTE_GUARD_TABLE } = require('../account-route-guards');
 const { installLifecycleRequestGuard } = require('../account-lifecycle-request-guard');
 const { installSessionSecurity, SESSION_COOKIE } = require('../session-security');
 const { runD8RoResolutionsTests } = require('./d8-ro-resolutions.test.cjs');
@@ -41,10 +41,10 @@ async function main() {
 
   const runtime = createAccountLifecycleRuntime({ dataDir: dir, now: () => now });
   const application = { use: registerMiddleware };
-  const express = { application };
-  installLifecycleRequestGuard(express, runtime);
+  const ctx = createGuardContext();
+  installLifecycleRequestGuard(ctx, runtime);
   const app = Object.create(application);
-  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE, ctx);
   app.__stack = [];
   app.use((_req, _res, next) => next());
   assert.equal(app.__stack.length, 2, 'guard must install before the first ordinary middleware');
@@ -76,11 +76,11 @@ async function main() {
   }
 
   {
-    const express = { application: { use: registerMiddleware } };
-    installSessionSecurity(express, { dataDir: dir, now: () => now });
-    installLifecycleRequestGuard(express, runtime);
-    const app = Object.create(express.application);
-    mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+    const ctx = createGuardContext();
+    installSessionSecurity(ctx, { dataDir: dir, now: () => now });
+    installLifecycleRequestGuard(ctx, runtime);
+    const app = Object.create({ use: registerMiddleware });
+    mountAccountRouteGuards(app, ROUTE_GUARD_TABLE, ctx);
     app.__stack = [];
     app.use((_req, _res, next) => next());
     app.use((_req, res) => res.json({ reached: true }));

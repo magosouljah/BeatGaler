@@ -218,12 +218,13 @@ async function start() {
   installSensitiveAuthContainment(express, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
   applyD8RoResolutions(express, accountLifecycle, { env: getRuntimeEnv() });
   // Configure the remaining entries before server-core mounts the guard table.
-  installSessionSecurity(express, {
+  installSessionSecurity(guardContext, {
+    express,
     dataDir: STATE_DIR,
     pool: cutover.authority === 'postgres' ? pool : null,
     getCapabilityStore: () => directCapabilities?.store || null,
   });
-  installLifecycleRequestGuard(express, accountLifecycle);
+  installLifecycleRequestGuard(guardContext, accountLifecycle);
   installHttpContainment(guardContext, { dataDir: STATE_DIR, installationClaimCoordinator, env: getRuntimeEnv() });
   directCapabilities = installDirectCapabilityBoundary(guardContext, { pool, env: getRuntimeEnv() });
   installSensitiveAuthCapabilityRevocation(guardContext, { store: directCapabilities?.store });

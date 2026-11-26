@@ -596,34 +596,36 @@ function createSessionSecurityRuntime({
 }
 
 function wrapSessionSecurityUse(routePathOrHandlers, handlers) {
-  const { app, next } = this;
-  const runtime = app.__beatgalerSessionSecurityRuntime;
-  if (runtime && !app.__beatgalerSessionSecurityMiddlewareAttached) {
-    app.__beatgalerSessionSecurityMiddlewareAttached = true;
+  const { app, next, ctx } = this;
+  const runtime = ctx?.entries.sessionSecurity?.runtime;
+  const state = ctx?.state.get(app) || {};
+  if (runtime && !state.sessionSecurityMiddlewareAttached) {
+    ctx.state.set(app, { ...state, sessionSecurityMiddlewareAttached: true });
     next(runtime.requestMiddleware);
   }
   return next(routePathOrHandlers, ...handlers);
 }
 
-function installSessionSecurity(express, options = {}) {
-  const application = express?.application;
-  if (!application || application.__beatgalerSessionSecurityInstalled) return application?.__beatgalerSessionSecurityRuntime || null;
-  application.__beatgalerSessionSecurityInstalled = true;
+function installSessionSecurity(ctx, { express, ...options } = {}) {
+  if (!ctx?.entries || ctx.entries.sessionSecurity) return ctx?.entries?.sessionSecurity?.runtime || null;
+  const entry = ctx.entries.sessionSecurity = {};
   const runtime = createSessionSecurityRuntime(options);
-  application.__beatgalerSessionSecurityRuntime = runtime;
-  application.__beatgalerSessionSecurityJson = options => express.json(options);
+  entry.runtime = runtime;
+  entry.json = options => express.json(options);
   return runtime;
 }
 
 function wrapSessionSecurityPost(routePath, handlers) {
-  const { app, next } = this;
-  const runtime = app.__beatgalerSessionSecurityRuntime;
+  const { app, next, ctx } = this;
+  const entry = ctx?.entries.sessionSecurity;
+  const runtime = entry?.runtime;
   if (!runtime) return next(routePath, ...handlers);
 
-  if (!app.__beatgalerSessionSecurityRoutesInstalled) {
-    app.__beatgalerSessionSecurityRoutesInstalled = true;
+  const state = ctx.state.get(app) || {};
+  if (!state.sessionSecurityRoutesInstalled) {
+    ctx.state.set(app, { ...state, sessionSecurityRoutesInstalled: true });
     next('/auth/sessions', runtime.listSessions);
-    next('/auth/sessions/revoke', app.__beatgalerSessionSecurityJson({ limit: '16kb' }), (req, res) => { void runtime.revokeOne(req, res); });
+    next('/auth/sessions/revoke', entry.json({ limit: '16kb' }), (req, res) => { void runtime.revokeOne(req, res); });
     next('/auth/sessions/revoke-all', (req, res) => { void runtime.revokeAll(req, res); });
   }
 

@@ -7,7 +7,7 @@ const { Client, Pool } = require('pg');
 const express = require('express');
 const { webhooks } = require('@polar-sh/sdk/2026-04');
 const { createAccessRuntime } = require('../access-runtime');
-const { mountAccountRouteGuards, ROUTE_GUARD_TABLE } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards, ROUTE_GUARD_TABLE } = require('../account-route-guards');
 const { installSessionSecurity } = require('../session-security');
 const { createPolarWebhookRoute, installPolarWebhookRoute } = require('../billing-webhook-route');
 const webhookRuntime = require('../billing-webhook-runtime');
@@ -102,9 +102,9 @@ async function expectCode(promise, ErrorClass, code) {
   });
 }
 
-function mountSessionAndPolar(app, currentInbox) {
+function mountSessionAndPolar(app, currentInbox, ctx) {
   const sessionsAtRawParser = [];
-  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE);
+  mountAccountRouteGuards(app, ROUTE_GUARD_TABLE, ctx);
   app.use((_req, _res, next) => next());
   installPolarWebhookRoute(app, {
     raw(options) {
@@ -119,10 +119,11 @@ function mountSessionAndPolar(app, currentInbox) {
 }
 
 test('Polar reaches the raw parser after the session exemption', async () => {
-  installSessionSecurity(express, { dataDir: __dirname });
+  const ctx = createGuardContext();
+  installSessionSecurity(ctx, { express, dataDir: __dirname });
   const app = express();
   const inbox = { async receive() { return { state: 'RECEIVED' }; } };
-  const sessionsAtRawParser = mountSessionAndPolar(app, () => inbox);
+  const sessionsAtRawParser = mountSessionAndPolar(app, () => inbox, ctx);
   const server = await new Promise(resolve => {
     const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
   });
@@ -177,9 +178,10 @@ test('Billing V1 webhook inbox persists first, deduplicates, retries and recover
       };
       assert.equal(webhookRuntime.configure({ pool, adapter, env: { POLAR_SANDBOX_WEBHOOK_SECRET: secret } }).ready, true);
       // The production session middleware is installed before the raw route.
-      installSessionSecurity(express, { dataDir: __dirname });
+      const ctx = createGuardContext();
+      installSessionSecurity(ctx, { express, dataDir: __dirname });
       const app = express();
-      const sessionsAtRawParser = mountSessionAndPolar(app, webhookRuntime.current);
+      const sessionsAtRawParser = mountSessionAndPolar(app, webhookRuntime.current, ctx);
       app.use(express.json({ limit: '256kb' }));
       app.post('/ordinary-json', (req, res) => res.json(req.body));
       const server = await new Promise(resolve => {
