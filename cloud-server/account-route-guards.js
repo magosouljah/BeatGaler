@@ -66,15 +66,20 @@ const SELF_REGISTERED_ROUTES = Object.freeze([
   '/auth/sessions/revoke-all',
 ]);
 
-function mountAccountRouteGuards(app, table = ROUTE_GUARD_TABLE) {
+// Per-instance guard state: install* write entries, wraps read them lazily at registration time.
+function createGuardContext() {
+  return { entries: {}, state: new WeakMap() };
+}
+
+function mountAccountRouteGuards(app, table = ROUTE_GUARD_TABLE, ctx) {
   const methods = new Map();
   for (const { method, wrap } of table) {
     const previous = methods.get(method) || app[method];
     methods.set(method, function guardedRouteRegistration(routePathOrHandlers, ...handlers) {
-      return wrap.call({ app: this, next: previous.bind(this) }, routePathOrHandlers, handlers);
+      return wrap.call({ app: this, next: previous.bind(this), ctx }, routePathOrHandlers, handlers);
     });
   }
   for (const [method, register] of methods) app[method] = register;
 }
 
-module.exports = { ROUTE_GUARD_TABLE, SELF_REGISTERED_ROUTES, mountAccountRouteGuards };
+module.exports = { ROUTE_GUARD_TABLE, SELF_REGISTERED_ROUTES, createGuardContext, mountAccountRouteGuards };

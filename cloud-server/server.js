@@ -3,7 +3,9 @@
 require('dotenv').config({ quiet: true });
 const { getRuntimeEnv, serverEnv } = require('./runtime-env');
 const express = require("express");
-const { installLegacyMediaUploadDisable } = require("./legacy-media-upload-disable");
+const { prepareCloudBoot } = require("./cloud-boot");
+const { createGuardContext } = require("./account-route-guards");
+const { installLegacyMediaUploadDisable } =require("./legacy-media-upload-disable");
 const { installHttpContainment } = require("./http-containment");
 const { STATE_DIR, assertProductionStateDir } = require("./state-dir");
 const { installDirectCapabilityBoundary } = require("./direct-capability-boundary");
@@ -48,8 +50,10 @@ const directPersistentAssignments = require("./direct-persistent-assignment-runt
 const { prepareControlPlaneCutover, assembleServerCatalog } = require("./catalog-assembly");
 
 installRuntimeOperability(express, { env: getRuntimeEnv() });
-installSecurityHeaders(express);
-installLegacyMediaUploadDisable(express);
+const guardContext = createGuardContext();
+installSecurityHeaders(guardContext);
+installLegacyMediaUploadDisable(guardContext);
+prepareCloudBoot({ guards: guardContext });
 
 async function start() {
   assertProductionStateDir(getRuntimeEnv());

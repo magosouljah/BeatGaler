@@ -49,13 +49,14 @@ function client(server) {
 // App Express real con las guardas montadas y, después del montaje, los install* indicados aplicados a la propia instancia.
 async function guardedApp(installs) {
   const express = require('express');
-  const { mountAccountRouteGuards } = require('../account-route-guards');
+  const { mountAccountRouteGuards, createGuardContext } = require('../account-route-guards');
   const app = express();
-  mountAccountRouteGuards(app);
+  const ctx = createGuardContext();
+  mountAccountRouteGuards(app, undefined, ctx);
   const target = { application: app };
   if (installs.includes('runtime')) require('../runtime-operability').installRuntimeOperability(target, { env: { NODE_ENV: 'test' } });
-  if (installs.includes('headers')) require('../security-headers').installSecurityHeaders(target);
-  if (installs.includes('legacy')) require('../legacy-media-upload-disable').installLegacyMediaUploadDisable(target);
+  if (installs.includes('headers')) require('../security-headers').installSecurityHeaders(ctx);
+  if (installs.includes('legacy')) require('../legacy-media-upload-disable').installLegacyMediaUploadDisable(ctx);
   app.use((_req, res, next) => { res.setHeader('x-mw', '1'); next(); });
   app.post('/beats/upload', (_req, res) => res.send('orig'));
   app.use((_req, res) => res.send('fallback'));
@@ -80,8 +81,10 @@ async function serverCoreScenario() {
   // Misma secuencia que server.js antes de cargar server-core.
   const express = require('express');
   require('../runtime-operability').installRuntimeOperability(express, { env: process.env });
-  require('../security-headers').installSecurityHeaders(express);
-  require('../legacy-media-upload-disable').installLegacyMediaUploadDisable(express);
+  const guards = require('../account-route-guards').createGuardContext();
+  require('../security-headers').installSecurityHeaders(guards);
+  require('../legacy-media-upload-disable').installLegacyMediaUploadDisable(guards);
+  require('../cloud-boot').prepareCloudBoot({ guards });
   const { listenCloudServer } = require('../server-core');
   const before = { term: process.listenerCount('SIGTERM'), int: process.listenerCount('SIGINT') };
   const server = listenCloudServer();

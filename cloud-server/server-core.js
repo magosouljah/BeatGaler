@@ -57,7 +57,7 @@ const bot = new Proxy({}, {
   ),
 });
 
-const app = express(); require('./account-route-guards').mountAccountRouteGuards(app);
+const app = express(); require('./account-route-guards').mountAccountRouteGuards(app, undefined, require('./cloud-boot').takeCloudBoot().guards);
 const criticalPathTrace = require("./stage1-critical-path-trace");
 const { operationsRuntime } = require('./operations-runtime');
 
