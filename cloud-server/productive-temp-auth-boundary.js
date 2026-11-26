@@ -400,10 +400,9 @@ async function transformTransportBody(req, body) {
   return stripPermanentSecrets(body);
 }
 
-function installProductiveTempAuthBoundary(express) {
-  const application = express?.application;
-  if (!application || application.__beatgalerTempAuthBoundaryInstalled) return;
-  application.__beatgalerTempAuthBoundaryInstalled = true;
+function installProductiveTempAuthBoundary(ctx) {
+  if (!ctx?.entries || ctx.entries.tempAuthBoundary) return;
+  ctx.entries.tempAuthBoundary = { installed: true };
   // Load the pinned mtcute bundle while Cloud starts, before simultaneous
   // browser sessions enter the productive authorization boundary.
   void loadMtcuteInternals().catch(error => {
@@ -412,8 +411,8 @@ function installProductiveTempAuthBoundary(express) {
 }
 
 function wrapProductiveTempAuthPost(route, handlers) {
-  const { app, next } = this;
-  if (!app.__beatgalerTempAuthBoundaryInstalled || !TARGET_ROUTES.has(route)) return next(route, ...handlers);
+  const { next, ctx } = this;
+  if (!ctx?.entries.tempAuthBoundary || !TARGET_ROUTES.has(route)) return next(route, ...handlers);
   const boundary = (req, res, next) => {
     const originalJson = res.json.bind(res);
     let sent = false;

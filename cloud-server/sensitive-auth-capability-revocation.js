@@ -8,17 +8,16 @@ const SENSITIVE_ROUTES = new Map([
   ['/auth/account/delete', 'account_delete'],
 ]);
 
-function installSensitiveAuthCapabilityRevocation(express, { store } = {}) {
-  const application = express?.application;
-  if (!application || application.__beatgalerSensitiveCapabilityRevocationInstalled) return;
-  application.__beatgalerSensitiveCapabilityRevocationInstalled = true;
-  application.__beatgalerSensitiveCapabilityRevocationStore = store;
+function installSensitiveAuthCapabilityRevocation(ctx, { store } = {}) {
+  if (!ctx?.entries || ctx.entries.sensitiveCapabilityRevocation) return;
+  ctx.entries.sensitiveCapabilityRevocation = { store };
 }
 
 function wrapSensitiveAuthCapabilityRevocationPost(routePath, handlers) {
-  const { app, next } = this;
-  if (!app.__beatgalerSensitiveCapabilityRevocationInstalled) return next(routePath, ...handlers);
-  const store = app.__beatgalerSensitiveCapabilityRevocationStore;
+  const { next, ctx } = this;
+  const entry = ctx?.entries.sensitiveCapabilityRevocation;
+  if (!entry) return next(routePath, ...handlers);
+  const store = entry.store;
   const reason = SENSITIVE_ROUTES.get(routePath);
   if (!reason) return next(routePath, ...handlers);
 

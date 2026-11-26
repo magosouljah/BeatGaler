@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { mountAccountRouteGuards } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards } = require('../account-route-guards');
 const crypto = require("node:crypto");
 const {
   createMemoryStore,
@@ -287,9 +287,10 @@ test("lease end, auth changes and incident revoke ACTIVE or AUTHORIZED capabilit
 
 test("productive temp-auth strips permanent secrets from error and no-refresh response paths", async () => {
   const fakeExpress = createFakeExpress();
-  installProductiveTempAuthBoundary(fakeExpress);
+  const guardContext = createGuardContext();
+  installProductiveTempAuthBoundary(guardContext);
   const app = Object.create(fakeExpress.application);
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, guardContext);
   app.post("/transport/session/start", (_req, res) => res.json({
     ok: false,
     error: "denied",
@@ -330,9 +331,10 @@ test("sensitive account routes revoke the whole authenticated capability set and
     },
   };
   const fakeExpress = createFakeExpress();
-  installDirectCapabilityBoundary(fakeExpress, { store, env: process.env });
+  const guardContext = createGuardContext();
+  installDirectCapabilityBoundary(guardContext, { store, env: process.env });
   const app = Object.create(fakeExpress.application);
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, guardContext);
   const cases = [
     ["/auth/logout", "logout"],
     ["/auth/password/change", "password_change"],
@@ -361,9 +363,10 @@ test("sensitive account route fails closed when durable capability revocation fa
     },
   };
   const fakeExpress = createFakeExpress();
-  installDirectCapabilityBoundary(fakeExpress, { store, env: process.env });
+  const guardContext = createGuardContext();
+  installDirectCapabilityBoundary(guardContext, { store, env: process.env });
   const app = Object.create(fakeExpress.application);
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, guardContext);
   app.post("/auth/password/change", (_req, res) => res.json({ ok: true }));
   const result = await runRoute(fakeExpress.routes.get("/auth/password/change"), {
     headers: { authorization: "Bearer session-secret" },
