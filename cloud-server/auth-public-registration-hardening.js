@@ -75,7 +75,13 @@ function preserveUsers(nextUsers, previousUsers, deletedUserIds, cloneNextUser) 
     output.push(user);
   }
 
-  for (const raw of Array.isArray(previousUsers) ? previousUsers : []) {
+  // M7.4f: `previousUsers` puede ser un selector que recibe `keep(clave de id)` y devuelve copias, en
+  // orden, de al menos los previos que `keep` acepta. El bucle vuelve a aplicar las mismas reglas, así
+  // que el resultado es el de recorrer la lista completa.
+  const previous = typeof previousUsers === 'function'
+    ? previousUsers(key => { const id = key.trim(); return Boolean(id) && !deleted.has(id) && !byId.has(id); })
+    : previousUsers;
+  for (const raw of Array.isArray(previous) ? previous : []) {
     const id = String(raw?.id || '').trim();
     if (!id || deleted.has(id) || byId.has(id)) continue;
     const user = cloneUser(raw);
@@ -180,6 +186,24 @@ function installAuthPublicRegistrationHardening(express, {
   function accountsSnapshot() {
     try { return lifecycle()?.api?.state?.accountsSnapshot?.() || { users: [], sessions: {} }; }
     catch { return { users: [], sessions: {} }; }
+  }
+
+  // M7.4f: previos para el filtro de escritura; copia solo los que `keep` acepta en vez del índice entero.
+  function previousUsersWhere(keep) {
+    let state = null;
+    try { state = lifecycle()?.api?.state || null; } catch {}
+    if (typeof state?.accountsUsersWhere !== 'function') return accountsSnapshot().users;
+    // Como antes: un fallo al leer el índice da `[]` (el `catch` de accountsSnapshot), pero un fallo de
+    // las reglas de conservación (`keep`, p. ej. la lápida) se propaga y el filtro falla cerrado
+    // (AUTH_REGISTRATION_FILTER_FAILED), igual que cuando el bucle recorría la copia completa.
+    let ruleFailure = null;
+    const guardedKeep = key => {
+      try { return keep(key); } catch (error) { ruleFailure ||= { error }; throw error; }
+    };
+    let users;
+    try { users = state.accountsUsersWhere(guardedKeep); } catch { users = []; }
+    if (ruleFailure) throw ruleFailure.error;
+    return users;
   }
 
   function deletedUserIds() {
@@ -420,7 +444,7 @@ function installAuthPublicRegistrationHardening(express, {
     const originalWriteFileSync = fs.writeFileSync;
     const filterAccounts = (parsed, cloneNextUser) => {
       if (Array.isArray(parsed?.users)) {
-        parsed.users = preserveUsers(parsed.users, accountsSnapshot().users, deletedUserIds(), cloneNextUser);
+        parsed.users = preserveUsers(parsed.users, previousUsersWhere, deletedUserIds(), cloneNextUser);
         for (const user of parsed.users) {
           if (!user?.providers?.x) continue;
           delete user.providers.x.accessToken;

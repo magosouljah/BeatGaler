@@ -44,6 +44,14 @@ class IdentitySnapshot {
     return structuredClone(this.#value);
   }
 
+  // M7.4f: copia, en orden, solo los usuarios cuya clave de id (`String(user?.id || '')`) acepta `keep`.
+  // `keep` recibe la cadena, nunca el registro, así que no puede mutar el índice.
+  copyUsersWhere(keep) {
+    const picked = [];
+    for (const user of this.#value.users) if (keep(userIdKey(user))) picked.push(user);
+    return structuredClone(picked);
+  }
+
   session(hash) {
     return structuredClone(this.#sessions.get(hash));
   }
