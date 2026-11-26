@@ -75,7 +75,13 @@ function preserveUsers(nextUsers, previousUsers, deletedUserIds, cloneNextUser) 
     output.push(user);
   }
 
-  for (const raw of Array.isArray(previousUsers) ? previousUsers : []) {
+  // M7.4f: `previousUsers` puede ser un selector que recibe `keep(clave de id)` y devuelve copias, en
+  // orden, de al menos los previos que `keep` acepta. El bucle vuelve a aplicar las mismas reglas, así
+  // que el resultado es el de recorrer la lista completa.
+  const previous = typeof previousUsers === 'function'
+    ? previousUsers(key => { const id = key.trim(); return Boolean(id) && !deleted.has(id) && !byId.has(id); })
+    : previousUsers;
+  for (const raw of Array.isArray(previous) ? previous : []) {
     const id = String(raw?.id || '').trim();
     if (!id || deleted.has(id) || byId.has(id)) continue;
     const user = cloneUser(raw);
@@ -180,6 +186,15 @@ function installAuthPublicRegistrationHardening(express, {
   function accountsSnapshot() {
     try { return lifecycle()?.api?.state?.accountsSnapshot?.() || { users: [], sessions: {} }; }
     catch { return { users: [], sessions: {} }; }
+  }
+
+  // M7.4f: previos para el filtro de escritura; copia solo los que `keep` acepta en vez del índice entero.
+  function previousUsersWhere(keep) {
+    let state = null;
+    try { state = lifecycle()?.api?.state || null; } catch {}
+    if (typeof state?.accountsUsersWhere !== 'function') return accountsSnapshot().users;
+    try { return state.accountsUsersWhere(keep); }
+    catch { return []; }
   }
 
   function deletedUserIds() {
@@ -420,7 +435,7 @@ function installAuthPublicRegistrationHardening(express, {
     const originalWriteFileSync = fs.writeFileSync;
     const filterAccounts = (parsed, cloneNextUser) => {
       if (Array.isArray(parsed?.users)) {
-        parsed.users = preserveUsers(parsed.users, accountsSnapshot().users, deletedUserIds(), cloneNextUser);
+        parsed.users = preserveUsers(parsed.users, previousUsersWhere, deletedUserIds(), cloneNextUser);
         for (const user of parsed.users) {
           if (!user?.providers?.x) continue;
           delete user.providers.x.accessToken;

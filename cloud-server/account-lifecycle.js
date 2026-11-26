@@ -201,6 +201,14 @@ function createAccountLifecycleRuntime({
     return identity ? identity.copy() : readAccountsFile();
   }
 
+  // M7.4f: para el filtro de registro, que solo necesita los usuarios previos que va a conservar.
+  // Equivale a `accountsSnapshot().users` filtrado por la clave de id, sin copiar el resto del índice.
+  function accountsUsersWhere(keep) {
+    const identity = virtualIdentity(fs, accountsFile);
+    if (identity) return identity.copyUsersWhere(keep);
+    return readAccountsFile().users.filter(user => keep(String(user?.id || '')));
+  }
+
   function readAccountsFile() {
     const value = readJson(accountsFile, {});
     return {
@@ -831,6 +839,7 @@ function createAccountLifecycleRuntime({
     state: Object.freeze({
       stateSnapshot,
       accountsSnapshot,
+      accountsUsersWhere,
       userById,
       get filterAccountsValue() { return implementations.filterAccountsValue; },
       filterCloudValue,
