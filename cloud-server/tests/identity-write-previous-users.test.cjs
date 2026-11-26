@@ -16,7 +16,7 @@ const {
   installAuthPublicRegistrationHardening,
   preserveUsersByStableId,
 } = require('../auth-public-registration-hardening');
-const { installAccountLifecycle } = require('../account-lifecycle');
+const { installAccountLifecycle, createAccountLifecycleRuntime } = require('../account-lifecycle');
 const { installLifecyclePasswordAuthority } = require('../account-lifecycle-password-authority');
 
 const NOW = 1_800_000_000_000;
@@ -184,6 +184,49 @@ function main() {
     if (rnd(4) !== 0) commit(`fuzz ${step}`, expected);
   }
 
+  // 5b. Fallo de las reglas de conservación de previos (lápida que lanza): falla cerrado como en la
+  //     base, sin nada preparado ni enviado a PG.
+  value = current();
+  value.users.push(user('boomprev'));
+  save('previo que hará fallar la regla', value);
+  value = current();
+  value.users = value.users.filter(u => u.id !== 'usr_boomprev');
+  const deleted = state.deletedUserIds;
+  const originalHas = deleted.has;
+  deleted.has = function has(id) {
+    if (id === 'usr_boomprev') throw new Error('boom usr_boomprev@example.test');
+    return originalHas.call(this, id);
+  };
+  try {
+    const text = JSON.stringify(value, null, 2);
+    assert.throws(() => reference(text), /boom/, 'la referencia también falla en la regla del previo');
+    const before = snapshots.length;
+    const indexBefore = view();
+    assert.throws(() => fs.writeFileSync(authTmp, text, 'utf8'), error => {
+      assert.equal(error.code, 'AUTH_REGISTRATION_FILTER_FAILED', 'regla de previos: código');
+      assert.equal(String(error.message).includes('@example.test'), false, 'regla de previos: sin datos');
+      return true;
+    }, 'regla de previos: falla cerrado');
+    assert.throws(() => fs.readFileSync(authTmp, 'utf8'), { code: 'ENOENT' }, 'regla de previos: nada preparado');
+    assert.equal(snapshots.length, before, 'regla de previos: nada hacia PG');
+    assert.equal(view(), indexBefore, 'regla de previos: índice intacto');
+  } finally {
+    deleted.has = originalHas;
+  }
+
+  // 5c. Sin índice virtual (la ruta final sombreada por una escritura directa): los previos salen
+  //     del JSON sombreado, igual que en la base. Debe ir al final: la sombra dura todo el proceso.
+  const shadow = current();
+  shadow.users.push(user(60, { username: 'shadow60' }), user(61, { username: 'user1' }));
+  fs.writeFileSync(auth, JSON.stringify(shadow, null, 2), 'utf8');
+  assert.deepEqual(state.accountsSnapshot().users, shadow.users, 'la lectura ya viene del JSON sombreado');
+  value = JSON.parse(JSON.stringify(shadow));
+  value.users = value.users.filter(u => !['usr_60', 'usr_61'].includes(u.id));
+  value.users.unshift(user(62, { username: 'shadow60' }));
+  const shadowOut = JSON.parse(stage('sin índice virtual', value));
+  assert.equal(shadowOut.users.find(u => u.id === 'usr_60').username.startsWith('shadow60#'), true, 'previo del JSON conservado');
+  assert.ok(shadowOut.users.some(u => u.id === 'usr_61'), 'previo del JSON conservado (2)');
+
   // 6. IdentitySnapshot directo: copy() es independiente del índice y de las demás copias.
   const snap = new IdentitySnapshot(initial);
   const a = snap.copy();
@@ -196,6 +239,7 @@ function main() {
   assert.equal(snap.userById('usr_1').username, 'user1', 'el índice no comparte la entrada');
   initial.users[0].username = 'user1';
   if (typeof snap.copyUsersWhere === 'function') copyUsersWhereCases(snap);
+  if (typeof state.accountsUsersWhere === 'function') fileAccountsUsersWhereCases();
 
   console.log(`identity-write-previous-users tests: PASS (${writes} preparaciones)`);
 }
@@ -216,6 +260,22 @@ function copyUsersWhereCases(snap) {
   assert.deepEqual(snap.copyUsersWhere(() => false), []);
   const empty = new IdentitySnapshot(null);
   assert.deepEqual(empty.copyUsersWhere(() => true), []);
+}
+
+// Respaldo de M7.4f sin índice virtual (autoridad JSON en disco): lo mismo que filtrar accountsSnapshot().
+function fileAccountsUsersWhereCases() {
+  const plainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-m74f-plain-'));
+  try {
+    fs.writeFileSync(path.join(plainDir, 'accounts-data.json'), JSON.stringify(initial, null, 2));
+    const plain = createAccountLifecycleRuntime({ dataDir: plainDir, now: () => NOW }).api.state;
+    const keep = key => key.trim() !== 'usr_1' && key !== '';
+    const expected = plain.accountsSnapshot().users.filter(u => keep(String(u?.id || '')));
+    assert.equal(expected.length, 5);
+    assert.deepEqual(plain.accountsUsersWhere(keep), expected, 'respaldo JSON: mismos previos y orden');
+    assert.deepEqual(plain.accountsUsersWhere(() => true), plain.accountsSnapshot().users);
+  } finally {
+    fs.rmSync(plainDir, { recursive: true, force: true });
+  }
 }
 
 try {

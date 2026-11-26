@@ -193,8 +193,17 @@ function installAuthPublicRegistrationHardening(express, {
     let state = null;
     try { state = lifecycle()?.api?.state || null; } catch {}
     if (typeof state?.accountsUsersWhere !== 'function') return accountsSnapshot().users;
-    try { return state.accountsUsersWhere(keep); }
-    catch { return []; }
+    // Como antes: un fallo al leer el índice da `[]` (el `catch` de accountsSnapshot), pero un fallo de
+    // las reglas de conservación (`keep`, p. ej. la lápida) se propaga y el filtro falla cerrado
+    // (AUTH_REGISTRATION_FILTER_FAILED), igual que cuando el bucle recorría la copia completa.
+    let ruleFailure = null;
+    const guardedKeep = key => {
+      try { return keep(key); } catch (error) { ruleFailure ||= { error }; throw error; }
+    };
+    let users;
+    try { users = state.accountsUsersWhere(guardedKeep); } catch { users = []; }
+    if (ruleFailure) throw ruleFailure.error;
+    return users;
   }
 
   function deletedUserIds() {
