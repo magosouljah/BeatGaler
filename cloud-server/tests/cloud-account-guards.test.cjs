@@ -210,6 +210,16 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
         clearsCookies(replay);
       });
 
+      await t.test('sessions/revoke limita su cuerpo a 16 KiB, por debajo del parser global', async () => {
+        const credentials = { ...browser, ...webSession(await login()) };
+        const limit = 16 * 1024;
+        const padding = bytes => ({ session_id: 'x'.repeat(bytes - Buffer.byteLength('{"session_id":""}')) });
+        assert.equal((await post('sessions/revoke', credentials, padding(limit))).status, 404);
+        assert.deepEqual(json(await post('sessions/revoke', credentials, padding(limit + 1)), 413),
+          { error: 'Request body is too large.' });
+        assert.ok(json(await post('sessions', credentials), 200).sessions.find(session => session.current));
+      });
+
       await t.test('El parser global admite 256 KiB y la sesión/CSRF lo precede', async () => {
         const { cookie: sessionCookie } = webSession(await login());
         const limit = 256 * 1024;
