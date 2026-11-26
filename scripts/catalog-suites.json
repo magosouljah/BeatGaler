@@ -11,8 +11,7 @@
     "cloud-server/tests/postgres-schema.test.cjs",
     "cloud-server/tests/postgres-migration-runner.test.cjs",
     "tests/component-dom/",
-    "tests/helpers/",
-    "cloud-server/tests/project-master-message.test.cjs"
+    "tests/helpers/"
   ],
   "forbidden_case_files": [
     "cloud-server/tests/postgres-live.integration.cjs"
@@ -862,17 +861,6 @@
             "--test",
             "--test-reporter=tap",
             "cloud-server/tests/catalog/catalog-transport-gateway.test.cjs"
-          ],
-          "kind": "node-test",
-          "network": "deny"
-        },
-        {
-          "id": "t12-project-master-message",
-          "cmd": [
-            "node",
-            "--test",
-            "--test-reporter=tap",
-            "cloud-server/tests/project-master-message.test.cjs"
           ],
           "kind": "node-test",
           "network": "deny"

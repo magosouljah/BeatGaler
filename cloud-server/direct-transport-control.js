@@ -7,9 +7,6 @@ const crypto = require('crypto');
 const { performance } = require('perf_hooks');
 const { TelegramClient, Api } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-const { CustomFile } = require('telegram/client/uploads');
-const { ProjectAccessError } = require('./project-access');
-const { withTelegramFloodWait } = require('./telegram-retry');
 
 const { configureCatalogTelegramTransport } = require('./catalog-telegram-transport');
 
@@ -861,82 +858,6 @@ function startMaintenance() {
   setTimeout(() => cleanupExpiredSessions().catch(() => {}), 1000).unref?.();
 }
 
-// MASTER publishes and restores the server-authoritative INDEX. Media uploads
-// and reads remain on the Direct data plane.
-async function pinMasterIndexMessage(masterInfo, messageId, retryOptions = {}) {
-  return withTelegramFloodWait('MASTER INDEX pin', () => masterInfo.client.invoke(
-    new Api.messages.UpdatePinnedMessage({
-      peer: masterInfo.vault, id: messageId, silent: true, unpin: false, pmOneside: false,
-    })
-  ), {
-    onWait: ({ retryAfter, attempt }) => {
-      console.warn(`[telegram] MASTER INDEX pin rate limited; waiting ${retryAfter}s before retry ${attempt}.`);
-    },
-    ...retryOptions,
-  });
-}
-
-async function commitIndexCopyOnWriteWithMaster(masterInfo, { filePath, caption, previousMessageId }, retryOptions) {
-  const stat = fs.statSync(filePath);
-  const sent = await masterInfo.client.sendFile(masterInfo.vault, {
-    file: new CustomFile(path.basename(filePath), stat.size, filePath),
-    forceDocument: true,
-    caption,
-    workers: 1,
-  });
-  await pinMasterIndexMessage(masterInfo, Number(sent.id), retryOptions);
-  if (Number(previousMessageId) > 0) {
-    try { await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: [Number(previousMessageId)] })); } catch (_) {}
-  }
-  return { messageId: Number(sent.id), backups: [] };
-}
-
-function projectCaption(beatId, sha256) {
-  return `BEATGALER_PROJECT_V1 beat=${beatId} sha256=${sha256}`;
-}
-
-function legacyProjectCaption(beatId, sourceMessageId, partIndex) {
-  return `BEATGALER_LEGACY_PROJECT_V1 beat=${beatId} source=${sourceMessageId} part=${partIndex}`;
-}
-
-async function copyLegacyProjectPartFromClient(client, vault, { beatId, sourceMessageId, partIndex }) {
-    const caption = legacyProjectCaption(beatId, sourceMessageId, partIndex);
-    const source = (await client.getMessages(vault, { ids: [sourceMessageId] }))?.[0];
-    if (!(source?.media?.document instanceof Api.Document)) {
-      throw new ProjectAccessError('Legacy PROJECT document is unavailable.', 'PROJECT_LEGACY_UNAVAILABLE', 503);
-    }
-    const documentId = String(source.media.document.id);
-    const sizeBytes = Number(source.media.document.size);
-    for (const options of [{ search: caption, limit: 100 }, { limit: 100 }]) {
-      for await (const message of client.iterMessages(vault, options)) {
-        if (message?.out === true && String(message.message || '') === caption &&
-            String(message.media?.document?.id || '') === documentId &&
-            Number(message.media.document.size) === sizeBytes) {
-          return { sourceMessageId, messageId: Number(message.id), documentId, sizeBytes, partIndex };
-        }
-      }
-    }
-    const sent = await client.sendFile(vault, {
-      file: source.media, forceDocument: true, caption, workers: 1,
-    });
-    if (!Number.isSafeInteger(Number(sent?.id)) || String(sent?.media?.document?.id || '') !== documentId) {
-      throw new ProjectAccessError('MASTER did not copy the legacy PROJECT.', 'PROJECT_LEGACY_UNAVAILABLE', 503);
-    }
-    return { sourceMessageId, messageId: Number(sent.id), documentId, sizeBytes, partIndex };
-}
-
-async function verifyProjectMediaFromClient(client, vault, { messageId, beatId, sha256, documentId, sizeBytes, caption = null }) {
-  const message = (await client.getMessages(vault, { ids: [Number(messageId)] }))?.[0];
-  const expectedCaption = typeof caption === 'string' && caption ? caption : projectCaption(beatId, sha256);
-  if (message?.out !== true || String(message?.message || '') !== expectedCaption ||
-      !(message?.media?.document instanceof Api.Document) ||
-      String(message.media.document.id) !== String(documentId) ||
-      Number(message.media.document.size) !== Number(sizeBytes)) {
-    throw new ProjectAccessError('MASTER PROJECT document changed or is unavailable.', 'PROJECT_BYTES_UNVERIFIED', 503);
-  }
-  return true;
-}
-
 function poolStatus() {
   if (!fs.existsSync(POOL_FILE)) return { configured: false, bots: [], sessions: 0, operations: 0 };
   const pool = loadPool();
@@ -969,11 +890,7 @@ module.exports = {
   poolStatus,
   __testing: {
     TOKEN_ROTATION_ENABLED,
-    copyLegacyProjectPartFromClient,
-    verifyProjectMediaFromClient,
     cleanupExpiredSessions,
-    pinMasterIndexMessage,
-    commitIndexCopyOnWriteWithMaster,
     stateSnapshot,
     mutateState,
     setMonotonicNow(fn) {

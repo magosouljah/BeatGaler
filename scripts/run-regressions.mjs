@@ -357,9 +357,11 @@ try {
   if (!audioConflictModal.includes("Skip this beat") || !audioConflictModal.includes("__skip__")) fail("One unwanted audio conflict can cancel the whole batch again.");
   if (!audioConflictModal.includes("for (const conflict of conflicts)")) fail("Audio conflicts are no longer resolved deterministically one at a time.");
   const telegramRetry = readFileSync(path.join(root, "cloud-server", "telegram-retry.js"), "utf8");
-  // T25: server-core ya no llama a Telegram; las operaciones MASTER restantes (pin/membresía) viven en direct-transport-control.js.
+  // T25/X1f: el INDEX de Telegram y la copia/verificación PROJECT por MASTER se retiraron de direct-transport-control.js; no deben volver.
   const directTransportControl = readFileSync(path.join(root, "cloud-server", "direct-transport-control.js"), "utf8");
-  if (!directTransportControl.includes('withTelegramFloodWait')) fail("Telegram 429 flood-wait handling disappeared from the Cloud MASTER transport.");
+  for (const retired of ['pinMasterIndexMessage', 'commitIndexCopyOnWriteWithMaster', 'verifyProjectMediaFromClient', 'copyLegacyProjectPartFromClient', 'withTelegramFloodWait']) {
+    if (directTransportControl.includes(retired)) fail("Retired MASTER INDEX/PROJECT transport code reappeared in direct-transport-control.js: " + retired);
+  }
   if (!telegramRetry.includes("retry\\s+after") || !telegramRetry.includes("retry_after")) fail("Telegram retry helper no longer understands Bot API retry_after responses.");
   console.log("PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, Telegram flood-wait, and authoritative final sync");
 

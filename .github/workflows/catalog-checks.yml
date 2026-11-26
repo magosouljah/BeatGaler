@@ -33,7 +33,6 @@ on:
       - cloud-server/postgres-auth-multiprocess-compat.js
       - cloud-server/tests/postgres-schema.test.cjs
       - cloud-server/tests/postgres-migration-runner.test.cjs
-      - cloud-server/tests/project-master-message.test.cjs
       - tests/catalog-harness/run-browser-harness.mjs
       - tests/component-dom/addBeatRename.test.tsx
       - tests/component-dom/importPickDrop.test.tsx
@@ -66,7 +65,6 @@ on:
       - cloud-server/postgres-auth-multiprocess-compat.js
       - cloud-server/tests/postgres-schema.test.cjs
       - cloud-server/tests/postgres-migration-runner.test.cjs
-      - cloud-server/tests/project-master-message.test.cjs
       - tests/catalog-harness/run-browser-harness.mjs
       - tests/component-dom/addBeatRename.test.tsx
       - tests/component-dom/importPickDrop.test.tsx
