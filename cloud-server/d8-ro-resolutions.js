@@ -31,9 +31,12 @@ function purgeRecoverableTombstones(runtime) {
   runtime.api.state.scrubCloudFile?.();
 }
 
+// Runtimes ya parcheados: una segunda instalación sobre el mismo runtime no vuelve a parchear.
+const immediateDeleteRuntimes = new WeakSet();
+
 function installImmediateAccountDeletion(runtime, { randomBytes = size => crypto.randomBytes(size), now = () => Date.now() } = {}) {
-  if (!runtime?.api || runtime.__beatgalerD8ImmediateDeleteInstalled) return runtime;
-  runtime.__beatgalerD8ImmediateDeleteInstalled = true;
+  if (!runtime?.api || immediateDeleteRuntimes.has(runtime)) return runtime;
+  immediateDeleteRuntimes.add(runtime);
   purgeRecoverableTombstones(runtime);
   runtime.retentionConfigured = true;
 

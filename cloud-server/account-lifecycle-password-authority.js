@@ -12,9 +12,12 @@ function writeState(file, value) {
   fs.renameSync(tmp, file);
 }
 
+// Runtimes ya parcheados: una segunda instalación sobre el mismo runtime no vuelve a parchear.
+const installedRuntimes = new WeakSet();
+
 function installLifecyclePasswordAuthority(runtime) {
-  if (!runtime?.api || runtime.__beatgalerPasswordAuthoritySyncInstalled) return runtime;
-  runtime.__beatgalerPasswordAuthoritySyncInstalled = true;
+  if (!runtime?.api || installedRuntimes.has(runtime)) return runtime;
+  installedRuntimes.add(runtime);
   const state = runtime.api.state.stateSnapshot();
   const stateFile = runtime.api.state.stateFile;
 

@@ -393,6 +393,19 @@ async function main() {
       getCapabilityStore: () => ({ revokeAuthSession: async () => 1 }),
     });
     installLifecyclePasswordAuthority(authorityRuntime);
+    {
+      // M7.5b-B8: una segunda instalación sobre el mismo runtime no vuelve a parchear.
+      const installedComplete = authorityRuntime.api.password.completePasswordReset;
+      const installedFilter = authorityRuntime.api.state.filterAccountsValue;
+      const originalProvide = authorityRuntime.provide;
+      let provideCalls = 0;
+      authorityRuntime.provide = (...args) => { provideCalls += 1; return originalProvide(...args); };
+      assert.equal(installLifecyclePasswordAuthority(authorityRuntime), authorityRuntime);
+      authorityRuntime.provide = originalProvide;
+      assert.equal(provideCalls, 0, 'second install must not patch the runtime again');
+      assert.equal(authorityRuntime.api.password.completePasswordReset, installedComplete);
+      assert.equal(authorityRuntime.api.state.filterAccountsValue, installedFilter);
+    }
     const resetToken = authorityRuntime._test.issueTestToken({ kind: 'password_reset', user: authorityUser, email: authorityUser.email });
     const resetRes = makeRes();
     await authorityRuntime.api.password.completePasswordReset(req({ body: { token: resetToken, newPassword: 'authority-reset' } }), resetRes);
