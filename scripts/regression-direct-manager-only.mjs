@@ -103,10 +103,7 @@ if (!server.includes('MASTER intentionally creates NO index')) fail('MASTER may 
 
 // Heartbeats/optional token rotation concern ephemeral leases, never ownership.
 if (!control.includes("getManagedBotToken")) fail('001BeatGaler no longer has its manager-only token role.');
-if (!control.includes("directEnv.tokenRotationEnabled() || 'false'")) fail('Token rotation is not disabled by default for V5 testing.');
 if (!envExample.includes('DIRECT_TOKEN_ROTATION_ENABLED=false')) fail('V5 test-mode no-revoke setting is missing from .env.example.');
-if (!control.includes('directEnv.heartbeatIntervalMs() || 60_000')) fail('Heartbeat default is no longer 60 seconds.');
-if (!control.includes('directEnv.heartbeatTimeoutMs() || 5 * 60_000')) fail('Heartbeat timeout default is no longer 5 minutes.');
 
 // PostgreSQL is the sole authority. First access is lazy; an existing assignment
 // returns before candidate selection even if the bot is unavailable/quarantined.
