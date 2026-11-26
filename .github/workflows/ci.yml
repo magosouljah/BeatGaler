@@ -66,6 +66,8 @@ jobs:
         run: npm run test:web
       - name: Prueba TLS readiness del deploy Web
         run: bash tests/v1-web-tls-readiness.test.sh
+      - name: Prueba release-switch Web (symlink atomico, solo Linux)
+        run: bash tests/v1-web-release-switch.test.sh
       - name: Build Web como producción
         env:
           VITE_CATALOG_API_ENABLED: 'true'
