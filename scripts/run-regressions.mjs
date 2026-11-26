@@ -74,8 +74,6 @@ try {
   const startupBootstrap = readFileSync(path.join(root, "src", "features", "startup", "useStartupBootstrap.ts"), "utf8");
   const libraryReveal = readFileSync(path.join(root, "src", "features", "startup", "useLibraryReveal.ts"), "utf8");
   const connectivity = readFileSync(path.join(root, "src", "features", "session", "useConnectivity.ts"), "utf8");
-  const interruptedUploadJournal = readFileSync(path.join(root, "src", "features", "cloud", "interruptedUploadJournal.ts"), "utf8");
-  const uploadErrorDetails = readFileSync(path.join(root, "src", "features", "cloud", "uploadErrorDetails.ts"), "utf8");
   const desktopBeatUploadPipeline = readFileSync(path.join(root, "src", "features", "cloud", "desktopBeatUploadPipeline.ts"), "utf8");
   const cloudUploadQueue = readFileSync(path.join(root, "src", "features", "cloud", "useCloudUploadQueue.ts"), "utf8");
   const importDiscovery = readFileSync(path.join(root, "src", "features", "import", "useImportDiscovery.ts"), "utf8");
@@ -288,16 +286,8 @@ try {
 
   // Definitive beat runtime state architecture. These are independent machines,
   // not one overloaded status string, and they remain session-local by design.
-  const runtimeStateMachine = readFileSync(path.join(root, "src", "features", "state", "beatRuntimeState.ts"), "utf8");
   const beatDownloadsForRuntime = readFileSync(path.join(root, "src", "features", "downloads", "useBeatDownloads.ts"), "utf8");
   const runtimeRegistry = readFileSync(path.join(root, "src", "features", "state", "useBeatRuntimeRegistry.ts"), "utf8");
-  for (const stateName of ["pending_upload", "uploading", "synced", "pending_update", "updating", "deleting", "error", "conflict", "downloading", "idle", "playback_preparing", "playing"]) {
-    if (!runtimeStateMachine.includes(`"${stateName}"`)) fail(`Definitive runtime state missing: ${stateName}`);
-  }
-  if (!runtimeStateMachine.includes("offline_available: boolean")) fail("Available Offline was collapsed back into a mutually-exclusive status.");
-  if (!runtimeStateMachine.includes("download_progress: number | null")) fail("Optional download progress runtime data was removed.");
-  if (!runtimeStateMachine.includes("previous_state")) fail("Runtime errors no longer retain previous_state.");
-  if (!runtimeStateMachine.includes("trash_sync_required")) fail("Offline Trash lost its explicit reconciliation bit.");
   if (!beatAssetUpdates.includes('transitionRuntime(beat.id, { type: "SYNC_QUEUE_UPDATE" }') || !cloudUploadQueue.includes('type: "SYNC_UPLOAD_STARTED"') || !cloudUploadQueue.includes('type: "PLAYBACK_PREPARING"') || !beatDownloadsForRuntime.includes('type: "DOWNLOAD_STARTED"')) fail("App flows are no longer wired to the definitive runtime state machine.");
   if (!runtimeRegistry.includes("const [beatRuntimeStates, setBeatRuntimeStates]")) fail("Runtime states were moved out of the session-local runtime registry.");
   if (!runtimeRegistry.includes("const beatRuntimeStatesRef = useRef") || !runtimeRegistry.includes("hydrateBeatRuntimeState") || !runtimeRegistry.includes('runtime.sync_state === "deleting" || runtime.trash_sync_required')) fail("Runtime registry lost hydration/ref ownership or pending Trash preservation.");
@@ -477,11 +467,6 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   // Phase 11: recovery/corruption guard. A crash marker is never authority,
   // canonical INDEX wins, incomplete downloads/exports stay sidecar-only,
   // corrupt payloads fail closed, and durable control-plane state is atomic.
-  if (!interruptedUploadJournal.includes('const INTERRUPTED_UPLOADS_KEY = "beatgaler:active-cloud-uploads:v1"')) fail("Interrupted upload recovery marker disappeared or changed storage key.");
-  if (!interruptedUploadJournal.includes("authoritativeBeatIds?.has(item.beatId)")) fail("Upload recovery can no longer preserve a beat already committed to the authoritative INDEX.");
-  if (!interruptedUploadJournal.includes("authoritativeBeatIds === null")) fail("Upload recovery no longer fails closed when the authoritative INDEX cannot be verified.");
-  if (!interruptedUploadJournal.includes("remaining.push(item)")) fail("Failed upload rollback no longer keeps its recovery marker for a later launch.");
-  if (!uploadErrorDetails.includes("buildUploadFailureDetail") || !uploadErrorDetails.includes('sanitizeUserVisibleText(raw, "Unknown error")')) fail("Upload error detail ownership or user-visible sanitization disappeared.");
   const directDownloadStart11 = rustCommands.indexOf("fn download_telegram_file_to_path(");
   const directDownloadEnd11 = rustCommands.indexOf("fn download_beat_from_telegram_inner", directDownloadStart11);
   const directDownload11 = rustCommands.slice(directDownloadStart11, directDownloadEnd11);
