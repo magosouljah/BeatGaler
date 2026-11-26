@@ -118,7 +118,7 @@ function prepareAccount(direct, prepareAssignedLease, index, installationSuffix 
   assert.equal(status.operations, 2);
   assert.equal(status.bots.find(bot => bot.id === 'Bot01').active_operations, 2);
 
-  // A second device on the SAME vault is a separate session of the same bot; stopping
+  // A second device on the SAME vault is a separate session of the same bot; expiring
   // it must not touch the other sessions or their operations.
   const secondDevice = prepareAssignedLease({
     directTransport: direct,
@@ -127,12 +127,11 @@ function prepareAccount(direct, prepareAssignedLease, index, installationSuffix 
     installationId: 'stage1-install-0-device-2',
     chatId: vaultA.chat_id,
   }).lease;
-  await direct.__testing.stopSession({
-    installationId: secondDevice.installation_id,
-    sessionId: secondDevice.session_id,
-    generation: secondDevice.generation,
+  direct.__testing.mutateState(runtimePool, state => {
+    state.leases[secondDevice.session_id].last_heartbeat_at = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   });
-  assert.equal(direct.poolStatus().operations, 2, 'stopping one session leaves the other operations');
+  await direct.__testing.cleanupExpiredSessions();
+  assert.equal(direct.poolStatus().operations, 2, 'expiring one session leaves the other operations');
   direct.__testing.mutateState(runtimePool, state => {
     delete state.operations[opA];
     delete state.operations[opB];

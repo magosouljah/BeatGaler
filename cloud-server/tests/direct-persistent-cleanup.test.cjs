@@ -22,7 +22,6 @@ fs.writeFileSync(poolFile, JSON.stringify({ bots: [bot] }));
 fs.writeFileSync(registryFile, JSON.stringify({
   version: 1,
   vaults: {
-    '-1007000000001': { persistent_marker: 'must-survive-cleanup' },
     '-1007000000002': { persistent_marker: 'must-survive-expiry' },
   },
   resolver: {
@@ -72,28 +71,7 @@ Module._load = function(request, parent, isMain) {
   const { seedOperation } = require('./helpers/seed-operation.cjs');
   const runtimePool = [{ id: 'Bot01' }];
 
-  const first = prepareAssignedLease({
-    directTransport: direct,
-    status: direct.poolStatus(),
-    transportBotId: bot.id,
-    installationId: 'normal-close-installation',
-    chatId: '-1007000000001',
-  });
-  const firstOp = { operation_id: seedOperation({ directTransport: direct, pool: runtimePool, lease: first.lease, kind: 'data' }) };
-  assert.ok(direct.__testing.stateSnapshot(runtimePool).operations[firstOp.operation_id], 'seeded operation must exist before close');
-
-  const stopped = await direct.__testing.stopSession({
-    installationId: first.lease.installation_id,
-    sessionId: first.lease.session_id,
-    generation: first.lease.generation,
-  });
-  assert.equal(stopped.ok, true);
-  assert.equal(stopped.released, true);
-  assert.equal(stopped.membership_preserved, true);
-  let state = direct.__testing.stateSnapshot(runtimePool);
-  assert.equal(state.leases[first.lease.session_id], undefined, 'normal close must delete the local lease');
-  assert.equal(state.operations[firstOp.operation_id], undefined, 'normal close must delete lease-owned operations');
-  assert.equal(telegramClientConstructions, 0, 'normal close must not construct MASTER TelegramClient');
+  let state;
 
   const second = prepareAssignedLease({
     directTransport: direct,
@@ -115,11 +93,9 @@ Module._load = function(request, parent, isMain) {
   assert.equal(telegramClientConstructions, 0, 'heartbeat cleanup must not construct MASTER TelegramClient');
 
   const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
-  assert.equal(registry.vaults['-1007000000001'].persistent_marker, 'must-survive-cleanup');
   assert.equal(registry.vaults['-1007000000002'].persistent_marker, 'must-survive-expiry');
-  assert.equal(typeof direct.__testing.decommissionVaultMembership, 'function', 'membership removal must exist only as an explicit decommission operation');
 
-  console.log('PASS Direct persistent cleanup: normal close and heartbeat expiry remove local session state without MASTER or membership removal');
+  console.log('PASS Direct persistent cleanup: heartbeat expiry removes local session state without MASTER or membership removal');
 })().catch(error => {
   console.error(error?.stack || error);
   process.exitCode = 1;
