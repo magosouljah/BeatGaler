@@ -2,17 +2,17 @@
 
 const { bearerTokenOptionalRequest: bearerToken } = require('./auth-helpers');
 
-function installLifecycleRequestGuard(express, runtime) {
-  const application = express?.application;
-  if (!application || !runtime?.api?.session?.sessionInfoFromRequest || application.__beatgalerLifecycleRequestGuardRuntime) return;
-  application.__beatgalerLifecycleRequestGuardRuntime = runtime;
+function installLifecycleRequestGuard(ctx, runtime) {
+  if (!ctx?.entries || !runtime?.api?.session?.sessionInfoFromRequest || ctx.entries.lifecycleRequestGuard) return;
+  ctx.entries.lifecycleRequestGuard = { runtime };
 }
 
 function wrapLifecycleRequestGuardUse(routePathOrHandlers, handlers) {
-  const { app, next } = this;
-  const runtime = app.__beatgalerLifecycleRequestGuardRuntime;
-  if (runtime && !app.__beatgalerLifecycleRequestGuardAttached) {
-    app.__beatgalerLifecycleRequestGuardAttached = true;
+  const { app, next, ctx } = this;
+  const runtime = ctx?.entries.lifecycleRequestGuard?.runtime;
+  const state = ctx?.state.get(app) || {};
+  if (runtime && !state.lifecycleRequestGuardAttached) {
+    ctx.state.set(app, { ...state, lifecycleRequestGuardAttached: true });
     next((req, res, proceed) => {
       // SessionSecurity runs immediately before this guard and normalizes a
       // Web cookie/rotated alias back to the canonical account bearer.

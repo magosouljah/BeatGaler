@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { account, withCloud } = require('./helpers/composition-cloud.cjs');
 const pendingSignup = require('../pending-signup-boundary');
+const sessionSecurity = require('../session-security');
 
 const sessionName = '__Host-beatgaler_session';
 const csrfName = '__Host-beatgaler_csrf';
@@ -86,6 +87,14 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
         },
       },
     });
+
+  // Captura el runtime de sesión que instala server.js (antes se leía de express.application).
+  const installSessionSecurity = sessionSecurity.installSessionSecurity;
+  let sessionRuntime = null;
+  sessionSecurity.installSessionSecurity = (ctx, options) => {
+    sessionRuntime = installSessionSecurity(ctx, options);
+    return sessionRuntime;
+  };
 
   try {
     await withCloud(async (app, send) => {
@@ -235,7 +244,7 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
       });
 
       await t.test('X65: el alta pendiente pasa por contención y antiabuso antes de responder', async () => {
-        const runtime = app.__beatgalerSessionSecurityRuntime;
+        const runtime = sessionRuntime;
         const decorateResponse = runtime.decorateResponse;
         const decoratedRoutes = [];
         runtime.decorateResponse = (route, ...args) => {
@@ -292,5 +301,6 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
     });
   } finally {
     pendingSignup.installPendingSignupBoundary = installPendingSignupBoundary;
+    sessionSecurity.installSessionSecurity = installSessionSecurity;
   }
 });
