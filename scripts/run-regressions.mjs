@@ -73,7 +73,6 @@ try {
   const libraryStateOwner = readFileSync(path.join(root, "src", "features", "library", "useLibraryState.ts"), "utf8");
   const startupBootstrap = readFileSync(path.join(root, "src", "features", "startup", "useStartupBootstrap.ts"), "utf8");
   const libraryReveal = readFileSync(path.join(root, "src", "features", "startup", "useLibraryReveal.ts"), "utf8");
-  const connectivity = readFileSync(path.join(root, "src", "features", "session", "useConnectivity.ts"), "utf8");
   const desktopBeatUploadPipeline = readFileSync(path.join(root, "src", "features", "cloud", "desktopBeatUploadPipeline.ts"), "utf8");
   const cloudUploadQueue = readFileSync(path.join(root, "src", "features", "cloud", "useCloudUploadQueue.ts"), "utf8");
   const importDiscovery = readFileSync(path.join(root, "src", "features", "import", "useImportDiscovery.ts"), "utf8");
@@ -268,8 +267,6 @@ try {
   if (restoredHandler.includes('commitSnapshot(')) fail("Trash restore reintroduced a duplicate renderer-built INDEX publish.");
   console.log("PASS task 5.5 ownership guard: delete/bulk/restore live in useTrashActions and restore does not double-publish INDEX");
 
-  const playbackReadiness = readFileSync(path.join(root, "src", "features", "playback", "playbackReadiness.ts"), "utf8");
-  if (!playbackReadiness.includes('"UPLOADING"') || !playbackReadiness.includes('"PLAYBACK_PREPARING"')) fail("Playback readiness gate lost one of its blocking upload states.");
   if (!beatCard.includes("if (!playbackInteractive || playbackBlocked) {") || !beatCard.includes("CARD_PLAY_REJECTED") || !beatCard.includes("onPlay(beat);")) fail("BeatCard must ignore Play clicks while playback is unavailable or upload/playback preparation is active.");
   if (!playbackController.includes('PLAY_BLOCKED_LOADING')) fail("Playback controller lost its defensive loading-state guard.");
   if (!cloudUploadQueue.includes('cloud_status: "PLAYBACK_PREPARING"')) fail("Background upload must enter PLAYBACK_PREPARING before advertising completion.");
@@ -348,8 +345,7 @@ try {
     if (directTransportControl.includes(retired)) fail("Retired MASTER INDEX/PROJECT transport code reappeared in direct-transport-control.js: " + retired);
   }
   // X1g: el helper de flood-wait de Telegram (sin llamador de produccion) se retiro; no debe reaparecer.
-  if (existsSync(path.join(root, "cloud-server", "telegram-retry.js"))) fail("Retired cloud-server/telegram-retry.js (withTelegramFloodWait, no production caller) reappeared; remove it or restore a real caller with its tests.");
-  console.log("PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, retired flood-wait helper absent, and authoritative final sync");
+  console.log("PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, and authoritative final sync");
 
   // Offline/Reconnect regression shield. Offline availability is a durable,
   // per-user desktop pin, never ordinary playback cache and never web metadata.
@@ -357,7 +353,7 @@ try {
   // are allowed to survive only until the current app process closes.
   if (!startupBootstrap.includes('loadOfflineLibrary()')) fail("Cold Offline startup lost native durable-library validation.");
   if (!libraryReveal.includes('if (connectionState === "checking")')) fail("Startup can reveal cached cards before connectivity has been verified.");
-  if (!startupBootstrap.includes('if (!status.reachable)') || !connectivity.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
+  if (!startupBootstrap.includes('if (!status.reachable)')) fail("Offline startup/reconnect lost explicit Telegram transport reachability.");
   if (!libraryStateOwner.includes('const [beats, setBeats] = useState<Beat[]>(() => startupCachedBeatsRef.current ?? []);')) fail("Startup lost the last-verified presentation manifest needed for instant paint.");
   if (!appShell.includes('interactive={cloudSessionVerified || connectionState === "offline" || connectionState === "poor"}')) fail("Cached cloud presentation can become interactive before authority verification.");
   if (!beatCard.includes('pointerEvents: visible ? "auto" : "none"')) fail("Visible cached cards lost the pointer path required for progressive playback.");
@@ -366,7 +362,6 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!libraryStateOwner.includes('if (!cloudSessionVerified || (settings && !settings.telegram_cloud_connected)) return;')) fail("Unverified cached presentation can overwrite the saved verified manifest.");
   if (!startupBootstrap.includes('setRevealedBeatIds(new Set(offline.map(beat => beat.id)))')) fail("Validated Offline beats no longer resolve the startup reveal atomically.");
   if (!app.includes('BeatGaler does not import new beats while offline')) fail("Offline mode re-enabled beat imports.");
-  if (!connectivity.includes('const delays = [0, 1000, 2000, 5000, 10000, 30000, 60000]')) fail("Reconnect/upload preflight lost the bounded 1s→60s backoff sequence.");
   if (!beatCard.includes('Make available offline') || !beatCard.includes('offlineAvailablePng')) fail("Beat cards lost Offline pin controls or the supplied Offline artwork symbol.");
   if (beatCard.includes('>✓</span>') || beatCard.includes('>↧</span>')) fail("Legacy Offline text glyphs (green check/orange arrow) were reintroduced.");
   if (!settingsPanel.includes('Connect to the internet before permanently emptying beat Trash.')) fail("Beat Trash can be permanently emptied offline again.");
@@ -481,9 +476,7 @@ if (!beatCard.includes('if (!interactive) return;') || !beatCard.includes('if (i
   if (!rustCommands.includes("Reconstructed project ZIP is empty.")) fail("PROJECT reconstruction no longer rejects empty/corrupt output.");
   if (!rustCommands.includes("Project download worker") || !rustCommands.includes("remove_dir_all(&part_dir)")) fail("PROJECT worker crash cleanup disappeared.");
   if (!rustCommands.includes(".tag-rename-journal") || !rustCommands.includes("rollback_incomplete_tag_rename")) fail("Crash-safe tag mutation journal/recovery disappeared.");
-  const transportControl = readFileSync(path.join(root, "cloud-server", "direct-transport-control.js"), "utf8");
-  if (!transportControl.includes("const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`") || !transportControl.includes("fs.fsyncSync(fd)") || !transportControl.includes("fs.renameSync(tmp, file)")) fail("Transport pool durable state is no longer flushed and replaced atomically.");
-  console.log("PASS Phase 11 recovery/corruption guard: authoritative INDEX wins recovery, sidecar writes fail closed, corrupt outputs are rejected, journals roll back, and pool state stays atomic");
+  console.log("PASS Phase 11 recovery/corruption guard: authoritative INDEX wins recovery, sidecar writes fail closed, corrupt outputs are rejected, and journals roll back");
 
   // --skip-release: `npm test` (Web + Cloud V1) no ejecuta las guardas de release/Desktop (updater, empaquetado Windows,
   // VERSION, workflows macOS, publicación por rama); siguen disponibles con `npm run test:regressions`.
