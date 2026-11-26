@@ -30,6 +30,8 @@ const args = new Set(process.argv.slice(2));
 const integration = args.has("--integration");
 const listOnly = args.has("--list");
 
+// Unitarias con sujeto del lado Cloud que viven fuera de cloud-server/tests (ruta relativa a ese directorio); usan cloud-server/node_modules.
+const EXTRA_UNIT = ["../../tests/e2e-web/stage1-cloud-timing.test.cjs"];
 const NEVER = new Set(["postgres-live.integration.cjs"]);
 // Orden implícito heredado de CI: este archivo necesita el esquema que deja el anterior en la MISMA base.
 const SHARES_DB_WITH = { "direct-persistent-legacy-lazy.postgres.integration.cjs": "direct-vault-assignment.postgres.integration.cjs" };
@@ -55,7 +57,7 @@ function select() {
     }
     return ordered;
   }
-  return files.filter((f) => /\.test\.(cjs|mjs)$/.test(f) || f.endsWith(".runner.cjs"));
+  return [...files.filter((f) => /\.test\.(cjs|mjs)$/.test(f) || f.endsWith(".runner.cjs")), ...EXTRA_UNIT];
 }
 
 function baseEnv(extra = {}) {
