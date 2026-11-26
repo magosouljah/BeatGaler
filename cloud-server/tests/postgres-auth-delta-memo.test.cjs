@@ -197,6 +197,12 @@ const nativeVault = (userId, chat) => ({ user_id: userId, id: `v-${userId}`, tel
     return { rules: [{ match: /flush-quarantine \*\/$/, once: false, rows: () => [nativeVault('u2', resolved ? '-2002' : '-1002')] }], openQuarantine: 1 };
   } });
   assert.deepEqual(resolution.quarantine, []);
+  // L3: resolución con guardados encolados mientras la cuarentena seguía abierta. El flush que la resuelve deja memo, pero el
+  // siguiente se encoló con base forzada (clone): solo la comprobación de identidad impide usar el memo.
+  await same('cuarentena resuelta con encolados', { makeRuntime: realRuntime, awaitEach: 1, steps: ['chatU2', 'resolver', 'email', 'sesion2'], script: () => {
+    resolved = false;
+    return { rules: [{ match: /flush-quarantine \*\/$/, once: false, rows: () => [nativeVault('u2', resolved ? '-2002' : '-1002')] }], openQuarantine: 1 };
+  } });
 
   // Respaldo del trigger 0027: un único reintento sin el usuario, que queda en cuarentena.
   const trig = await same('trigger 0027', { makeRuntime: realRuntime, steps: ['chatU1', 'sesion', 'email', 'nada'], script: vaultTrigger('u1') });
