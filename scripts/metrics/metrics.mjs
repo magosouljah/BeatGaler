@@ -35,6 +35,10 @@ if (on('patches')) {
   out('P2 res.json/send/... reassignments (cloud prod JS)', b.n, 'files=' + b.files + ' ' + b.per.map(p => p.join(':')).join(' '));
   const c = count([...cloudProd, ...srcCode], /\b(globalThis|global|window|self)\.fetch\s*=(?!=)/g);
   out('P3 global fetch reassignments (cloud + src)', c.n, c.per.map(p => p.join(':')).join(' '));
+  // G1: estado oculto en Express/res/runtime (`x.__beatgalerFoo`). Excluye __beatgalerAuthBridge (contrato del cargador, §7) y
+  // postgres-auth-multiprocess-compat (zona M7.5 fs/JSON). S1/S2 miden definiciones configureX/currentX, no estos accesos.
+  const g = count(cloudProd.filter(f => f !== 'cloud-server/postgres-auth-multiprocess-compat.js'), /\.__beatgaler(?!AuthBridge\b)\w+/g);
+  out('G1 .__beatgalerX hidden-state accesses (cloud prod JS, excl. AuthBridge + postgres-auth-multiprocess-compat)', g.n, 'files=' + g.files);
 }
 if (on('singletons')) {
   const a = count(catalog, /^(?:async\s+)?function\s+configure[A-Z]\w*\s*\(/gm);
