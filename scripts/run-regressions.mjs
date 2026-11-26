@@ -46,10 +46,6 @@ try {
     cwd: root,
     stdio: "inherit",
   });
-  execFileSync(process.execPath, [path.join(root, "scripts", "regression-telegram-retry.cjs")], {
-    cwd: root,
-    stdio: "inherit",
-  });
   execFileSync(process.execPath, [path.join(root, "scripts", "regression-direct-manager-only.mjs")], {
     cwd: root,
     stdio: "inherit",
@@ -356,14 +352,14 @@ try {
   if (!audioConflictModal.includes("Choose the main audio")) fail("Audio conflict UI no longer lets the user choose the main audio.");
   if (!audioConflictModal.includes("Skip this beat") || !audioConflictModal.includes("__skip__")) fail("One unwanted audio conflict can cancel the whole batch again.");
   if (!audioConflictModal.includes("for (const conflict of conflicts)")) fail("Audio conflicts are no longer resolved deterministically one at a time.");
-  const telegramRetry = readFileSync(path.join(root, "cloud-server", "telegram-retry.js"), "utf8");
   // T25/X1f: el INDEX de Telegram y la copia/verificación PROJECT por MASTER se retiraron de direct-transport-control.js; no deben volver.
   const directTransportControl = readFileSync(path.join(root, "cloud-server", "direct-transport-control.js"), "utf8");
-  for (const retired of ['pinMasterIndexMessage', 'commitIndexCopyOnWriteWithMaster', 'verifyProjectMediaFromClient', 'copyLegacyProjectPartFromClient', 'withTelegramFloodWait']) {
+  for (const retired of ['pinMasterIndexMessage', 'commitIndexCopyOnWriteWithMaster', 'verifyProjectMediaFromClient', 'copyLegacyProjectPartFromClient']) {
     if (directTransportControl.includes(retired)) fail("Retired MASTER INDEX/PROJECT transport code reappeared in direct-transport-control.js: " + retired);
   }
-  if (!telegramRetry.includes("retry\\s+after") || !telegramRetry.includes("retry_after")) fail("Telegram retry helper no longer understands Bot API retry_after responses.");
-  console.log("PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, Telegram flood-wait, and authoritative final sync");
+  // X1g: el helper de flood-wait de Telegram (sin llamador de produccion) se retiro; no debe reaparecer.
+  if (existsSync(path.join(root, "cloud-server", "telegram-retry.js"))) fail("Retired cloud-server/telegram-retry.js (withTelegramFloodWait, no production caller) reappeared; remove it or restore a real caller with its tests.");
+  console.log("PASS bulk/review guard: Tauri native zero-copy Windows local drop, right-side skeleton, streaming shallow-first discovery, per-beat skip, playable-only Review, deferred conflicts, checkpoint retry, retired flood-wait helper absent, and authoritative final sync");
 
   // Offline/Reconnect regression shield. Offline availability is a durable,
   // per-user desktop pin, never ordinary playback cache and never web metadata.
