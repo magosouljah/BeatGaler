@@ -1,13 +1,14 @@
 "use strict";
 
-function installSecurityHeaders(express) {
-  express.application.__beatgalerSecurityHeadersEnabled = true;
+function installSecurityHeaders(ctx) {
+  ctx.entries.securityHeaders ||= { enabled: true };
 }
 
 function wrapSecurityHeadersUse(routePathOrHandlers, handlers) {
-  const { app, next } = this;
-  if (app.__beatgalerSecurityHeadersEnabled && !app.__beatgalerSecurityHeadersInstalled) {
-    app.__beatgalerSecurityHeadersInstalled = true;
+  const { app, next, ctx } = this;
+  const state = ctx?.state.get(app) || {};
+  if (ctx?.entries.securityHeaders?.enabled && !state.securityHeadersInstalled) {
+    ctx.state.set(app, { ...state, securityHeadersInstalled: true });
     next((req, res, proceed) => {
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("X-Frame-Options", "DENY");

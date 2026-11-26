@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const { installLegacyMediaUploadDisable } = require("../cloud-server/legacy-media-upload-disable.js");
-const { mountAccountRouteGuards } = require("../cloud-server/account-route-guards.js");
+const { createGuardContext, mountAccountRouteGuards } =require("../cloud-server/account-route-guards.js");
 const { installHttpContainment } = require("../cloud-server/http-containment.js");
 
 const registered = [];
@@ -14,10 +14,11 @@ fakeExpress.application.post = function(route, ...handlers) {
 };
 fakeExpress.application.get = function() { return this; };
 
-installLegacyMediaUploadDisable(fakeExpress);
+const guardContext = createGuardContext();
+installLegacyMediaUploadDisable(guardContext);
 installHttpContainment(fakeExpress, { dataDir: process.cwd(), env: { NODE_ENV: "test" } });
 const app = Object.create(fakeExpress.application);
-mountAccountRouteGuards(app);
+mountAccountRouteGuards(app, undefined, guardContext);
 
 const multer = () => {};
 const handler = () => {};
