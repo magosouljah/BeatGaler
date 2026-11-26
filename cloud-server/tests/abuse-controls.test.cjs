@@ -8,6 +8,7 @@ const path = require("node:path");
 const { EventEmitter } = require("node:events");
 const { createAuthAbuseControls, installAuthAbuseControls } = require("../auth-abuse-controls");
 const { FILE_UPLOAD_LIMIT_BYTES, createHttpContainment } = require("../http-containment");
+const { createGuardContext } = require("../account-route-guards");
 
 function responseRecorder() {
   const res = new EventEmitter();
@@ -129,7 +130,7 @@ function uploadRequest({ token = "", headers = {}, body = {}, ip = "127.0.0.1", 
         };
       },
     };
-    installAuthAbuseControls(fakeExpress, { env: { BEATGALER_AUTH_FAILURE_DELAY_MS: "0" } });
+    installAuthAbuseControls(createGuardContext(), { express: fakeExpress, env: { BEATGALER_AUTH_FAILURE_DELAY_MS: "0" } });
     const guarded = fakeExpress.json({ limit: "256kb" });
     const res = responseRecorder();
     let nextCalled = false;

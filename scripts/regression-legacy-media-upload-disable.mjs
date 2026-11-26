@@ -16,7 +16,7 @@ fakeExpress.application.get = function() { return this; };
 
 const guardContext = createGuardContext();
 installLegacyMediaUploadDisable(guardContext);
-installHttpContainment(fakeExpress, { dataDir: process.cwd(), env: { NODE_ENV: "test" } });
+installHttpContainment(guardContext, { dataDir: process.cwd(), env: { NODE_ENV: "test" } });
 const app = Object.create(fakeExpress.application);
 mountAccountRouteGuards(app, undefined, guardContext);
 

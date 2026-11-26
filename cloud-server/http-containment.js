@@ -437,16 +437,15 @@ function createHttpContainment(options = {}) {
   };
 }
 
-function installHttpContainment(express, options = {}) {
-  const application = express.application;
-  if (application.__beatgalerContainmentInstalled) return;
-  application.__beatgalerContainmentInstalled = true;
-  application.__beatgalerContainment = createHttpContainment(options);
+function installHttpContainment(ctx, options = {}) {
+  if (!ctx?.entries || ctx.entries.httpContainment) return;
+  ctx.entries.httpContainment = {};
+  ctx.entries.httpContainment.containment = createHttpContainment(options);
 }
 
 function wrapHttpContainmentPost(routePath, handlers) {
-  const { app, next } = this;
-  const containment = app.__beatgalerContainment;
+  const { next, ctx } = this;
+  const containment = ctx?.entries.httpContainment?.containment;
   if (!containment) return next(routePath, ...handlers);
   if (routePath === "/library/upsert") return next(routePath, containment.legacyLibraryUpsert);
   if (routePath === "/auth/register") return next(routePath, containment.registrationGate, containment.guardRegisterInstallation, containment.bindSessionOnSuccess, ...handlers);
@@ -463,8 +462,8 @@ function wrapHttpContainmentPost(routePath, handlers) {
 }
 
 function wrapHttpContainmentGet(routePath, handlers) {
-  const { app, next } = this;
-  const containment = app.__beatgalerContainment;
+  const { next, ctx } = this;
+  const containment = ctx?.entries.httpContainment?.containment;
   if (!containment) return next(routePath, ...handlers);
   if (routePath === "/auth/oauth/:provider/callback") return next(routePath, containment.guardOAuthCallback, ...handlers);
   if (INSTALLATION_GET_ROUTES.has(routePath)) return next(routePath, containment.installationOwner, ...handlers);

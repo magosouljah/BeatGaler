@@ -104,10 +104,15 @@ function createAuthAbuseControls(options = {}) {
   };
 }
 
-function installAuthAbuseControls(express, options = {}) {
-  if (express.application.__beatgalerAuthAbuseInstalled) return;
-  express.application.__beatgalerAuthAbuseInstalled = true;
-  express.application.__beatgalerAuthAbuseControls = createAuthAbuseControls(options);
+// express.json is patched once per Express module (previously guarded by the global application flag).
+const jsonPatchedModules = new WeakSet();
+
+function installAuthAbuseControls(ctx, { express, ...options } = {}) {
+  if (!ctx?.entries || ctx.entries.authAbuse) return;
+  ctx.entries.authAbuse = {};
+  ctx.entries.authAbuse.controls = createAuthAbuseControls(options);
+  if (jsonPatchedModules.has(express)) return;
+  jsonPatchedModules.add(express);
   const originalJson = express.json;
 
   express.json = function patchedJson(...args) {
@@ -126,8 +131,8 @@ function installAuthAbuseControls(express, options = {}) {
 }
 
 function wrapAuthAbusePost(routePath, handlers) {
-  const { app, next } = this;
-  const controls = app.__beatgalerAuthAbuseControls;
+  const { next, ctx } = this;
+  const controls = ctx?.entries.authAbuse?.controls;
   if (controls && AUTH_ROUTES.has(routePath)) {
     return next(routePath, controls.middleware, ...handlers);
   }

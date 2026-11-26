@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { EventEmitter } from "node:events";
 
 const require = createRequire(import.meta.url);
-const { mountAccountRouteGuards } = require("../cloud-server/account-route-guards.js");
+const { createGuardContext, mountAccountRouteGuards } = require("../cloud-server/account-route-guards.js");
 const { FILE_UPLOAD_LIMIT_BYTES, createHttpContainment, installHttpContainment } = require("../cloud-server/http-containment.js");
 function sessionKey(token) { return crypto.createHash("sha256").update(token).digest("hex"); }
 function responseRecorder() {
@@ -236,9 +236,10 @@ try {
     const fakeExpress = { application: {} }; const registered = [];
     fakeExpress.application.post = function(route, ...handlers) { registered.push({ method: "post", route, handlers }); return this; };
     fakeExpress.application.get = function(route, ...handlers) { registered.push({ method: "get", route, handlers }); return this; };
-    installHttpContainment(fakeExpress, { dataDir: dir, env: { NODE_ENV: "production" } });
+    const guardContext = createGuardContext();
+    installHttpContainment(guardContext, { dataDir: dir, env: { NODE_ENV: "production" } });
     const app = Object.create(fakeExpress.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, guardContext);
     const multer = () => {};
     app.post("/beats/upload", multer, () => {});
     const uploadRoute = registered.find(x => x.route === "/beats/upload");
