@@ -6,7 +6,6 @@ cloud-server/tests/billing-polar-daily.test.cjs
 cloud-server/tests/catalog/catalog-backup-secrets.static.test.cjs
 cloud-server/tests/catalog/catalog-contract.test.cjs
 cloud-server/tests/password-kdf.test.cjs
-cloud-server/tests/plan-dev-switch-removed.test.cjs
 scripts/regression-legacy-media-upload-disable.mjs
 scripts/regression-task-5.1-hardening.mjs
 scripts/test-public-operations-pages.mjs

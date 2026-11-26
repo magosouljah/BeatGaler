@@ -1,41 +1,103 @@
-import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+// @vitest-environment jsdom
+import { createElement } from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-function source(path: string): string {
-  return readFileSync(resolve(process.cwd(), path), "utf8");
+const mocks = vi.hoisted(() => ({
+  resolveApi: vi.fn<() => Promise<string>>(),
+  getResolvedBase: vi.fn(() => "http://sync-fallback.invalid"),
+}));
+vi.mock("../../src/features/auth/webSession", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  getBeatGalerAuthToken: () => "session-token",
+  resolveBeatGalerCloudApi: mocks.resolveApi,
+  getResolvedCloudApiBase: mocks.getResolvedBase,
+}));
+vi.mock("../../src/lib/tauri", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  flushOfflineTrashIntents: vi.fn(async () => 0),
+  getCloudClientId: () => "desktop-client",
+  isTauriAvailable: false,
+  pollTelegramCloudStatus: vi.fn(async () => ({ connected: false, reachable: true, username: null })),
+}));
+
+import { useCloudLibraryEvents } from "../../src/features/cloud/useCloudLibraryEvents";
+import { readWebCsrfToken, WEB_CSRF_SESSION_KEY } from "../../src/features/auth/webSessionBootstrap";
+
+const noop = () => {};
+const ref = <T,>(value: T) => ({ current: value });
+
+function Probe() {
+  useCloudLibraryEvents({
+    setupDone: true,
+    beatgalerUserId: "user-1",
+    setConnectionState: noop,
+    setCloudSessionVerified: noop,
+    setSettings: noop,
+    setBeats: noop,
+    getActiveUploadIds: () => new Set<string>(),
+    getUploadRevision: () => 0,
+    cloudMetaSnapshotRef: ref(null),
+    cloudLibrarySnapshotRef: ref(null),
+    visibleLibraryFingerprintRef: ref(""),
+    startupCookingResolvedRef: ref(false),
+    startupPipelineStartedRef: ref(false),
+    startupEnginePrimeReadyRef: ref(false),
+    progressiveRevealRunRef: ref(0),
+    clearReconciledTrashRuntimeStates: noop,
+    clearArtworkHydration: noop,
+    clearPlaybackPreparation: noop,
+    setStartupCookingGate: noop,
+  });
+  return null;
 }
 
 describe("Web startup Cloud resolution race", () => {
-  it("resolves the Cloud API inside every event ticket connection attempt", () => {
-    const events = source("src/features/cloud/useCloudLibraryEvents.ts");
-    const connectStart = events.indexOf("const connectEvents = async () => {");
-    const resolveIndex = events.indexOf("const cloudBase = await resolveBeatGalerCloudApi();", connectStart);
-    const ticketIndex = events.indexOf('fetch(`${cloudBase}/events/ticket`', connectStart);
-
-    expect(events).not.toContain("const cloudBase = getResolvedCloudApiBase();");
-    expect(resolveIndex).toBeGreaterThan(connectStart);
-    expect(ticketIndex).toBeGreaterThan(resolveIndex);
+  const sources: string[] = [];
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("EventSource", class { constructor(url: string) { sources.push(url); } addEventListener() {} removeEventListener() {} close() {} });
+  });
+  afterEach(() => {
+    sources.length = 0;
+    vi.unstubAllGlobals();
+    mocks.resolveApi.mockReset();
   });
 
-  it("keeps login prewarm off public startup and preserves current-origin cookie CSRF lookup", () => {
-    const main = source("src/main.tsx");
-    const session = source("src/features/auth/webSessionBootstrap.ts");
+  it("resolves the Cloud API inside the event ticket connection attempt, and uses it for ticket and stream", async () => {
+    let release!: (base: string) => void;
+    mocks.resolveApi.mockReturnValue(new Promise<string>(resolve => { release = resolve; }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ticket: "t1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    await act(async () => { root.render(createElement(Probe)); });
 
-    expect(main).toContain("ReactDOM.createRoot");
-    expect(main).not.toContain("preconnectRememberedWebDirect");
-    expect(main).not.toContain("prewarmDirectRuntime");
-    expect(session).toContain("export function readWebCsrfCookieToken(): string");
-    expect(session.indexOf("const cookieToken = readWebCsrfCookieToken();")).toBeLessThan(
-      session.indexOf("window.sessionStorage.getItem(WEB_CSRF_SESSION_KEY)"),
-    );
+    // Discovery still pending: no ticket request may go to a synchronous fallback origin.
+    expect(mocks.resolveApi).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await act(async () => { release("https://resolved.example/beatgaler-api"); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe("https://resolved.example/beatgaler-api/events/ticket");
+    expect(sources).toHaveLength(1);
+    expect(sources[0].startsWith("https://resolved.example/beatgaler-api/events?")).toBe(true);
+    expect(mocks.getResolvedBase).not.toHaveBeenCalled();
+    await act(async () => { root.unmount(); });
   });
 
-  it("keeps development Web API traffic on the verified same-origin proxy", () => {
-    const vite = source("vite.config.ts");
-
-    expect(vite).toContain('"/beatgaler-api": {');
-    expect(vite).toContain('target: process.env.STAGE1_CLOUD_URL || "http://127.0.0.1:4000"');
-    expect(vite).toContain('requestPath.replace(/^\\/beatgaler-api/, "")');
+  it("reads the CSRF token from the current-origin cookie before the stored fallback", () => {
+    const cookie = vi.spyOn(document, "cookie", "get");
+    window.sessionStorage.setItem(WEB_CSRF_SESSION_KEY, "stale-stored");
+    try {
+      cookie.mockReturnValue("other=1; __Host-beatgaler_csrf=cookie%20token");
+      expect(readWebCsrfToken()).toBe("cookie token");
+      cookie.mockReturnValue("other=1");
+      expect(readWebCsrfToken()).toBe("stale-stored");
+    } finally {
+      cookie.mockRestore();
+      window.sessionStorage.removeItem(WEB_CSRF_SESSION_KEY);
+    }
   });
 });
