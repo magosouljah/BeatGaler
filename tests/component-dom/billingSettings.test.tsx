@@ -73,6 +73,7 @@ describe("Settings commercial truth", () => {
     expect(view.host.textContent).toContain("USD 6.99 / month");
     expect(view.host.textContent).toContain("USD 11.99 / month");
     expect(view.host.textContent).not.toMatch(/Annual|YouTube|Bulk|product_id|price_id/);
+    expect(view.host.textContent).not.toMatch(/Switch to Free|simulate/i);
     await view.close();
   });
 

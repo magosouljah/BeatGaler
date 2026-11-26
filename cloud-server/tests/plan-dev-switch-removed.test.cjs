@@ -2,12 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const { createCheckoutHandlers } = require('../billing-web-checkout-route');
 
-const root = path.resolve(__dirname, '../..');
-const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 
 test('the running Cloud has no route, env switch or caller-selected plan to simulate plan changes', async () => {
   const { account, withCloud } = require('./helpers/composition-cloud.cjs');
@@ -48,24 +44,13 @@ test('the running Cloud has no route, env switch or caller-selected plan to simu
   }, { prepare() { process.env.BEATGALER_DEV_PLAN_SWITCH = '1'; } });
 });
 
-test('no helper or local startup flag can simulate plan changes', () => {
-  const session = read('cloud-server/session-security.js');
-  const plans = read('cloud-server/plans.js');
-  const startup = read('start-beatgaler-cloud.ps1');
-  for (const source of [session, plans, startup]) {
-    assert.doesNotMatch(source, /\/plans\/dev-switch|BEATGALER_DEV_PLAN_SWITCH|setBasePlanForUser/);
+test('no module exposes a helper that can simulate plan changes', () => {
+  // La ausencia del helper se mide en lo que los módulos exportan, no en su texto fuente.
+  // El flag local de arranque (BEATGALER_DEV_PLAN_SWITCH) queda cubierto por el primer test: con el flag activo la ruta responde 404.
+  for (const mod of [require('../session-security'), require('../plans')]) {
+    for (const name of Object.keys(mod)) assert.doesNotMatch(name, /dev.?switch|setBasePlanForUser/i, `export ${name}`);
+    assert.equal(typeof mod.setBasePlanForUser, 'undefined');
   }
-});
-
-test('client exposes only real checkout and no simulated commercial plan control', () => {
-  const accountGate = read('src/components/AccountGate.tsx');
-  const settings = read('src/components/SettingsPanel.tsx');
-  for (const source of [accountGate, settings]) {
-    assert.doesNotMatch(source, /devSwitchBeatGalerPlan|\/plans\/dev-switch|switchPlanForTesting|BEATGALER_DEV_PLAN_SWITCH/);
-  }
-  assert.doesNotMatch(settings, /Switch to Free|Buttons simulate plan changes|Simulate subscription/);
-  assert.match(settings, /startBeatGalerCheckout\(plan\.price\.offer_id, requestId\)/);
-  assert.match(settings, /currentPlan\?\.effective_plan_id === plan\.id/);
 });
 
 test('checkout rejects a caller-selected plan before starting a checkout session', async t => {

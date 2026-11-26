@@ -98,6 +98,16 @@
           "kind": "node-test"
         },
         {
+          "id": "m10-catalog-load-graph",
+          "cmd": [
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "cloud-server/tests/catalog/catalog-load-graph.test.cjs"
+          ],
+          "kind": "node-test"
+        },
+        {
           "id": "t05-catalog-authority",
           "cmd": [
             "node",
