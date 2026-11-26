@@ -3,7 +3,7 @@
 require('dotenv').config({ quiet: true });
 const { getRuntimeEnv, serverEnv } = require('./runtime-env');
 const express = require("express");
-const { prepareCloudBoot } = require("./cloud-boot");
+const { prepareCloudBoot, prepareCloudCatalog } = require("./cloud-boot");
 const { createGuardContext } = require("./account-route-guards");
 const { installLegacyMediaUploadDisable } =require("./legacy-media-upload-disable");
 const { installHttpContainment } = require("./http-containment");
@@ -84,8 +84,8 @@ async function start() {
     pool, env: getRuntimeEnv(), cutover,
     onGatewayConfigured: (runtime) => { catalogGatewayRuntime = runtime; },
   });
-  const { configureCatalogBoot, assertVaultRebindAllowedIfConfigured } = require('./catalog-boot');
-  configureCatalogBoot(catalogServices, input => assertVaultRebindAllowedIfConfigured(catalogServices.authority, input));
+  const { assertVaultRebindAllowedIfConfigured } = require('./catalog-boot');
+  prepareCloudCatalog(catalogServices, input => assertVaultRebindAllowedIfConfigured(catalogServices.authority, input));
   // T25: INDEX retirado del runtime. PostgreSQL es la única autoridad del catálogo; el arranque ya no fija, recupera ni publica INDEX
   // (los mensajes INDEX históricos permanecen intactos en Telegram, solo como archivo).
   accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
