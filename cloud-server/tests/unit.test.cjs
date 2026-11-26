@@ -142,7 +142,7 @@ passed += test('pool state drops obsolete FIFO while preserving configured bots'
   assert.deepEqual(direct.poolStatus().queue, []);
 }) ? 1 : 0;
 
-const { mountAccountRouteGuards } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards } = require('../account-route-guards');
 const { installProductiveTempAuthBoundary, stripPermanentSecrets, transformSession } = require('../productive-temp-auth-boundary.js');
 
 passed += test('productive transport boundary strips permanent credentials before client response', () => {
@@ -213,9 +213,10 @@ nodeTest('temporary-auth boundary declares its mode and never returns permanent 
 nodeTest('registered transport routes sanitize responses before sending them', async () => {
   const routes = new Map();
   const application = { post(route, ...handlers) { routes.set(route, handlers); } };
-  installProductiveTempAuthBoundary({ application });
+  const guardContext = createGuardContext();
+  installProductiveTempAuthBoundary(guardContext);
   const app = Object.create(application);
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, guardContext);
 
   const permanent = {
     bot_token: 'fixture-bot-token',

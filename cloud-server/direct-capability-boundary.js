@@ -280,9 +280,9 @@ async function revokeTenantCapabilities(tenantId, reason = "incident") {
   return installedRuntime.store.revokeTenant({ tenantId: String(tenantId), reason: String(reason || "incident") });
 }
 
-function installDirectCapabilityBoundary(express, options = {}) {
-  if (express.application.__beatgalerDirectCapabilitiesInstalled) return installedRuntime;
-  express.application.__beatgalerDirectCapabilitiesInstalled = true;
+function installDirectCapabilityBoundary(ctx, options = {}) {
+  if (ctx.entries.directCapability) return installedRuntime;
+  const entry = ctx.entries.directCapability = {};
   const env = options.env || requiredEnv();
   const now = options.now || (() => Date.now());
   const maxActivePerTenant = Math.max(1, Math.min(16, Number(env.BEATGALER_DIRECT_TENANT_ACTIVE_CAP || DEFAULT_TENANT_ACTIVE_CAP)));
@@ -317,13 +317,13 @@ function installDirectCapabilityBoundary(express, options = {}) {
     };
   }
 
-  express.application.__beatgalerDirectCapabilityHandlers = { revokeAuthOnSuccess };
+  entry.handlers = { revokeAuthOnSuccess };
   return installedRuntime;
 }
 
 function wrapDirectCapabilityPost(routePath, handlers) {
-  const { app, next } = this;
-  const boundary = app.__beatgalerDirectCapabilityHandlers;
+  const { next, ctx } = this;
+  const boundary = ctx?.entries.directCapability?.handlers;
   if (!boundary) return next(routePath, ...handlers);
   if (routePath === "/auth/logout") return next(routePath, boundary.revokeAuthOnSuccess("logout"), ...handlers);
   if (routePath === "/auth/password/change") return next(routePath, boundary.revokeAuthOnSuccess("password_change"), ...handlers);
