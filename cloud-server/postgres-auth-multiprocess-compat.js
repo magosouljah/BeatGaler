@@ -24,18 +24,33 @@ function removedKeys(previousRows, currentRows, key) {
   return [...setOf(previousRows, key)].filter(value => !current.has(value));
 }
 
-function changedRows(previousRows, currentRows, key) {
+function changedRows(previousRows, currentRows, key, json = JSON.stringify) {
   const previous = new Map((previousRows || []).map(row => [String(row[key]), row]));
-  return (currentRows || []).filter(row => JSON.stringify(previous.get(String(row[key]))) !== JSON.stringify(row));
+  return (currentRows || []).filter(row => json(previous.get(String(row[key]))) !== json(row));
+}
+
+// M7.4c: serialización memorizada por objeto fila, solo para filas internas del flush (buildLegacyRows de este módulo o el memo
+// del instalador), que nadie muta. Mismo texto que JSON.stringify; las filas de llamadas externas a changedRows no la usan.
+const rowJsonCache = new WeakMap();
+function cachedRowJson(row) {
+  if (row === null || typeof row !== 'object') return JSON.stringify(row);
+  let text = rowJsonCache.get(row);
+  if (text === undefined) { text = JSON.stringify(row); rowJsonCache.set(row, text); }
+  return text;
+}
+
+function legacyRows(auth) {
+  return buildLegacyRows(auth || { users: [], sessions: {} }, { includeEntitlements: false });
 }
 
 function changedColumns(previous, current, columns) {
   return columns.filter(column => JSON.stringify(previous?.[column]) !== JSON.stringify(current?.[column]));
 }
 
-function authSnapshotDelta(previousAuth, currentAuth) {
-  const previous = buildLegacyRows(previousAuth || { users: [], sessions: {} }, { includeEntitlements: false });
-  const current = buildLegacyRows(currentAuth || { users: [], sessions: {} }, { includeEntitlements: false });
+// `rows.previous`/`rows.current` (M7.4c, internos): filas ya construidas por el instalador para estos mismos objetos.
+function authSnapshotDelta(previousAuth, currentAuth, rows = {}) {
+  const previous = rows.previous || legacyRows(previousAuth);
+  const current = rows.current || legacyRows(currentAuth);
   return {
     removed_sessions: removedKeys(previous.sessions, current.sessions, 'session_key_hash'),
     removed_providers: removedKeys(previous.providers, current.providers, 'id'),
@@ -56,15 +71,17 @@ async function deleteIds(client, table, column, values) {
 async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousAuth, options = {}) {
   const excludedUsers = new Set([...(options.excludedUsers || [])].map(String));
   const maxQuarantinedUsers = Number(options.maxQuarantinedUsers ?? quarantine.DEFAULT_MAX_QUARANTINED_USERS);
-  const delta = authSnapshotDelta(previousAuth, currentAuth);
+  const delta = authSnapshotDelta(previousAuth, currentAuth, { previous: options.previousRows, current: options.currentRows });
   const rows = delta.current;
+  const internal = Boolean(options.previousRows && options.currentRows);
+  const changed = (previousRows, currentRows, key) => changedRows(previousRows, currentRows, key, internal ? cachedRowJson : JSON.stringify);
   const encrypt = encryptionCallbacks(cryptoConfig).encrypt;
   const originalUsers = new Map((currentAuth?.users || []).map(user => [String(user.id), user]));
   const client = await pool.connect();
   const quarantined = new Set();
   try {
     // §6.2.2 Cuarentena por usuario antes de BEGIN: los vaults nativos en conflicto salen de la transacción.
-    const changedVaults = changedRows(delta.previous.vaults, rows.vaults, 'user_id');
+    const changedVaults = changed(delta.previous.vaults, rows.vaults, 'user_id');
     const conflicts = await quarantine.precheckVaultRows(client, changedVaults);
     if (conflicts.length) {
       await quarantine.recordQuarantine(client, conflicts);
@@ -73,7 +90,7 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
     await client.query('BEGIN');
 
     const previousUsers = new Map(delta.previous.users.map(row => [String(row.id), row]));
-    for (const row of changedRows(delta.previous.users, rows.users, 'id')) {
+    for (const row of changed(delta.previous.users, rows.users, 'id')) {
       const previous = previousUsers.get(String(row.id));
       if (!previous) {
         await client.query(`INSERT INTO users(id,username,username_source,email,password_hash,password_hash_algorithm,password_salt,created_at,updated_at)
@@ -88,7 +105,7 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
     }
 
     await deleteIds(client, 'auth_sessions', 'session_key_hash', delta.removed_sessions);
-    for (const row of changedRows(delta.previous.sessions, rows.sessions, 'session_key_hash')) {
+    for (const row of changed(delta.previous.sessions, rows.sessions, 'session_key_hash')) {
       if (!row.expires_at) throw new Error(`Legacy session ${row.session_key_hash} has no expiresAt.`);
       await client.query(`INSERT INTO auth_sessions(session_key_hash,user_id,created_at,expires_at)
         VALUES($1,$2,$3,$4)
@@ -97,7 +114,7 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
     }
 
     await deleteIds(client, 'provider_identities', 'id', delta.removed_providers);
-    for (const row of changedRows(delta.previous.providers, rows.providers, 'id')) {
+    for (const row of changed(delta.previous.providers, rows.providers, 'id')) {
       const original = originalUsers.get(String(row.user_id))?.providers?.[row.provider] || row.record || {};
       const access = original.accessToken ? encrypt(original.accessToken, { aad: `provider:${row.provider}:${row.user_id}:access` }) : null;
       const refresh = original.refreshToken ? encrypt(original.refreshToken, { aad: `provider:${row.provider}:${row.user_id}:refresh` }) : null;
@@ -117,7 +134,7 @@ async function mergeAuthSnapshotDelta(pool, currentAuth, cryptoConfig, previousA
     }
 
     await deleteIds(client, 'mfa_factors', 'id', delta.removed_mfa);
-    for (const row of changedRows(delta.previous.mfa, rows.mfa, 'id')) {
+    for (const row of changed(delta.previous.mfa, rows.mfa, 'id')) {
       const encrypted = encrypt(row.plaintext_secret, { aad: `mfa:${row.user_id}:totp` });
       await client.query(`INSERT INTO mfa_factors(id,user_id,factor_type,secret_ciphertext,secret_nonce,${SECRET_KEY_VERSION_COLUMN},enabled)
         VALUES($1,$2,$3,$4,$5,$6,$7)
@@ -181,16 +198,30 @@ async function installMultiprocessAuthSnapshotCompatibility(runtime, pool, { ini
   const VAULT_FIELDS = ['storageChatId', 'storageChatTitle', 'storageCreatedAt'];
   runtime.__beatgalerMultiprocessAuthDeltaInstalled = true;
   runtime.__beatgalerFlushQuarantine = quarantinedBase;
+  // M7.4c: filas `current` del último flush CONFIRMADO sin cuarentena, atadas a la identidad de su objeto base (`captured`,
+  // privado e inmutable). Solo sustituyen a buildLegacyRows(previous) cuando `previous` ES ese objeto; un fallo o una
+  // cuarentena lo anulan. Mismas filas que reconstruirlas: buildLegacyRows es función pura del objeto.
+  let confirmedRows = null;
   runtime.saveAuthSnapshot = function saveAuthSnapshotDelta(snapshot) {
     const captured = clone(snapshot);
-    const previous = clone(desired);
-    for (const [userId, base] of quarantinedBase) {
-      const user = (previous.users || []).find(item => String(item?.id) === userId);
-      if (user) for (const field of VAULT_FIELDS) { if (base[field] === undefined) delete user[field]; else user[field] = base[field]; }
+    // Sin cuarentena, `previous` es la base deseada sin modificar: se usa tal cual (nadie muta `desired`) en vez de clonarla.
+    let previous = desired;
+    if (quarantinedBase.size) {
+      previous = clone(desired);
+      for (const [userId, base] of quarantinedBase) {
+        const user = (previous.users || []).find(item => String(item?.id) === userId);
+        if (user) for (const field of VAULT_FIELDS) { if (base[field] === undefined) delete user[field]; else user[field] = base[field]; }
+      }
     }
     desired = captured;
     return runtime.enqueue('auth snapshot delta', async () => {
-      const result = await mergeAuthSnapshotDelta(pool, captured, runtime.cryptoConfig, previous);
+      const memo = confirmedRows;
+      confirmedRows = null;
+      // Mismo orden que authSnapshotDelta: previas y luego actuales (si ambas fallan, el error es el de las previas).
+      const previousRows = memo && memo.base === previous ? memo.rows : legacyRows(previous);
+      const currentRows = legacyRows(captured);
+      const result = await mergeAuthSnapshotDelta(pool, captured, runtime.cryptoConfig, previous, { previousRows, currentRows });
+      if (!(result.quarantined || []).length) confirmedRows = { base: captured, rows: currentRows };
       for (const userId of result.quarantined || []) {
         if (!quarantinedBase.has(userId)) {
           const user = (previous.users || []).find(item => String(item?.id) === userId) || {};
