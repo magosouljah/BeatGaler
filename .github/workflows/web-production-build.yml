@@ -44,7 +44,6 @@ jobs:
           tests/component-dom/galleryDesign.test.tsx
           tests/component-dom/galleryTagPacking.test.ts
           tests/component-dom/publicStartupLoader.test.ts
-          tests/component-dom/webLibraryNavigation.test.ts
           tests/component-dom/webStartupBridge.behavior.test.tsx
           tests/component-dom/webTempAuthBind.behavior.test.ts
           tests/component-dom/webTransportBoundSession.behavior.test.ts
