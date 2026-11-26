@@ -709,36 +709,6 @@ function botMembershipError(error) {
   };
 }
 
-async function kickAndUnban(master, vault, botEntity) {
-  try {
-    await master.invoke(new Api.channels.EditBanned({
-      channel: vault,
-      participant: botEntity,
-      bannedRights: new Api.ChatBannedRights({ untilDate: 0, viewMessages: true }),
-    }));
-  } catch (error) {
-    const msg = String(error?.errorMessage || error?.message || error);
-    if (!/USER_NOT_PARTICIPANT|PARTICIPANT_ID_INVALID/i.test(msg)) throw error;
-  }
-  try {
-    await master.invoke(new Api.channels.EditBanned({
-      channel: vault,
-      participant: botEntity,
-      bannedRights: new Api.ChatBannedRights({ untilDate: 0, viewMessages: false }),
-    }));
-  } catch (_) {}
-}
-
-function getLeaseChecked({ installationId, sessionId, generation, allowExpired = false }) {
-  const pool = loadPool();
-  const state = stateSnapshot(pool);
-  const lease = state.leases[String(sessionId || '')];
-  if (!lease || lease.installation_id !== String(installationId || '')) return null;
-  if (generation != null && Number(generation) !== Number(lease.generation)) return null;
-  if (!allowExpired && leaseExpired(lease)) return null;
-  return { pool, state, lease };
-}
-
 async function maybeRotatePendingBot(botId) {
   if (!TOKEN_ROTATION_ENABLED) {
     const pool = loadPool();
@@ -841,36 +811,6 @@ async function cleanupLease(leaseInput, { reason = 'session_end' } = {}) {
   };
 }
 
-async function decommissionVaultMembership({ chatId, transportBotId }) {
-  const vaultId = String(chatId || '').trim();
-  const botId = String(transportBotId || '').trim();
-  if (!vaultId || !botId) throw new Error('chatId and transportBotId are required for explicit Direct membership decommission.');
-  const pool = loadPool();
-  const bot = pool.find(item => item.id === botId);
-  if (!bot) throw new Error('Unknown transport bot ' + botId + '.');
-
-  let username = bot.telegram_username || null;
-  let userId = bot.telegram_user_id || null;
-  if (!username || !userId) {
-    const token = await resolveManagedToken(bot);
-    const identity = await resolveBotIdentityViaHttp(token);
-    username = username || identity.telegram_username;
-    userId = userId || identity.telegram_user_id;
-  }
-
-  const masterInfo = await masterForVault(vaultId);
-  try {
-    const botEntity = username
-      ? await masterInfo.client.getEntity('@' + String(username).replace(/^@/, ''))
-      : await masterInfo.client.getEntity(userId);
-    await kickAndUnban(masterInfo.client, masterInfo.vault, botEntity);
-    diag('VAULT_MEMBERSHIP_DECOMMISSIONED', { vault: vaultId, transport_id: botId });
-    return { ok: true, decommissioned: true, chat_id: vaultId, transport_id: botId };
-  } finally {
-    try { await masterInfo.client.disconnect(); } catch (_) {}
-  }
-}
-
 async function cleanupLeaseSingleflight(leaseInput, options = {}) {
   const sessionId = String(leaseInput?.session_id || leaseInput || '');
   if (!sessionId) return { ok: true, released: false };
@@ -883,12 +823,6 @@ async function cleanupLeaseSingleflight(leaseInput, options = {}) {
     .finally(() => leaseCleanupLocks.delete(sessionId));
   leaseCleanupLocks.set(sessionId, pending);
   return pending;
-}
-
-async function stopSession({ installationId, sessionId, generation }) {
-  const checked = getLeaseChecked({ installationId, sessionId, generation, allowExpired: true });
-  if (!checked) return { ok: true, released: false };
-  return cleanupLeaseSingleflight(checked.lease, { reason: 'normal_close' });
 }
 
 async function cleanupExpiredSessions() {
@@ -955,32 +889,6 @@ async function commitIndexCopyOnWriteWithMaster(masterInfo, { filePath, caption,
     try { await masterInfo.client.invoke(new Api.channels.DeleteMessages({ channel: masterInfo.vault, id: [Number(previousMessageId)] })); } catch (_) {}
   }
   return { messageId: Number(sent.id), backups: [] };
-}
-
-async function downloadMessageBuffer(chatId, messageId) {
-  const masterInfo = await masterForVault(chatId);
-  try {
-    const response = await masterInfo.client.invoke(new Api.channels.GetMessages({
-      channel: masterInfo.vault,
-      id: [new Api.InputMessageID({ id: Number(messageId) })],
-    }));
-    const message = response?.messages?.[0];
-    if (!message || message instanceof Api.MessageEmpty) {
-      const error = new Error(`Message ${messageId} is missing.`);
-      error.code = 'TELEGRAM_MESSAGE_MISSING';
-      error.messageId = Number(messageId);
-      throw error;
-    }
-    if (!message.media) {
-      const error = new Error(`Message ${messageId} has no downloadable media.`);
-      error.code = 'TELEGRAM_MESSAGE_NO_MEDIA';
-      error.messageId = Number(messageId);
-      throw error;
-    }
-    const result = await masterInfo.client.downloadMedia(message, {});
-    if (!Buffer.isBuffer(result)) throw new Error(`Message ${messageId} download returned no buffer.`);
-    return result;
-  } finally { try { await masterInfo.client.disconnect(); } catch (_) {} }
 }
 
 function projectCaption(beatId, sha256) {
@@ -1061,9 +969,6 @@ module.exports = {
   poolStatus,
   __testing: {
     TOKEN_ROTATION_ENABLED,
-    stopSession,
-    decommissionVaultMembership,
-    downloadMessageBuffer,
     copyLegacyProjectPartFromClient,
     verifyProjectMediaFromClient,
     cleanupExpiredSessions,

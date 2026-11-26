@@ -147,17 +147,14 @@ if (!lockSql.includes('pg_advisory_lock(') || !lockSql.includes('pg_advisory_unl
 requireCall(membershipLock, 'callback');
 
 // Normal cleanup keeps membership. Walk local callees to catch indirect churn;
-// kick/unban remains an explicit decommission primitive with one allowed caller.
+// X1e retired the explicit decommission primitive (kick/unban) as dead code: it must not return unnoticed.
 const forbiddenCleanup = /master|Master|InviteToChannel|EditAdmin|GetParticipant|EditBanned|kickAndUnban|decommissionVaultMembership|\.getEntity|markMembership/;
-for (const name of ['cleanupLease', 'cleanupLeaseSingleflight', 'stopSession', 'cleanupExpiredSessions']) {
+for (const name of ['cleanupLease', 'cleanupLeaseSingleflight', 'cleanupExpiredSessions']) {
   noLocalReachability(controlAst, block(controlAst, name), forbiddenCleanup, `Ephemeral cleanup ${name}`);
 }
 const cleanup = block(controlAst, 'cleanupLease');
 requireCall(cleanup, 'deleteLease');
-const decommission = block(controlAst, 'decommissionVaultMembership');
-requireCall(decommission, 'masterForVault');
-const kick = requireCall(controlAst, 'kickAndUnban');
-if (kick.pos < decommission.pos || kick.end > decommission.end) fail('kickAndUnban must be reachable only from explicit decommission.');
+if (/(?:decommissionVaultMembership|kickAndUnban)/.test(control)) fail('Membership removal (decommission/kick) returned to the Direct control module.');
 const invite = block(controlAst, 'inviteAndPromote');
 for (const rpc of ['Api.channels.InviteToChannel', 'Api.channels.EditAdmin']) {
   one(nodes(invite, node => ts.isNewExpression(node) && node.expression.getText() === rpc), `exceptional provisioning ${rpc}`);
@@ -282,7 +279,7 @@ if (nodes(transform, node => ts.isSpreadAssignment(node) && node.expression.getT
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     verifyDirectArchitecture();
-    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, ephemeral cleanup, explicit decommission, secret/temp-auth boundary and MASTER-only INDEX pin/delete rights.');
+    console.log('PASS Direct persistent guard: PostgreSQL ownership/lazy rollout, ephemeral cleanup, no decommission primitive, secret/temp-auth boundary and MASTER-only INDEX pin/delete rights.');
   } catch (error) {
     console.error(`FAIL Direct persistent guard: ${error.message}`);
     process.exitCode = 1;

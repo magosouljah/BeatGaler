@@ -22,7 +22,7 @@ Repair is authenticated `POST /transport/session/activate` with `repairMembershi
 
 Close, logout, heartbeat expiry and crash recovery clean ephemeral operations, runtime, leases and temporary authorization; membership remains. Optional token rotation does not change ownership. `DIRECT_TOKEN_ROTATION_ENABLED=false` remains the default; heartbeat defaults remain 60 seconds with five-minute expiry.
 
-`kickAndUnban` belongs to explicit `decommissionVaultMembership`, separate from session cleanup. MASTER retains necessary vault creation/admin and exceptional internal resolver setup duties. 001BeatGaler remains manager-only, outside user vaults and the data plane.
+Explicit vault decommission (kick/unban) was retired as dead code in X1e; session cleanup never removes vault membership. MASTER retains necessary vault creation/admin and exceptional internal resolver setup duties. 001BeatGaler remains manager-only, outside user vaults and the data plane.
 
 A persisted internal resolver is reused after process restart without constructing MASTER. Initial resolver setup is exceptional infrastructure provisioning. READY tests use a persisted resolver and deliberately unavailable MASTER; they do not claim unconfigured infrastructure can bootstrap without MASTER.
 
