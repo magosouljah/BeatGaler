@@ -640,8 +640,6 @@ function createCatalogCommands({ pool = null, authority = null, now = () => new 
   });
 }
 
-let configured = null;
-function configureCatalogCommands(options = null) { configured = options && options.pool && options.authority ? createCatalogCommands(options) : null; return configured; }
-function currentCatalogCommands() { return configured; }
+function buildCatalogCommands(options = null) { return options && options.pool && options.authority ? createCatalogCommands(options) : null; }
 
-module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, addTagsToDoc, removeTagsFromDoc, normKeysOf, createCatalogCommands, configureCatalogCommands, currentCatalogCommands };
+module.exports = { BATCH_MAX, BODY_METADATA_BYTES, BODY_BATCH_BYTES, TRASH_RETENTION_DAYS, EVENTS_PAGE_MAX, EVENTS_RETENTION, BULK_KINDS, applyPatchToDoc, docChanged, addTagsToDoc, removeTagsFromDoc, normKeysOf, createCatalogCommands, buildCatalogCommands };

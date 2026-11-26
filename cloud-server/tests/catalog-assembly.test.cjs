@@ -26,25 +26,25 @@ function fixture(t, { cutoverAuthority = 'postgres', nativeEnabled = true, activ
     './control-plane-cutover-runtime': { prepareControlPlaneCutover },
     './access-runtime': { configure: record('access'), resolveUserAccess: record('resolveAccess', { quotas: { max_beats: 7 } }) },
     './catalog/authority': { createCatalogAuthority: record('authority', authority) },
-    './catalog/queries': { configureCatalogQueries: record('queries', queries) },
-    './catalog/commands': { configureCatalogCommands: record('commands', commands) },
-    './catalog/operations': { configureCatalogOperations: record('operations', operations) },
+    './catalog/queries': { buildCatalogQueries: record('queries', queries) },
+    './catalog/commands': { buildCatalogCommands: record('commands', commands) },
+    './catalog/operations': { buildCatalogOperations: record('operations', operations) },
     './catalog-gateway-runtime': {
       gatewayFromEnv: (config) => {
         record('gateway')(config);
         return gateway.gatewayFromEnv(config);
       },
     },
-    './catalog/playback': { configureCatalogPlayback: record('playback') },
-    './catalog/media': { configureCatalogMedia: record('media') },
+    './catalog/playback': { buildCatalogPlayback: record('playback') },
+    './catalog/media': { buildCatalogMedia: record('media') },
     './catalog-deletion-journal': { createFileDeletionJournal: record('journal', {}) },
-    './catalog/purge': { configureCatalogPurge: record('purge', purge) },
-    './catalog/prefix-packs': { configurePrefixPacks: record('prefixPacks') },
+    './catalog/purge': { buildCatalogPurge: record('purge', purge) },
+    './catalog/prefix-packs': { buildPrefixPacks: record('prefixPacks') },
     './catalog/direct': {
       createProjectAccessResolver: record('projectAccess', () => {}),
-      configureCatalogDirect: record('direct', null),
+      buildCatalogDirect: record('direct', null),
     },
-    './catalog/native-transport-provisioning': { configureNativeTransportProvisioner: record('transport') },
+    './catalog/native-transport-provisioning': { buildNativeTransportProvisioner: record('transport') },
     './catalog/worker': { createCatalogWorker: record('worker', worker) },
   };
   const load = Module.prototype.require;

@@ -275,8 +275,6 @@ function createCatalogPlayback({ pool = null, authority = null, randomBytes = cr
   return Object.freeze({ startRound, rebuildRound, nextInRound, consumeInRound, getRound, releaseRound, neighbor, limits: Object.freeze({ REBUILD_BATCH, REBUILD_MAX_LOOPS, LEASE_MINUTES }) });
 }
 
-let configured = null;
-function configureCatalogPlayback(options = null) { configured = options && options.pool && options.authority ? createCatalogPlayback(options) : null; return configured; }
-function currentCatalogPlayback() { return configured; }
+function buildCatalogPlayback(options = null) { return options && options.pool && options.authority ? createCatalogPlayback(options) : null; }
 
-module.exports = { REBUILD_BATCH, RNG_BITS, uniformInt, createMemoryRound, createCatalogPlayback, configureCatalogPlayback, currentCatalogPlayback };
+module.exports = { REBUILD_BATCH, RNG_BITS, uniformInt, createMemoryRound, createCatalogPlayback, buildCatalogPlayback };

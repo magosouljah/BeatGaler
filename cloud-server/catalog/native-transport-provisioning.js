@@ -60,10 +60,7 @@ function createNativeTransportProvisioner({ pool, assignmentStore = null, transp
   }
   return Object.freeze({ ensureForUser });
 }
-let active = null;
-function configureNativeTransportProvisioner(options = null) {
-  active = options ? createNativeTransportProvisioner(options) : null;
-  return active;
+function buildNativeTransportProvisioner(options = null) {
+  return options ? createNativeTransportProvisioner(options) : null;
 }
-function currentNativeTransportProvisioner() { return active; }
-module.exports = { createNativeTransportProvisioner, configureNativeTransportProvisioner, currentNativeTransportProvisioner };
+module.exports = { createNativeTransportProvisioner, buildNativeTransportProvisioner };

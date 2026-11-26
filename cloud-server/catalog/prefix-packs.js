@@ -201,8 +201,6 @@ function createPrefixPacks({ pool = null, authority = null, gateway = null, pref
   return Object.freeze({ manifest, beginMain, publishMain, cancelMain, metrics, limits: Object.freeze({ PREFIX_BYTES: prefixBytes, MAIN_REBUILD_THRESHOLD: threshold, MAIN_BUILD_TTL_MS: buildTtlMs, MAX_ENTRIES }) });
 }
 
-let configured = null;
-function configurePrefixPacks(options = null) { configured = options && options.pool && options.authority ? createPrefixPacks(options) : null; return configured; }
-function currentPrefixPacks() { return configured; }
+function buildPrefixPacks(options = null) { return options && options.pool && options.authority ? createPrefixPacks(options) : null; }
 
-module.exports = { PREFIX_BYTES, MAIN_REBUILD_THRESHOLD, MAIN_BUILD_TTL_MS, createPrefixPacks, configurePrefixPacks, currentPrefixPacks };
+module.exports = { PREFIX_BYTES, MAIN_REBUILD_THRESHOLD, MAIN_BUILD_TTL_MS, createPrefixPacks, buildPrefixPacks };

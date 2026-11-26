@@ -18,16 +18,16 @@ async function resolveCatalogAccess(userId) {
 }
 
 function configureCatalogServices(config, env) {
-  const queries = catalogQueries.configureCatalogQueries(config ? { ...config, env } : null);
-  const commands = catalogCommands.configureCatalogCommands(config);
+  const queries = catalogQueries.buildCatalogQueries(config ? { ...config, env } : null);
+  const commands = catalogCommands.buildCatalogCommands(config);
   // T09: la cuota usa Access (quotas.max_beats; null = sin límite).
-  const operations = catalogOperations.configureCatalogOperations(config ? { ...config, resolveAccess: resolveCatalogAccess } : null);
+  const operations = catalogOperations.buildCatalogOperations(config ? { ...config, resolveAccess: resolveCatalogAccess } : null);
   return { queries, commands, operations };
 }
 
 function configurePurge(config, gateway, journalDir) {
   // C9: el journal externo es obligatorio para cualquier borrado físico.
-  return catalogPurge.configureCatalogPurge(config ? {
+  return catalogPurge.buildCatalogPurge(config ? {
     ...config,
     gateway,
     journal: journalDir ? createFileDeletionJournal({ dir: journalDir }) : null,
@@ -65,9 +65,9 @@ async function assembleServerCatalog({ pool, env, cutover, onGatewayConfigured }
   // El cierre PostgreSQL debe conocer el gateway aun si falla una configuración posterior.
   onGatewayConfigured(gatewayRuntime);
   const mediaGateway = gatewayRuntime ? gatewayRuntime.gateway : null;
-  const playback = catalogPlayback.configureCatalogPlayback(config);
+  const playback = catalogPlayback.buildCatalogPlayback(config);
   const directFlag = String(env.BEATGALER_CATALOG_DIRECT_ENABLED || '').trim().toLowerCase() === 'true';
-  const media = catalogMedia.configureCatalogMedia(config);
+  const media = catalogMedia.buildCatalogMedia(config);
   const journalDir = String(env.BEATGALER_CATALOG_JOURNAL_DIR || '').trim();
   const purge = configurePurge(config, mediaGateway, journalDir);
 
@@ -77,10 +77,10 @@ async function assembleServerCatalog({ pool, env, cutover, onGatewayConfigured }
     throw new Error('STOP-GATE: BEATGALER_CATALOG_DIRECT_ENABLED=true in production requires proven G2 or owner-accepted unrotated-bot risk; refusing to start.');
   }
   // E75: el gateway solo comprueba el mensaje publicado por el navegador.
-  const prefixPacks = catalogPrefixPacks.configurePrefixPacks(String(env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && authority ? {
+  const prefixPacks = catalogPrefixPacks.buildPrefixPacks(String(env.BEATGALER_CATALOG_PREFIX_PACKS_ENABLED || '').trim().toLowerCase() === 'true' && authority ? {
     pool, authority, gateway: mediaGateway, directReads: directFlag, log: console.warn,
   } : null);
-  const direct = catalogDirect.configureCatalogDirect(directFlag && authority && operations ? {
+  const direct = catalogDirect.buildCatalogDirect(directFlag && authority && operations ? {
     pool, authority, operations,
     resolveProjectAccess: catalogDirect.createProjectAccessResolver({ resolveUserAccess: (u) => accessRuntime.resolveUserAccess(u) }),
     sessionSource: ({ botId, chatId }) => getCatalogTelegramTransport().catalogDirectSession({ botId, chatId }),
@@ -88,7 +88,7 @@ async function assembleServerCatalog({ pool, env, cutover, onGatewayConfigured }
     log: console.warn,
   } : null);
   // La pertenencia al vault se verifica de forma perezosa con MASTER y el bot.
-  const transportProvisioner = catalogNativeTransport.configureNativeTransportProvisioner(
+  const transportProvisioner = catalogNativeTransport.buildNativeTransportProvisioner(
     authority?.config.nativeEnabled && directFlag && mediaGateway
       ? { pool, assignmentStore: require('./direct-vault-assignment').createDirectVaultAssignmentStore(pool), transport: getCatalogTelegramTransport(), log: console.warn }
       : null);

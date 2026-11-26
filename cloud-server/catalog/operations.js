@@ -582,8 +582,6 @@ function createCatalogOperations({ pool = null, authority = null, resolveAccess 
   });
 }
 
-let configured = null;
-function configureCatalogOperations(options = null) { configured = options && options.pool && options.authority && options.resolveAccess ? createCatalogOperations(options) : null; return configured; }
-function currentCatalogOperations() { return configured; }
+function buildCatalogOperations(options = null) { return options && options.pool && options.authority && options.resolveAccess ? createCatalogOperations(options) : null; }
 
-module.exports = { RESERVATION_TTL_MS, RESERVATION_MAX_MS, JOB_LEASE_MS, JOB_CLAIM_MAX, JOB_BACKOFF_MAX_MS, JOB_TRANSIENT_FAILURES_TO_BLOCK, PARTS_MAX, randomInt64String, int64, validateIntent, validateParts, nativeBeatDocument, createCatalogOperations, configureCatalogOperations, currentCatalogOperations };
+module.exports = { RESERVATION_TTL_MS, RESERVATION_MAX_MS, JOB_LEASE_MS, JOB_CLAIM_MAX, JOB_BACKOFF_MAX_MS, JOB_TRANSIENT_FAILURES_TO_BLOCK, PARTS_MAX, randomInt64String, int64, validateIntent, validateParts, nativeBeatDocument, createCatalogOperations, buildCatalogOperations };
