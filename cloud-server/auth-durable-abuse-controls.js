@@ -158,18 +158,17 @@ function createDurableAuthAbuseControls({ pool, runtime = null, env = requiredEn
   return { middlewareFor, store, routePolicy: route => routePolicy(route, env) };
 }
 
-function installDurableAuthAbuseControls(express, options = {}) {
-  const application = express?.application;
-  if (!application || application.__beatgalerDurableAuthAbuseInstalled || !options.pool) return null;
-  application.__beatgalerDurableAuthAbuseInstalled = true;
+function installDurableAuthAbuseControls(ctx, options = {}) {
+  if (!ctx?.entries || ctx.entries.durableAuthAbuse || !options.pool) return null;
+  ctx.entries.durableAuthAbuse = {};
   const controls = createDurableAuthAbuseControls(options);
-  application.__beatgalerDurableAuthAbuseControls = controls;
+  ctx.entries.durableAuthAbuse.controls = controls;
   return controls;
 }
 
 function wrapDurableAuthAbusePost(routePath, handlers) {
-  const { app, next } = this;
-  const controls = app.__beatgalerDurableAuthAbuseControls;
+  const { next, ctx } = this;
+  const controls = ctx?.entries.durableAuthAbuse?.controls;
   if (!controls) return next(routePath, ...handlers);
   const pathName = String(routePath || '');
   if (!PROTECTED_ROUTES.has(pathName)) return next(routePath, ...handlers);

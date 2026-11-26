@@ -224,14 +224,14 @@ async function start() {
     getCapabilityStore: () => directCapabilities?.store || null,
   });
   installLifecycleRequestGuard(express, accountLifecycle);
-  installHttpContainment(express, { dataDir: STATE_DIR, installationClaimCoordinator, env: getRuntimeEnv() });
+  installHttpContainment(guardContext, { dataDir: STATE_DIR, installationClaimCoordinator, env: getRuntimeEnv() });
   directCapabilities = installDirectCapabilityBoundary(guardContext, { pool, env: getRuntimeEnv() });
   installSensitiveAuthCapabilityRevocation(guardContext, { store: directCapabilities?.store });
   // PostgreSQL is mandatory in production. These shared buckets therefore
   // coordinate auth abuse controls across every production process/restart;
   // the existing in-memory layer remains as an additional low-latency guard.
-  installDurableAuthAbuseControls(express, { pool, runtime: accountLifecycle, env: getRuntimeEnv() });
-  installAuthAbuseControls(express, { env: getRuntimeEnv() });
+  installDurableAuthAbuseControls(guardContext, { pool, runtime: accountLifecycle, env: getRuntimeEnv() });
+  installAuthAbuseControls(guardContext, { express, env: getRuntimeEnv() });
   installProductiveTempAuthBoundary(guardContext);
   console.log(`[control-plane] authority=${cutover.authority} claim-coordinator=${installationClaimCoordinator ? "postgres" : "process-local-dev"} direct-capabilities=${pool ? "postgres" : "process-local-dev"} pending-signup=${pendingSignupEnabled ? 'configured' : 'disabled'}`);
 
