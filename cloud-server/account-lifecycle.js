@@ -69,6 +69,37 @@ function atomicWriteJson(file, value) {
   fs.renameSync(tmp, file);
 }
 
+// Envoltorio de fs de auth-public-registration-hardening.js (M7.4e: entrega del valor ya filtrado).
+const REGISTRATION_FS_PATCH = Symbol.for('beatgaler.authPublicRegistration.fsPatch');
+
+// Cierto si JSON.parse(JSON.stringify(root)) daría un árbol equivalente e independiente: solo null,
+// cadenas, booleanos, números finitos (-0 pasa a 0, indistinguible para el filtro de registro),
+// arrays y objetos con el prototipo estándar, cada objeto una sola vez (sin alias ni ciclos); un
+// hueco, undefined o una función (p. ej. toJSON propio) lo descartan. Como JSON.parse, presupone
+// propiedades de datos enumerables y prototipos sin alterar.
+function isCanonicalJsonTree(root) {
+  const seen = new Set();
+  const stack = [root];
+  while (stack.length) {
+    const value = stack.pop();
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') continue;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return false;
+      continue;
+    }
+    if (typeof value !== 'object' || seen.has(value)) return false;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) return false;
+      for (let index = 0; index < value.length; index += 1) stack.push(value[index]);
+    } else {
+      if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+      for (const key of Object.keys(value)) stack.push(value[key]);
+    }
+  }
+  return true;
+}
+
 function clampTtl(value, fallback, min, max) {
   const parsed = Number(value);
   const picked = Number.isFinite(parsed) ? parsed : fallback;
@@ -474,18 +505,27 @@ function createAccountLifecycleRuntime({
       const isAccounts = fileText.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`);
       if (typeof data === 'string' && (isAccounts || fileText.endsWith('/cloud-data.json.tmp'))) {
         // Fail closed: if parsing or any filter fails, nothing is written.
+        let handoff = null;
+        let parsed;
         try {
-          let parsed = JSON.parse(data);
+          parsed = JSON.parse(data);
           for (const runtime of state.runtimes) {
             parsed = isAccounts ? runtime.api.state.filterAccountsValue(parsed) : runtime.api.state.filterCloudValue(parsed);
           }
-          nextData = JSON.stringify(parsed, null, 2);
+          // M7.4e: si el siguiente envoltorio es el filtro de registro, recibe el valor filtrado sin
+          // serializar y volver a parsear. Solo con un árbol JSON canónico y sin alias, para el que
+          // JSON.parse(JSON.stringify(parsed)) es un objeto igual: mismos bytes. Si no, se serializa.
+          const registration = isAccounts ? fs[REGISTRATION_FS_PATCH] : null;
+          if (registration && state.original === registration.wrapper && isCanonicalJsonTree(parsed)) handoff = registration;
+          else nextData = JSON.stringify(parsed, null, 2);
         } catch (cause) {
           const error = new Error('Account lifecycle persistence filter failed; write aborted.');
           error.code = 'ACCOUNT_LIFECYCLE_FILTER_FAILED';
           error.cause = cause;
           throw error;
         }
+        // Fuera del try, como la llamada a state.original: los fallos del registro conservan su código.
+        if (handoff) return handoff.writeCanonicalAccounts(file, parsed, ...rest);
       }
       return state.original.call(fs, file, nextData, ...rest);
     };

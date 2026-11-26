@@ -47,6 +47,14 @@ function temporaryUsername(value, userId, used) {
 }
 
 function preserveUsersByStableId(nextUsers, previousUsers, deletedUserIds = new Set()) {
+  return preserveUsers(nextUsers, previousUsers, deletedUserIds, cloneUser);
+}
+
+// M7.4e: cuando nextUsers forma parte de un árbol JSON canónico, propio y sin alias, su clon JSON
+// sería un objeto igual e independiente; se usa el propio objeto.
+const ownedUser = user => user;
+
+function preserveUsers(nextUsers, previousUsers, deletedUserIds, cloneNextUser) {
   const deleted = deletedUserIds instanceof Set ? deletedUserIds : new Set(deletedUserIds || []);
   const output = [];
   const byId = new Set();
@@ -55,7 +63,7 @@ function preserveUsersByStableId(nextUsers, previousUsers, deletedUserIds = new 
   for (const raw of Array.isArray(nextUsers) ? nextUsers : []) {
     const id = String(raw?.id || '').trim();
     if (!id || deleted.has(id) || byId.has(id)) continue;
-    const user = cloneUser(raw);
+    const user = cloneNextUser(raw);
     const nameKey = normalizeUsername(user?.username);
     if (nameKey && usedNames.has(nameKey)) {
       user.username = temporaryUsername(user.username, id, usedNames);
@@ -410,33 +418,53 @@ function installAuthPublicRegistrationHardening(express, {
 
   if (!fs[FS_PATCH]) {
     const originalWriteFileSync = fs.writeFileSync;
-    fs[FS_PATCH] = { originalWriteFileSync };
-    fs.writeFileSync = function preserveStableUsersAndScrubOAuthTokens(file, data, ...rest) {
+    const filterAccounts = (parsed, cloneNextUser) => {
+      if (Array.isArray(parsed?.users)) {
+        parsed.users = preserveUsers(parsed.users, accountsSnapshot().users, deletedUserIds(), cloneNextUser);
+        for (const user of parsed.users) {
+          if (!user?.providers?.x) continue;
+          delete user.providers.x.accessToken;
+          delete user.providers.x.refreshToken;
+          delete user.providers.x.tokenExpiresAt;
+        }
+      }
+      return JSON.stringify(parsed, null, 2);
+    };
+    const failClosed = error => {
+      console.error('[auth] stable-id snapshot preservation failed:', error?.message || String(error));
+      // Fail closed: nunca persistir el contenido original (tokens OAuth de X, sin preservación de ids).
+      const failure = new Error('Auth registration persistence filter failed; write aborted.');
+      failure.code = 'AUTH_REGISTRATION_FILTER_FAILED';
+      return failure;
+    };
+    const wrapper = function preserveStableUsersAndScrubOAuthTokens(file, data, ...rest) {
       let next = data;
       try {
         const name = String(file || '').replace(/\\/g, '/');
         if (typeof data === 'string' && name.endsWith(`/${ACCOUNTS_FILE_NAME}.tmp`)) {
-          const parsed = JSON.parse(data);
-          if (Array.isArray(parsed?.users)) {
-            parsed.users = preserveUsersByStableId(parsed.users, accountsSnapshot().users, deletedUserIds());
-            for (const user of parsed.users) {
-              if (!user?.providers?.x) continue;
-              delete user.providers.x.accessToken;
-              delete user.providers.x.refreshToken;
-              delete user.providers.x.tokenExpiresAt;
-            }
-          }
-          next = JSON.stringify(parsed, null, 2);
+          next = filterAccounts(JSON.parse(data), cloneUser);
         }
       } catch (error) {
-        console.error('[auth] stable-id snapshot preservation failed:', error?.message || String(error));
-        // Fail closed: nunca persistir el contenido original (tokens OAuth de X, sin preservación de ids).
-        const failure = new Error('Auth registration persistence filter failed; write aborted.');
-        failure.code = 'AUTH_REGISTRATION_FILTER_FAILED';
-        throw failure;
+        throw failClosed(error);
       }
       return originalWriteFileSync.call(fs, file, next, ...rest);
     };
+    // M7.4e: el filtro de ciclo de vida (account-lifecycle.js), cuando envuelve directamente a `wrapper`,
+    // entrega aquí su valor ya filtrado en vez de serializarlo para que `wrapper` lo vuelva a parsear.
+    // Solo lo hace con una ruta `/accounts-data.json.tmp` y un árbol JSON canónico, propio y sin alias,
+    // así que equivale a `wrapper(file, JSON.stringify(value, null, 2), ...rest)`: mismos bytes y mismo
+    // fallo cerrado.
+    const writeCanonicalAccounts = (file, value, ...rest) => {
+      let next;
+      try {
+        next = filterAccounts(value, ownedUser);
+      } catch (error) {
+        throw failClosed(error);
+      }
+      return originalWriteFileSync.call(fs, file, next, ...rest);
+    };
+    fs[FS_PATCH] = { originalWriteFileSync, wrapper, writeCanonicalAccounts };
+    fs.writeFileSync = wrapper;
   }
 }
 
