@@ -801,13 +801,6 @@ function createAccountLifecycleRuntime({
           const info = sessionInfoFromRequest(req);
           if (info) addNotification(info.userId, notice);
         }
-        if (success && routePath === '/auth/register' && nextPayload?.user?.id) {
-          const snapshotUser = userById(nextPayload.user.id);
-          if (snapshotUser?.email) {
-            void issueEmailToken({ kind: 'email_verification', user: snapshotUser, email: snapshotUser.email })
-              .then(() => addNotification(String(snapshotUser.id), 'email_verification_requested', { delivery_configured: deliveryConfigured }));
-          }
-        }
         originalJson(nextPayload);
       })().catch(next);
       return res;
