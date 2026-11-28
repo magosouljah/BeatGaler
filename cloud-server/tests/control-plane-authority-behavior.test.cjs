@@ -92,6 +92,15 @@ const JSON_WITH_PG = /JSON control-plane authority is not allowed/;
   await assert.rejects(prepare({ NODE_ENV: 'production' }, null), /forbidden with NODE_ENV=production/);
   await assert.rejects(prepare({ NODE_ENV: 'production', BEATGALER_CONTROL_PLANE_AUTHORITY: 'json' }, null), /forbidden with NODE_ENV=production/);
 
+  // 10. Revision L3: el modo postgres solo acepta el marcador READY (antes cubierto por el tramo rollback de la integracion).
+  const { assertCutoverReady } = require('../postgres-control-plane-runtime.js');
+  for (const state of ['ROLLED_BACK', 'WEIRD']) {
+    await assert.rejects(assertCutoverReady(fakePool({ marker: { snapshot_sha256: SNAP, state } }), SNAP),
+      new RegExp(`PostgreSQL cutover marker is ${state}; authority switch is refused`));
+  }
+  await assert.rejects(assertCutoverReady(fakePool(), SNAP), /marker is missing/);
+  assert.equal((await assertCutoverReady(fakePool({ marker: { snapshot_sha256: SNAP, state: 'READY' } }), SNAP)).state, 'READY');
+
   fs.rmSync(stateDir, { recursive: true, force: true });
   console.log('PASS control-plane authority behavior: json solo sin PG y fuera de produccion, PG exige variable, sin rollback a JSON');
 })().catch((e) => { console.error(e); process.exit(1); });
