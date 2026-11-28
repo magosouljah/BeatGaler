@@ -35,10 +35,9 @@ function publicEmailChangeError(error) {
   return { error: safe.get(code) || 'Email change is temporarily unavailable.', code };
 }
 
-function installStagedEmailChangeRoutes(express, service) {
-  const application = express?.application;
-  if (!application || !service || application.__beatgalerStagedEmailChangeRoutesInstalled) return;
-  application.__beatgalerStagedEmailChangeRoutesInstalled = true;
+function installStagedEmailChangeRoutes(ctx, service, { express } = {}) {
+  if (!ctx?.entries || !service || ctx.entries.stagedEmailChange) return;
+  const entry = ctx.entries.stagedEmailChange = {};
   let routesInstalled = false;
   let routesInstalling = false;
 
@@ -76,7 +75,7 @@ function installStagedEmailChangeRoutes(express, service) {
     }
   }
 
-  application.__beatgalerStagedEmailChangePost = function stagedEmailChangeRoutesPost(routePath, handlers) {
+  entry.post = function stagedEmailChangeRoutesPost(routePath, handlers) {
     const { app, next } = this;
     if (!routesInstalling) ensureRoutes(app);
     return next(routePath, ...handlers);
@@ -84,7 +83,7 @@ function installStagedEmailChangeRoutes(express, service) {
 }
 
 function wrapStagedEmailChangePost(routePath, handlers) {
-  const register = this.app.__beatgalerStagedEmailChangePost;
+  const register = this.ctx?.entries.stagedEmailChange?.post;
   return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
 }
 

@@ -39,10 +39,9 @@ function consumeStrongReauth(runtime, req) {
   catch { return { ok: false, code: 'REAUTH_REQUIRED' }; }
 }
 
-function installSensitiveAuthContainment(express, runtime, { pool = null } = {}) {
-  const application = express?.application;
-  if (!application || !runtime || application.__beatgalerSensitiveAuthContainmentInstalled) return;
-  application.__beatgalerSensitiveAuthContainmentInstalled = true;
+function installSensitiveAuthContainment(ctx, runtime, { pool = null } = {}) {
+  if (!ctx?.entries || !runtime || ctx.entries.sensitiveAuthContainment) return;
+  const entry = ctx.entries.sensitiveAuthContainment = {};
 
   function sessionInfo(req) {
     try { return runtime.api.session.sessionInfoFromRequest(req); }
@@ -132,7 +131,7 @@ function installSensitiveAuthContainment(express, runtime, { pool = null } = {})
     next();
   }
 
-  application.__beatgalerSensitiveAuthContainmentPost = function sensitiveAuthPost(routePath, handlers) {
+  entry.post = function sensitiveAuthPost(routePath, handlers) {
     const { next } = this;
     const pathName = String(routePath || '');
     if (pathName === '/auth/email/change') {
@@ -152,7 +151,7 @@ function installSensitiveAuthContainment(express, runtime, { pool = null } = {})
 }
 
 function wrapSensitiveAuthContainmentPost(routePath, handlers) {
-  const register = this.app.__beatgalerSensitiveAuthContainmentPost;
+  const register = this.ctx?.entries.sensitiveAuthContainment?.post;
   return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
 }
 

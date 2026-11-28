@@ -77,8 +77,8 @@ test('Cuentas y sesión en el ensamblado HTTP de Cloud', async t => {
   // que decide cuándo y cómo responder siguen siendo los de producción.
   const installPendingSignupBoundary = pendingSignup.installPendingSignupBoundary;
   const signupInputs = [];
-  pendingSignup.installPendingSignupBoundary = (express, options) =>
-    installPendingSignupBoundary(express, {
+  pendingSignup.installPendingSignupBoundary = (ctx, options) =>
+    installPendingSignupBoundary(ctx, {
       ...options,
       service: {
         async begin(input) {

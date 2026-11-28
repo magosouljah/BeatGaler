@@ -48,7 +48,7 @@ async function checkInactiveRegistration() {
   const env = { BEATGALER_PUBLIC_REGISTRATION: '1', BEATGALER_PENDING_SIGNUP_ENABLED: '0' };
   const ctx = createGuardContext();
   installAuthPublicRegistrationHardening(ctx, { env });
-  const signup = pendingSignup.installPendingSignupBoundary(express, { env });
+  const signup = pendingSignup.installPendingSignupBoundary(ctx, { express, env });
   mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/register', () => assert.fail('el handler heredado no debe ejecutarse'));
   assert.equal(signup.captured().register, true);
@@ -165,9 +165,9 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
         const { installAccountLifecycle } = accountLifecycle;
         accountLifecycle.installAccountLifecycle = (ctx, options) => {
           lifecycle = installAccountLifecycle(ctx, options);
-          installStagedEmailChangeRoutes(options.express, {
+          installStagedEmailChangeRoutes(ctx, {
             async start(_req, email) { emailChanges.push(email); return { ok: true }; },
-          });
+          }, { express: options.express });
           return lifecycle;
         };
         const hardening = require('../auth-public-registration-hardening');
@@ -177,8 +177,8 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
           return installHardening(ctx, options);
         };
         const { installPendingSignupBoundary } = pendingSignup;
-        pendingSignup.installPendingSignupBoundary = (express, options) =>
-          installPendingSignupBoundary(express, {
+        pendingSignup.installPendingSignupBoundary = (ctx, options) =>
+          installPendingSignupBoundary(ctx, {
             ...options,
             service: { async begin(input) { signupCalls.push(input); return { created: false }; } },
           });
