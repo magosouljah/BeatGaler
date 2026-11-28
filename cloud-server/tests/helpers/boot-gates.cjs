@@ -14,7 +14,8 @@ const PASS_THROUGH = ['PATH', 'Path', 'SystemRoot', 'SYSTEMROOT', 'windir', 'WIN
   'PROCESSOR_ARCHITECTURE', 'OS', 'LANG', 'TZ', 'CI', 'GITHUB_ACTIONS'];
 
 // env: variables del Cloud a fijar (clave undefined = ausente). pgAllow: "host:puerto" de la instancia efímera verificada.
-async function bootCloud(env = {}, { timeoutMs = 60_000, pgAllow = '' } = {}) {
+// preloads: precargas extra de helpers/ (van antes de boot-gates-preload; p. ej. boot-stack-preload.cjs -> resultado.stack).
+async function bootCloud(env = {}, { timeoutMs = 60_000, pgAllow = '', preloads: extraPreloads = [] } = {}) {
   if (findLocalSecretFiles(root).length) throw new Error('El arranque de prueba requiere un worktree limpio.');
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-boot-gates-'));
   const child_env = {};
@@ -39,7 +40,7 @@ async function bootCloud(env = {}, { timeoutMs = 60_000, pgAllow = '' } = {}) {
     BEATGALER_TEST_PG_ALLOW: pgAllow,
   });
   for (const [k, v] of Object.entries(env)) { if (v === undefined) delete child_env[k]; else child_env[k] = String(v); }
-  const preloads = ['catalog-net-guard.cjs', 'no-dotenv.cjs', 'pg-port-guard.cjs', 'boot-gates-preload.cjs'];
+  const preloads = ['catalog-net-guard.cjs', 'no-dotenv.cjs', 'pg-port-guard.cjs', ...extraPreloads, 'boot-gates-preload.cjs'];
   const args = [...preloads.flatMap((f) => ['--require', path.join(helpers, f)]), path.join(cloudDir, 'server.js')];
   let output = '';
   let listening = false;
@@ -61,7 +62,9 @@ async function bootCloud(env = {}, { timeoutMs = 60_000, pgAllow = '' } = {}) {
     });
     const failure = /\[control-plane\] startup failed; cloud-server will not start: (.*)/.exec(output);
     const catalogLine = (/^\[catalog\] native=.*$/m.exec(output) || [null])[0];
-    return { exitCode, listening, startupFailed, failureMessage: failure ? failure[1].trim() : null, catalogLine, output };
+    const stackLine = /^BOOT_STACK (.*)$/m.exec(output);
+    return { exitCode, listening, startupFailed, failureMessage: failure ? failure[1].trim() : null, catalogLine,
+      stack: stackLine ? JSON.parse(stackLine[1]) : null, output };
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
