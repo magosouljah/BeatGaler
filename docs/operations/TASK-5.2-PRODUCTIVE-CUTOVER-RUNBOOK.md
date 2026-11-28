@@ -108,6 +108,8 @@ CI proves the transaction, wrong/missing-key rejection and v7→v8 re-encryption
 
 ## Rollback after PostgreSQL writes exist
 
+> **HISTÓRICO (D23).** Este rollback a JSON es previo al LIVE (20-nov-2026) y nunca se usó. Ya no existe: PostgreSQL es la única autoridad (D17) y no hay vuelta a JSON ni a INDEX. La vía de recuperación vigente es restaurar PostgreSQL (backups automáticos / recuperación a un punto en el tiempo en RDS; requisitos en [TASK-5.2-AWS-PRODUCTION-CONTRACT.md](TASK-5.2-AWS-PRODUCTION-CONTRACT.md)). Aún no hay un procedimiento de restauración paso a paso en `docs/operations/` (pendiente, D20). El texto siguiente se conserva solo como registro y se retirará en M7.6b-b2.
+
 Never point authority back at the pre-cutover JSON snapshot.
 
 1. Enter maintenance/write freeze again and drain mutations.
