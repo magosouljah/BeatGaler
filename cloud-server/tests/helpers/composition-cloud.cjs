@@ -162,7 +162,8 @@ async function withCloud(exercise, { inMemory = false, prepare, restoreState, re
   }
 }
 
-function send(port, method, url, { headers, body } = {}, timeoutMs) {
+function send(port, method, url, { headers, body, timeoutMs: callTimeoutMs } = {}, defaultTimeoutMs) {
+  const timeoutMs = callTimeoutMs ?? defaultTimeoutMs;
   return new Promise((resolve, reject) => {
     const encoded = body === undefined ? undefined : JSON.stringify(body);
     const req = http.request({
