@@ -154,15 +154,6 @@ async function observeMountedCloud(t) {
       return JSON.parse(response.data);
     }
 
-    // El primer login paga la carga perezosa de módulos y el JIT (~1 s solo, >2,5 s con la máquina cargada). Se calienta esa ruta
-    // con un intento fallido (no crea sesión) bajo un plazo de arranque; los plazos por petición de abajo no cambian.
-    const cold = await send('POST', '/auth/login', {
-      headers: browser,
-      body: { email: account.email, password: `wrong-${account.password}`, beatgalerUserId: account.beatgalerUserId },
-      timeoutMs: 60_000,
-    });
-    assert.equal(cold.status, 401);
-
     const login = await send('POST', '/auth/login', {
       headers: browser,
       body: { email: account.email, password: account.password, beatgalerUserId: account.beatgalerUserId },
