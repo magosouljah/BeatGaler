@@ -1,7 +1,6 @@
 'use strict';
 
 const { requiredEnv } = require('./runtime-env');
-const { EventEmitter } = require('node:events');
 const { publicRegistrationOpen } = require('./auth-public-registration-hardening');
 const SIGNUP_COOKIE = '__Host-beatgaler_signup';
 
@@ -87,40 +86,6 @@ function publicError(error) {
   return { error: safeMessages.get(code) || 'Account creation is temporarily unavailable.', code };
 }
 
-function createHandlerResponse() {
-  const res = new EventEmitter();
-  res.statusCode = 200;
-  res.headers = {};
-  res.locals = {};
-  res.writableEnded = false;
-  res.status = code => { res.statusCode = Number(code); return res; };
-  res.setHeader = (name, value) => { res.headers[String(name).toLowerCase()] = value; };
-  res.getHeader = name => res.headers[String(name).toLowerCase()];
-  res.json = body => { res.body = body; res.writableEnded = true; res.emit('finish'); return res; };
-  res.send = body => { res.body = body; res.writableEnded = true; res.emit('finish'); return res; };
-  return res;
-}
-
-async function invokeCapturedHandler(handler, body, { headers = {} } = {}) {
-  if (typeof handler !== 'function') {
-    throw Object.assign(new Error('Legacy authentication primitive is unavailable.'), { code: 'LEGACY_AUTH_PRIMITIVE_UNAVAILABLE' });
-  }
-  const req = {
-    body: { ...(body || {}) },
-    headers: { ...headers },
-    query: {},
-    params: {},
-    ip: '127.0.0.1',
-    socket: { remoteAddress: '127.0.0.1' },
-  };
-  const res = createHandlerResponse();
-  let nextError = null;
-  const next = error => { if (error) nextError = error; };
-  await Promise.resolve(handler(req, res, next));
-  if (nextError) throw nextError;
-  return { statusCode: Number(res.statusCode || 200), body: res.body, headers: res.headers };
-}
-
 function installPendingSignupBoundary(ctx, {
   express,
   service = null,
@@ -132,7 +97,6 @@ function installPendingSignupBoundary(ctx, {
   const entry = ctx.entries.pendingSignupBoundary = {};
   let routesInstalled = false;
   let routesInstalling = false;
-  let legacyLoginHandler = null;
 
   function runtimeReady(res) {
     if (service) return true;
@@ -295,9 +259,6 @@ function installPendingSignupBoundary(ctx, {
   }
 
   const runtimeApi = {
-    invokeLegacyLogin(body) { return invokeCapturedHandler(legacyLoginHandler, body); },
-    captured() { return { login: Boolean(legacyLoginHandler) }; },
-    _test: { createHandlerResponse, invokeCapturedHandler },
   };
   entry.runtime = runtimeApi;
 
@@ -306,7 +267,6 @@ function installPendingSignupBoundary(ctx, {
     if (!routesInstalling) ensureRoutes(app);
     const pathName = String(routePath || '');
     const lastHandler = [...handlers].reverse().find(handler => typeof handler === 'function') || null;
-    if (pathName === '/auth/login' && lastHandler) legacyLoginHandler = lastHandler;
 
     if (pathName === '/auth/register') {
       // El alta pendiente ocupa siempre el lugar del último handler (el stub 503
@@ -333,7 +293,5 @@ module.exports = {
   wrapPendingSignupPost,
   statusForError,
   publicError,
-  createHandlerResponse,
-  invokeCapturedHandler,
   installPendingSignupBoundary,
 };
