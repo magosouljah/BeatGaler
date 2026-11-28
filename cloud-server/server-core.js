@@ -902,49 +902,11 @@ app.post("/image/fetch", async (req, res) => {
   }
 });
 
-app.post("/auth/register", async (req, res) => {
-  const usernameBase = normalizeBeatGalerUsername(req.body?.usernameBase || req.body?.username);
-  const email = normalizeEmail(req.body?.email);
-  const password = String(req.body?.password || "");
-  const beatgalerUserId = String(req.body?.beatgalerUserId || "");
-
-  if (!validHandleBase(usernameBase)) return res.status(400).json({ error: "Username must be 3-20 characters using only letters, numbers, dot or underscore." });
-  if (!validEmail(email)) return res.status(400).json({ error: "Enter a valid email address." });
-  if (findUserByEmail(email)) return res.status(409).json({ error: "That email is already attached to a BeatGaler account." });
-  if (password.length < 8 || password.length > 200) return res.status(400).json({ error: "Password must be at least 8 characters." });
-  if (!beatgalerUserId) return res.status(400).json({ error: "beatgalerUserId is required." });
-
-  const username = generateBeatGalerHandle(usernameBase);
-  const salt = crypto.randomBytes(16).toString("hex");
-  const user = {
-    id: `usr_${crypto.randomBytes(12).toString("hex")}`,
-    username,
-    usernameSource: "beatgaler",
-    email,
-    passwordSalt: salt,
-    passwordHash: await hashPassword(password, salt),
-    createdAt: Date.now(),
-    storageChatId: null,
-    storageChatTitle: null,
-    storageCreatedAt: null,
-    providers: {},
-  };
-  // New accounts start Free; already-issued grants are preserved.
-  ensurePlanState(user);
-
-  beatGalerUsers.set(username, user);
-  beatGalerUsersById.set(user.id, user);
-  saveAuthData();
-
-  try {
-    await ensureUserStorage(user);
-    bindInstallationToBeatGalerUser(user, beatgalerUserId);
-    const token = createAuthSession(user.id);
-    return res.status(201).json(await accountPublicPayload(user, token));
-  } catch (error) {
-    console.error("[auth] storage provisioning failed:", error?.message || error);
-    return res.status(503).json({ error: `BeatGaler account created, but private cloud storage could not be provisioned: ${error?.message || error}`, account_created: true, username });
-  }
+// Registration point only (M7.6a-a2, D18): containment, anti-abuse and the
+// pending-signup boundary (X65) hook this call and replace this last handler.
+// Without that boundary it fails closed: no user, vault or session is created.
+app.post("/auth/register", (_req, res) => {
+  res.status(503).json({ error: "Account creation is temporarily unavailable.", code: "SIGNUP_BOUNDARY_REQUIRED" });
 });
 
 app.post("/auth/login", async (req, res) => {

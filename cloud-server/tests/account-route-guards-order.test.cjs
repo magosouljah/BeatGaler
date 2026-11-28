@@ -48,10 +48,11 @@ async function checkInactiveRegistration() {
   const env = { BEATGALER_PUBLIC_REGISTRATION: '1', BEATGALER_PENDING_SIGNUP_ENABLED: '0' };
   const ctx = createGuardContext();
   installAuthPublicRegistrationHardening(ctx, { env });
-  const signup = pendingSignup.installPendingSignupBoundary(ctx, { express, env });
+  pendingSignup.installPendingSignupBoundary(ctx, { express, env });
   mountAccountRouteGuards(app, undefined, ctx);
+  // M7.6a-a2: se retiró `captured().register` (la frontera ya no guarda el handler clásico); la
+  // sustitución la prueba el comportamiento: este último handler no se ejecuta y responde la frontera.
   app.post('/auth/register', () => assert.fail('el handler heredado no debe ejecutarse'));
-  assert.equal(signup.captured().register, true);
 
   const handlers = routes.get('/auth/register').values();
   const result = await new Promise(resolve => {
