@@ -88,10 +88,56 @@ test("login and password change use the asynchronous KDF end to end over HTTP", 
   });
 });
 
-// /auth/register needs a pending signup backed by PostgreSQL (the composition
-// Cloud has none), so its KDF wiring is still checked as source text.
-test("register handler awaits the asynchronous KDF", () => {
+// Behaviour: the pending-signup runtime (the only live register path) derives the
+// password hash with the asynchronous KDF and stores exactly that derivation.
+test("pending signup create() waits for async scrypt and stores its derivation", async t => {
+  const { createPendingSignupRuntime } = require("../pending-signup-runtime");
+  const inserts = [];
+  let connects = 0;
+  const client = {
+    async query(sql, params) {
+      if (String(sql).includes("INSERT INTO pending_signups")) inserts.push(params);
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const pool = { async connect() { connects += 1; return client; } };
+  const derivedKey = Buffer.alloc(SCRYPT_KEY_LENGTH, 7);
+  let complete;
+  let scryptSalt;
+  const scrypt = t.mock.method(crypto, "scrypt", (_password, salt, _length, callback) => {
+    scryptSalt = salt;
+    complete = callback;
+  });
+  const scryptSync = t.mock.method(crypto, "scryptSync", () => {
+    throw new Error("Unexpected synchronous scrypt");
+  });
+  const runtime = createPendingSignupRuntime({
+    pool,
+    keyring: { key: Buffer.alloc(32, 7), keyVersion: 1 },
+    env: { BEATGALER_SIGNUP_PEPPER: "p".repeat(32) },
+  });
+  let finished = false;
+  const pending = runtime.create({ email: "kdf@example.com", usernameBase: "kdfuser", password: "password-123" })
+    .then(result => { finished = true; return result; });
+  pending.catch(() => {});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(scrypt.mock.callCount(), 1);
+  assert.equal(scryptSync.mock.callCount(), 0);
+  assert.equal(finished, false, "create() must not resolve before the KDF callback");
+  assert.equal(connects, 0, "no database work may start before the KDF finishes");
+
+  complete(null, derivedKey);
+  const result = await pending;
+  assert.equal(result.status, "DELIVERY_PENDING");
+  assert.equal(scryptSync.mock.callCount(), 0);
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0][3], derivedKey.toString("hex"), "inserted hash must be the scrypt derivation");
+  assert.equal(inserts[0][4], scryptSalt.toString("hex"), "inserted salt must be the one fed to scrypt");
+});
+
+// Text guard (not behaviour): the classic request paths contain no synchronous scrypt.
+test("server-core source has no synchronous scrypt (text guard)", () => {
   const serverSource = fs.readFileSync(path.join(__dirname, "..", "server-core.js"), "utf8");
   assert.equal(serverSource.includes("scryptSync"), false, "request paths must not contain synchronous scrypt");
-  assert.match(serverSource, /passwordHash:\s*await hashPassword\(password, salt\)/, "register must await async KDF");
 });
