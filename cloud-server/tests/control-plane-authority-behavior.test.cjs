@@ -1,7 +1,8 @@
 'use strict';
 // Caracterizacion (M7.6b-b0) de la seleccion de autoridad del plano de control: control-plane-authority.js +
 // prepareControlPlaneCutover (rama json con pool falso; modo postgres solo hasta sus rechazos tempranos). Sin PG real.
-// Fija el comportamiento ACTUAL: sin variable => json; json + PG configurado solo arranca si no hay marcador READY.
+// M7.6b-b2 (D17): sin PG => json por defecto; con PG la variable es obligatoria y json se rechaza; json nunca en produccion;
+// el rollback a JSON (ROLLED_BACK + BEATGALER_JSON_ROLLBACK_EXPORT_SHA256) ya no existe.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -11,13 +12,8 @@ const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-authority-state-'));
 process.env.BEATGALER_STATE_DIR = stateDir; // vacio: el arranque json usa los snapshots por defecto
 const { controlPlaneAuthorityConfig } = require('../control-plane-authority.js');
 const { prepareControlPlaneCutover } = require('../control-plane-cutover-runtime.js');
-const { snapshotManifest } = require('../legacy-import-plan.js');
-const { ACCOUNTS_FILE_NAME } = require('../auth-helpers');
 
 const SNAP = 'b'.repeat(64);
-const DEFAULT_AUTH = JSON.stringify({ users: [], sessions: {} });
-const DEFAULT_PERSISTENT = JSON.stringify({ linkedAccounts: {}, uploadedFiles: {}, beatTopics: {}, pendingTopicDeletes: {}, messageRedirects: {} });
-const DEFAULT_SHA = snapshotManifest({ [ACCOUNTS_FILE_NAME]: DEFAULT_AUTH, 'cloud-data.json': DEFAULT_PERSISTENT }).manifest_sha256;
 
 function fakePool({ marker, activations = 0, libraries = 0 } = {}) {
   const calls = [];
@@ -32,17 +28,19 @@ function fakePool({ marker, activations = 0, libraries = 0 } = {}) {
   };
 }
 const prepare = (env, pool) => prepareControlPlaneCutover({ pool, env });
+const NO_DEFAULT = /requires BEATGALER_CONTROL_PLANE_AUTHORITY=postgres/;
+const JSON_WITH_PG = /JSON control-plane authority is not allowed/;
 
 (async () => {
-  // 1. Valor por defecto: sin variable de autoridad => json (con y sin PG configurado).
+  // 1. Valor por defecto: sin variable de autoridad y sin PG => json. b2: con PG configurado => error (antes json).
   assert.equal(controlPlaneAuthorityConfig({}).authority, 'json');
-  assert.equal(controlPlaneAuthorityConfig({ BEATGALER_POSTGRES_ENABLED: 'true' }).authority, 'json');
+  assert.throws(() => controlPlaneAuthorityConfig({ BEATGALER_POSTGRES_ENABLED: 'true' }), NO_DEFAULT);
 
-  // 2. json explicito sin pool: no consulta nada y no hay runtime.
+  // 2. json explicito sin pool: no consulta nada y no hay runtime. b2: el campo rollbackSha256 desaparece.
   const noPool = await prepare({ BEATGALER_CONTROL_PLANE_AUTHORITY: 'json' }, null);
   assert.equal(noPool.authority, 'json');
   assert.equal(noPool.runtime, null);
-  assert.equal(noPool.rollbackSha256, null);
+  assert.deepEqual(Object.keys(noPool).sort(), ['authority', 'runtime']);
 
   // 3. postgres sin snapshot SHA => rechazo de configuracion; sin pool => rechazo de arranque.
   assert.throws(() => controlPlaneAuthorityConfig({ BEATGALER_CONTROL_PLANE_AUTHORITY: 'postgres', BEATGALER_POSTGRES_ENABLED: 'true' }), /CUTOVER_SNAPSHOT_SHA256/);
@@ -53,40 +51,56 @@ const prepare = (env, pool) => prepareControlPlaneCutover({ pool, env });
     BEATGALER_POSTGRES_CUTOVER_SNAPSHOT_SHA256: SNAP,
   }, null), /requires an initialized PostgreSQL pool/);
 
-  // 4. PG configurado SIN variable de autoridad: hoy arranca en json (sin marcador) y solo se niega con marcador READY.
+  // 4. b2: PG configurado SIN variable de autoridad => el arranque se niega antes de tocar SQL (antes arrancaba en json).
   const pgEnv = { BEATGALER_POSTGRES_ENABLED: 'true' };
   const noMarkerPool = fakePool();
-  const noMarker = await prepare(pgEnv, noMarkerPool);
-  assert.equal(noMarker.authority, 'json');
-  assert.equal(noMarker.runtime, null);
-  assert.ok(noMarkerPool.calls.some((s) => /control_plane_cutovers/.test(s)), 'consulta el marcador de cutover');
+  await assert.rejects(prepare(pgEnv, noMarkerPool), NO_DEFAULT);
+  assert.deepEqual(noMarkerPool.calls, [], 'no consulta SQL');
 
-  // 5. Marcador READY => rechazo (tambien cuando la autoridad es el valor por defecto).
-  await assert.rejects(prepare(pgEnv, fakePool({ marker: { state: 'READY', rollback_export_sha256: null } })), /refused while PostgreSQL cutover is READY/);
-  await assert.rejects(prepare({ ...pgEnv, BEATGALER_CONTROL_PLANE_AUTHORITY: 'json' }, fakePool({ marker: { state: 'READY' } })), /refused while PostgreSQL cutover is READY/);
+  // 5. b2: con marcador READY el rechazo llega antes, por configuracion (sin variable o json explicito + PG).
+  const ready = fakePool({ marker: { state: 'READY', rollback_export_sha256: null } });
+  await assert.rejects(prepare(pgEnv, ready), NO_DEFAULT);
+  await assert.rejects(prepare({ ...pgEnv, BEATGALER_CONTROL_PLANE_AUTHORITY: 'json' }, ready), JSON_WITH_PG);
+  assert.deepEqual(ready.calls, []);
 
-  // 6. ROLLED_BACK: arranca solo con el SHA correcto y archivos que coincidan; si no, rechazo.
-  const rolled = { state: 'ROLLED_BACK', rollback_export_sha256: DEFAULT_SHA };
-  const ok = await prepare({ ...pgEnv, BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: DEFAULT_SHA }, fakePool({ marker: rolled }));
-  assert.equal(ok.authority, 'json');
-  assert.equal(ok.runtime, null);
-  assert.equal(ok.rollbackSha256, DEFAULT_SHA);
-  await assert.rejects(prepare(pgEnv, fakePool({ marker: rolled })), /rollback SHA256 does not match/);
-  const other = 'c'.repeat(64);
-  await assert.rejects(prepare({ ...pgEnv, BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: other }, fakePool({ marker: { state: 'ROLLED_BACK', rollback_export_sha256: other } })), /do not match the committed PostgreSQL rollback/);
-  await assert.rejects(prepare({ ...pgEnv, BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: DEFAULT_SHA }, fakePool({ marker: { state: 'ROLLED_BACK', rollback_export_sha256: other } })), /rollback SHA256 does not match/);
-  await assert.rejects(prepare(pgEnv, fakePool({ marker: { state: 'WEIRD' } })), /Unsupported cutover state/);
+  // 6. b2: el rollback a JSON ya no existe. ROLLED_BACK + SHA correcto ya no arranca en json; la variable de rollback
+  //    se ignora (ni habilita json con PG ni bloquea postgres).
+  const rolled = fakePool({ marker: { state: 'ROLLED_BACK', rollback_export_sha256: SNAP } });
+  await assert.rejects(prepare({ ...pgEnv, BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: SNAP }, rolled), NO_DEFAULT);
+  await assert.rejects(prepare({ ...pgEnv, BEATGALER_CONTROL_PLANE_AUTHORITY: 'json', BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: SNAP }, rolled), JSON_WITH_PG);
+  assert.deepEqual(rolled.calls, []);
+  assert.equal(controlPlaneAuthorityConfig({
+    BEATGALER_CONTROL_PLANE_AUTHORITY: 'postgres', BEATGALER_POSTGRES_ENABLED: 'true',
+    BEATGALER_POSTGRES_CUTOVER_SNAPSHOT_SHA256: SNAP, BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: SNAP,
+  }).authority, 'postgres');
 
-  // 7. json + pool con activacion nativa o bibliotecas => arranque negado (guarda previa al marcador).
+  // 7. json + pool con activacion nativa o bibliotecas: b2 => rechazo por configuracion, sin consulta SQL.
+  //    json explicito sin PG configurado: el pool (inexistente en server.js) se ignora y no se consulta.
   const native = fakePool({ activations: 1 });
-  await assert.rejects(prepare(pgEnv, native), (e) => e.code === 'CATALOG_NATIVE_STARTUP_REFUSED');
-  assert.equal(native.calls.some((s) => /control_plane_cutovers/.test(s)), false);
-  await assert.rejects(prepare(pgEnv, fakePool({ libraries: 2 })), (e) => e.code === 'CATALOG_NATIVE_STARTUP_REFUSED');
+  await assert.rejects(prepare(pgEnv, native), NO_DEFAULT);
+  await assert.rejects(prepare({ ...pgEnv, BEATGALER_CONTROL_PLANE_AUTHORITY: 'json' }, fakePool({ libraries: 2 })), JSON_WITH_PG);
+  assert.equal(native.calls.length, 0);
+  const strayPool = fakePool({ activations: 1 });
+  assert.equal((await prepare({ BEATGALER_CONTROL_PLANE_AUTHORITY: 'json' }, strayPool)).runtime, null);
+  assert.deepEqual(strayPool.calls, []);
 
-  // 8. SHA de rollback solo con PG habilitado; no se admite junto a autoridad postgres.
-  assert.throws(() => controlPlaneAuthorityConfig({ BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: SNAP }), /requires BEATGALER_POSTGRES_ENABLED=true/);
+  // 8. b2: la variable de rollback sola ya no exige PG (se ignora). Valor desconocido => rechazo (intacto).
+  assert.equal(controlPlaneAuthorityConfig({ BEATGALER_JSON_ROLLBACK_EXPORT_SHA256: SNAP }).authority, 'json');
   assert.throws(() => controlPlaneAuthorityConfig({ BEATGALER_CONTROL_PLANE_AUTHORITY: 'dual' }), /json or postgres/);
 
+  // 9. b2: json nunca con NODE_ENV=production (por defecto o explicito).
+  await assert.rejects(prepare({ NODE_ENV: 'production' }, null), /forbidden with NODE_ENV=production/);
+  await assert.rejects(prepare({ NODE_ENV: 'production', BEATGALER_CONTROL_PLANE_AUTHORITY: 'json' }, null), /forbidden with NODE_ENV=production/);
+
+  // 10. Revision L3: el modo postgres solo acepta el marcador READY (antes cubierto por el tramo rollback de la integracion).
+  const { assertCutoverReady } = require('../postgres-control-plane-runtime.js');
+  for (const state of ['ROLLED_BACK', 'WEIRD']) {
+    await assert.rejects(assertCutoverReady(fakePool({ marker: { snapshot_sha256: SNAP, state } }), SNAP),
+      new RegExp(`PostgreSQL cutover marker is ${state}; authority switch is refused`));
+  }
+  await assert.rejects(assertCutoverReady(fakePool(), SNAP), /marker is missing/);
+  assert.equal((await assertCutoverReady(fakePool({ marker: { snapshot_sha256: SNAP, state: 'READY' } }), SNAP)).state, 'READY');
+
   fs.rmSync(stateDir, { recursive: true, force: true });
-  console.log('PASS control-plane authority behavior: default json, json sin pool, READY/ROLLED_BACK, postgres sin snapshot');
+  console.log('PASS control-plane authority behavior: json solo sin PG y fuera de produccion, PG exige variable, sin rollback a JSON');
 })().catch((e) => { console.error(e); process.exit(1); });

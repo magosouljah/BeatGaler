@@ -9,28 +9,16 @@ const { controlPlaneAuthorityConfig } = require('./control-plane-authority');
 const { resolveSecretEnvelopeKeyring } = require('./secret-envelope-provider');
 const { PostgresControlPlaneRuntime } = require('./postgres-control-plane-runtime');
 const { installMultiprocessAuthSnapshotCompatibility } = require('./postgres-auth-multiprocess-compat');
-const { assertJsonRollbackSnapshot } = require('./postgres-rollback-preparation');
 const { installLegacyJsonCompatibility, installExpressDurabilityBarrier } = require('./control-plane-json-compat');
-const { assertNativeStartupCompatible } = require('./catalog/authority');
 const { STATE_DIR, statePath } = require('./state-dir');
 
 async function prepareControlPlaneCutover({ pool, env = requiredEnv(), secretProviderOptions } = {}) {
   const config = controlPlaneAuthorityConfig(env);
+  // json solo sin PostgreSQL configurado (control-plane-authority.js): no hay pool ni marcador que comprobar.
+  if (config.authority === 'json') return Object.freeze({ authority: 'json', runtime: null });
+
   const authPath = accountsDataPath(STATE_DIR);
   const persistentPath = statePath('cloud-data.json');
-
-  if (config.authority === 'json') {
-    if (pool) {
-      // T05-N (NATIVO r2.1 §12.2): json + pool con activación nativa o bibliotecas de catálogo → el arranque se niega.
-      await assertNativeStartupCompatible({ pool, authority: 'json' });
-      const authRaw = fs.existsSync(authPath) ? fs.readFileSync(authPath, 'utf8') : JSON.stringify({ users: [], sessions: {} });
-      const persistentRaw = fs.existsSync(persistentPath)
-        ? fs.readFileSync(persistentPath, 'utf8')
-        : JSON.stringify({ linkedAccounts: {}, uploadedFiles: {}, beatTopics: {}, pendingTopicDeletes: {}, messageRedirects: {} });
-      await assertJsonRollbackSnapshot(pool, config.expectedRollbackSha256, { authRaw, persistentRaw });
-    }
-    return Object.freeze({ authority: 'json', runtime: null, rollbackSha256: config.expectedRollbackSha256 || null });
-  }
   if (!pool) throw new Error('PostgreSQL authority requires an initialized PostgreSQL pool.');
 
   const cryptoConfig = await resolveSecretEnvelopeKeyring(env, secretProviderOptions);
