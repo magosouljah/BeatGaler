@@ -87,12 +87,6 @@ function publicError(error) {
   return { error: safeMessages.get(code) || 'Account creation is temporarily unavailable.', code };
 }
 
-function shouldOwnRegister(env = requiredEnv()) {
-  // The legacy handler creates a permanent user and vault before verification.
-  // It must never be reachable, including in development with the flag off.
-  return true;
-}
-
 function createHandlerResponse() {
   const res = new EventEmitter();
   res.statusCode = 200;
@@ -138,7 +132,6 @@ function installPendingSignupBoundary(ctx, {
   const entry = ctx.entries.pendingSignupBoundary = {};
   let routesInstalled = false;
   let routesInstalling = false;
-  let legacyRegisterHandler = null;
   let legacyLoginHandler = null;
 
   function runtimeReady(res) {
@@ -302,9 +295,8 @@ function installPendingSignupBoundary(ctx, {
   }
 
   const runtimeApi = {
-    invokeLegacyRegister(body) { return invokeCapturedHandler(legacyRegisterHandler, body); },
     invokeLegacyLogin(body) { return invokeCapturedHandler(legacyLoginHandler, body); },
-    captured() { return { register: Boolean(legacyRegisterHandler), login: Boolean(legacyLoginHandler) }; },
+    captured() { return { login: Boolean(legacyLoginHandler) }; },
     _test: { createHandlerResponse, invokeCapturedHandler },
   };
   entry.runtime = runtimeApi;
@@ -314,12 +306,11 @@ function installPendingSignupBoundary(ctx, {
     if (!routesInstalling) ensureRoutes(app);
     const pathName = String(routePath || '');
     const lastHandler = [...handlers].reverse().find(handler => typeof handler === 'function') || null;
-    if (pathName === '/auth/register' && lastHandler) legacyRegisterHandler = lastHandler;
     if (pathName === '/auth/login' && lastHandler) legacyLoginHandler = lastHandler;
 
-    if (pathName === '/auth/register' && shouldOwnRegister(env)) {
-      // El alta pendiente ocupa el lugar del handler heredado (el último): los
-      // guardas externos (antiabuso, contención) deben ejecutarse antes.
+    if (pathName === '/auth/register') {
+      // El alta pendiente ocupa siempre el lugar del último handler (el stub 503
+      // de server-core): los guardas externos (antiabuso, contención) van antes.
       const chain = handlers.slice();
       chain[chain.lastIndexOf(lastHandler)] = (req, res) => { void register(req, res); };
       return next(routePath, ...chain);
@@ -342,7 +333,6 @@ module.exports = {
   wrapPendingSignupPost,
   statusForError,
   publicError,
-  shouldOwnRegister,
   createHandlerResponse,
   invokeCapturedHandler,
   installPendingSignupBoundary,

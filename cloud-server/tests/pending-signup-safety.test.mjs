@@ -11,7 +11,7 @@ const {
   normalizeManualCode,
 } = require('../pending-signup-runtime');
 const { retryDelay, createAuthDeliveryWorker } = require('../auth-delivery-worker');
-const { statusForError, publicError, shouldOwnRegister, installPendingSignupBoundary } = require('../pending-signup-boundary');
+const { statusForError, publicError, installPendingSignupBoundary } = require('../pending-signup-boundary');
 
 function poolWithClient(queryImpl) {
   const client = {
@@ -28,10 +28,8 @@ function poolWithClient(queryImpl) {
   };
 }
 
-assert.equal(shouldOwnRegister({ NODE_ENV: 'production' }), true);
-assert.equal(shouldOwnRegister({ NODE_ENV: 'development' }), true);
-assert.equal(shouldOwnRegister({ NODE_ENV: 'development', BEATGALER_PENDING_SIGNUP_ENABLED: '1' }), true);
-assert.equal(shouldOwnRegister({ NODE_ENV: 'development', BEATGALER_PUBLIC_REGISTRATION: '1' }), true);
+// M7.6a-a2: shouldOwnRegister (constante true) se retiró con el handler clásico; la sustitución
+// incondicional del último handler la fijan register-route-behavior (1)(2)(3) y account-route-guards-order.
 assert.equal(statusForError({ code: 'SIGNUP_RESEND_COOLDOWN' }), 429);
 assert.equal(statusForError({ code: 'SIGNUP_CHALLENGE_INVALID' }), 400);
 assert.equal(statusForError({ code: 'SIGNUP_CODE_FORMAT_INVALID' }), 400);

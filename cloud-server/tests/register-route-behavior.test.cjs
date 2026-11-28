@@ -6,8 +6,8 @@
 //  (2) server.js real con un servicio de alta pendiente FALSO inyectado en installPendingSignupBoundary (server.js con el flag=1
 //      exige PostgreSQL, que aqui no existe): 202 sin token, sin csrf y sin Set-Cookie de sesion. Fija la sustitucion X65 del
 //      ultimo handler de la ruta por el alta pendiente (el handler clasico daria 201 con token).
-//  (3) server-core cargado sin server.js fuera de produccion (contexto vacio): caracteriza HOY que el handler clasico persiste
-//      el usuario. M7.6a-a2 invertira este caso a 503 sin escritura.
+//  (3) server-core cargado sin server.js fuera de produccion (contexto vacio): tras M7.6a-a2 el handler clasico ya no existe;
+//      la ruta responde 503 SIGNUP_BOUNDARY_REQUIRED sin crear usuario, boveda ni sesion (y sin delegar en next()).
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -85,6 +85,7 @@ async function childServerCore() {
   return {
     status: response.status,
     body,
+    setCookie: response.headers.get('set-cookie'),
     emails: readUsers(process.env.BEATGALER_STATE_DIR).map(user => user.email),
   };
 }
@@ -161,10 +162,12 @@ if (process.argv[2] === '--child') {
     assert.deepEqual(r.emails, ['smoke@example.test'], 'sin cuenta permanente');
   });
 
-  test('(3) server-core sin server.js fuera de produccion: HOY el handler clasico persiste el usuario', () => {
+  test('(3) server-core sin server.js fuera de produccion: 503 SIGNUP_BOUNDARY_REQUIRED sin escritura', () => {
     const r = runChild('direct');
-    assert.ok([201, 503].includes(r.status), `estado ${r.status}`);
-    if (r.status === 503) assert.equal(r.body.account_created, true);
-    assert.deepEqual(r.emails, [NEW_EMAIL], 'el usuario se persiste antes de aprovisionar');
+    assert.equal(r.status, 503, `estado ${r.status} (404 = la llamada se delego en next() o se retiro la ruta)`);
+    assert.equal(r.body?.code, 'SIGNUP_BOUNDARY_REQUIRED');
+    for (const key of ['token', 'csrf_token', 'user', 'account_created', 'username']) assert.equal(r.body[key], undefined, key);
+    assert.equal(r.setCookie, null, 'sin cookie de sesion');
+    assert.deepEqual(r.emails, [], 'ningun usuario persistido');
   });
 }
