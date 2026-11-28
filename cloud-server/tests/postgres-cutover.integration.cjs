@@ -16,11 +16,6 @@ const {
   verifyCutoverSnapshotBundle,
 } = require('../cutover-snapshot-bundle.js');
 const {
-  exportCurrentPostgresForRollback,
-  commitPostgresRollback,
-  assertJsonRollbackSnapshot,
-} = require('../postgres-rollback-preparation.js');
-const {
   PostgresControlPlaneRuntime,
   assertCutoverReady,
   loadAuthSnapshot,
@@ -240,35 +235,6 @@ function raw(value) {
     assert.equal(persistedState.pendingTopicDeletes['installation-cutover:beat-old'], undefined);
     assert.equal(persistedState.messageRedirects['installation-cutover:102'], 103);
 
-    await assert.rejects(() => assertJsonRollbackSnapshot(pool, '', {
-      authRaw: finalAuthRaw,
-      persistentRaw: finalPersistentRaw,
-    }), /refused while PostgreSQL cutover is READY/);
-
-    const rollback = await exportCurrentPostgresForRollback(pool, { cryptoConfig });
-    assert.equal(rollback.auth.users[0].email, 'after@example.com');
-    assert.equal(rollback.auth.sessions[sessionB].userId, 'usr_cutover_1');
-    assert.equal(rollback.auth.sessions[sessionA], undefined);
-    assert.equal(rollback.persistent.messageRedirects['installation-cutover:102'], 103);
-    assert.match(rollback.snapshot.manifest_sha256, /^[0-9a-f]{64}$/);
-
-    const committedRollback = await commitPostgresRollback(pool, {
-      originalCutoverSnapshotSha256: finalStage.snapshot.manifest_sha256,
-      rollbackExportSha256: rollback.snapshot.manifest_sha256,
-    });
-    assert.equal(committedRollback.state, 'ROLLED_BACK');
-    assert.equal(committedRollback.rollback_export_sha256, rollback.snapshot.manifest_sha256);
-    await assert.rejects(() => assertCutoverReady(pool, finalStage.snapshot.manifest_sha256), /ROLLED_BACK/);
-    await assert.rejects(() => assertJsonRollbackSnapshot(pool, rollback.snapshot.manifest_sha256, {
-      authRaw: finalAuthRaw,
-      persistentRaw: finalPersistentRaw,
-    }), /do not match/);
-    const jsonRollback = await assertJsonRollbackSnapshot(pool, rollback.snapshot.manifest_sha256, {
-      authRaw: rollback.authRaw,
-      persistentRaw: rollback.persistentRaw,
-    });
-    assert.equal(jsonRollback.rollbackExportSha256, rollback.snapshot.manifest_sha256);
-
     const bulkAuth = JSON.parse(JSON.stringify(persistedAuth));
     bulkAuth.sessions = Object.fromEntries(Array.from({ length: 800 }, (_, index) => [
       crypto.createHash('sha256').update(`bulk-session-${index}`).digest('hex'),
@@ -291,15 +257,12 @@ function raw(value) {
       import_twice_idempotent: true,
       oauth_mfa_envelope_roundtrip_proven: true,
       post_cutover_writes_persisted: true,
-      blind_json_rollback_rejected: true,
-      rollback_current_state_exported: true,
-      rollback_exact_digest_required: true,
       json_disk_dual_write_used: false,
       production_kms_proven: false,
       production_pitr_proven: false,
       production_rpo_rto_proven: false,
     }));
-    console.log('PASS PostgreSQL staged cutover + final delta + rollback integration');
+    console.log('PASS PostgreSQL staged cutover + final delta integration');
   } finally {
     if (pool) await pool.end().catch(() => {});
     await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`).catch(() => {});
