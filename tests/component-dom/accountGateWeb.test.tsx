@@ -75,6 +75,19 @@ describe("AccountGate Web adapter", () => {
     host.remove();
   });
 
+  it("offers no plan simulation in the rendered sign-in or registration shell", async () => {
+    const { host, root } = await renderSignedOutGate();
+    const forbidden = /simulat|dev[- ]?switch|switch (to|plan)|plan_id/i;
+    expect(host.textContent).toContain("Sign in to your BeatGaler account");
+    expect(host.textContent).not.toMatch(forbidden);
+    const switchButton = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes("Create account"));
+    await act(async () => switchButton?.click());
+    expect(host.querySelector("#beatgaler-register-email")).not.toBeNull();
+    expect(host.textContent).not.toMatch(forbidden);
+    await act(async () => root.unmount());
+    host.remove();
+  });
+
   it("uses email/new-password autofill semantics in registration mode", async () => {
     const { host, root } = await renderSignedOutGate();
     const switchButton = Array.from(host.querySelectorAll("button")).find(button => button.textContent?.includes("Create account"));
