@@ -77,6 +77,18 @@ if (process.argv[2] === '--child') {
     assert.throws(takeCloudBoot, { message: /required guard entries \(runtime, securityHeaders, / });
   }));
 
+  // Las 11 entradas que server.js instala siempre antes de cargar server-core (lista fija aquí, no derivada de cloud-boot).
+  const SERVER_JS_ENTRIES = ['runtime', 'securityHeaders', 'legacyMediaUploadDisable', 'authPublicRegistrationHardening',
+    'pendingSignupBoundary', 'accountLifecycle', 'sessionSecurity', 'httpContainment', 'directCapability', 'authAbuse', 'tempAuthBoundary'];
+  for (const name of SERVER_JS_ENTRIES) {
+    test(`NODE_ENV=production con contexto completo salvo ${name}: lanza STOP que la nombra`, withNodeEnv('production', () => {
+      const guards = createGuardContext();
+      for (const entry of SERVER_JS_ENTRIES) if (entry !== name) guards.entries[entry] = { installed: true };
+      prepareCloudBoot({ guards });
+      assert.throws(takeCloudBoot, { message: `STOP: cloud boot without required guard entries (${name}); refusing to start in production (server.js must prepare the boot).` });
+    }));
+  }
+
   test('NODE_ENV=production con todas las entradas obligatorias: entrega el contexto sin avisos', withNodeEnv('production', () => {
     const guards = fullGuards();
     prepareCloudBoot({ guards });
