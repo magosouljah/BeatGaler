@@ -165,16 +165,16 @@ function authErrorLooksInternal(value) {
   return /(storage account|not configured|postgres|telegram|master|secret|access[_ -]?token|refresh[_ -]?token|econn|enotfound|stack|aws|ses|database|sqlstate)/i.test(String(value || ''));
 }
 
-function installAuthPublicRegistrationHardening(express, {
+function installAuthPublicRegistrationHardening(ctx, {
   env = requiredEnv(),
-  getAccountLifecycle = () => express?.application?.__beatgalerAccountLifecycleRuntime || null,
+  // Installed before the lifecycle: resolved lazily from the context on each use.
+  getAccountLifecycle = () => ctx?.entries?.accountLifecycle?.runtime || null,
   getProviderIdentityAuthority = () => null,
   getAuthPool = () => null,
   now = () => Date.now(),
 } = {}) {
-  const application = express?.application;
-  if (!application || application.__beatgalerAuthPublicRegistrationHardeningInstalled) return;
-  application.__beatgalerAuthPublicRegistrationHardeningInstalled = true;
+  if (!ctx?.entries || ctx.entries.authPublicRegistrationHardening) return;
+  const entry = ctx.entries.authPublicRegistrationHardening = {};
 
   const oauthContext = new AsyncLocalStorage();
   const oauthFlows = new Map();
@@ -340,7 +340,7 @@ function installAuthPublicRegistrationHardening(express, {
     next();
   }
 
-  application.__beatgalerAuthPublicRegistrationPost = function hardenedAuthPost(routePath, handlers) {
+  entry.post = function hardenedAuthPost(routePath, handlers) {
     const { next } = this;
     const pathName = String(routePath || '');
     const extras = [];
@@ -351,7 +351,7 @@ function installAuthPublicRegistrationHardening(express, {
     return next(routePath, ...extras, ...handlers);
   };
 
-  application.__beatgalerAuthPublicRegistrationGet = function hardenedAuthGet(routePath, handlers) {
+  entry.get = function hardenedAuthGet(routePath, handlers) {
     const { next } = this;
     const pathName = String(routePath || '');
     if (pathName === '/auth/oauth/:provider/callback') {
@@ -493,12 +493,12 @@ function installAuthPublicRegistrationHardening(express, {
 }
 
 function wrapAuthPublicRegistrationPost(routePath, handlers) {
-  const register = this.app.__beatgalerAuthPublicRegistrationPost;
+  const register = this.ctx?.entries.authPublicRegistrationHardening?.post;
   return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
 }
 
 function wrapAuthPublicRegistrationGet(routePath, handlers) {
-  const register = this.app.__beatgalerAuthPublicRegistrationGet;
+  const register = this.ctx?.entries.authPublicRegistrationHardening?.get;
   return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
 }
 

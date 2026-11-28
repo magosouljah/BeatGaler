@@ -5,7 +5,7 @@ const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { mountAccountRouteGuards, SELF_REGISTERED_ROUTES } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards, SELF_REGISTERED_ROUTES } = require('../account-route-guards');
 const { installAuthPublicRegistrationHardening } = require('../auth-public-registration-hardening');
 const pendingSignup = require('../pending-signup-boundary');
 const { installStagedEmailChangeRoutes } = require('../staged-email-change-routes');
@@ -46,9 +46,10 @@ async function checkInactiveRegistration() {
   const app = { post(path, ...handlers) { routes.set(path, handlers); } };
   const express = { application: app, json: () => (_req, _res, next) => next() };
   const env = { BEATGALER_PUBLIC_REGISTRATION: '1', BEATGALER_PENDING_SIGNUP_ENABLED: '0' };
-  installAuthPublicRegistrationHardening(express, { env });
+  const ctx = createGuardContext();
+  installAuthPublicRegistrationHardening(ctx, { env });
   const signup = pendingSignup.installPendingSignupBoundary(express, { env });
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/register', () => assert.fail('el handler heredado no debe ejecutarse'));
   assert.equal(signup.captured().register, true);
 
@@ -68,6 +69,7 @@ async function checkInactiveRegistration() {
 test('las guardas globales y por ruta respetan el orden efectivo de la tabla en Cloud', async () => {
   const browser = { 'x-beatgaler-client': 'web' };
   let lifecycle;
+  let hardeningOptions;
   const signupCalls = [];
   const emailChanges = [];
   let restore = () => {};
@@ -91,6 +93,9 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
       assert.deepEqual(paths.slice(0, firstPost), SELF_REGISTERED_ROUTES);
       for (const path of SELF_REGISTERED_ROUTES) assert.equal(paths.filter(value => value === path).length, 1, path);
       await checkBoundaryRegistration(app);
+      // El hardening se instala antes que el ciclo de vida: debe resolverlo de forma perezosa.
+      assert.ok(lifecycle);
+      assert.equal(hardeningOptions.getAccountLifecycle(), lifecycle, 'el hardening ve el ciclo de vida instalado después');
 
       const health = await send('GET', '/healthz');
       assert.equal(health.status, 200);
@@ -158,12 +163,18 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
       prepare() {
         const accountLifecycle = require('../account-lifecycle');
         const { installAccountLifecycle } = accountLifecycle;
-        accountLifecycle.installAccountLifecycle = (express, options) => {
-          lifecycle = installAccountLifecycle(express, options);
-          installStagedEmailChangeRoutes(express, {
+        accountLifecycle.installAccountLifecycle = (ctx, options) => {
+          lifecycle = installAccountLifecycle(ctx, options);
+          installStagedEmailChangeRoutes(options.express, {
             async start(_req, email) { emailChanges.push(email); return { ok: true }; },
           });
           return lifecycle;
+        };
+        const hardening = require('../auth-public-registration-hardening');
+        const installHardening = hardening.installAuthPublicRegistrationHardening;
+        hardening.installAuthPublicRegistrationHardening = (ctx, options) => {
+          hardeningOptions = options;
+          return installHardening(ctx, options);
         };
         const { installPendingSignupBoundary } = pendingSignup;
         pendingSignup.installPendingSignupBoundary = (express, options) =>
@@ -183,6 +194,7 @@ test('las guardas globales y por ruta respetan el orden efectivo de la tabla en 
           installDurableAuthAbuseControls(express, { ...options, pool });
         restore = () => {
           accountLifecycle.installAccountLifecycle = installAccountLifecycle;
+          hardening.installAuthPublicRegistrationHardening = installHardening;
           durable.installDurableAuthAbuseControls = installDurableAuthAbuseControls;
           pendingSignup.installPendingSignupBoundary = installPendingSignupBoundary;
         };

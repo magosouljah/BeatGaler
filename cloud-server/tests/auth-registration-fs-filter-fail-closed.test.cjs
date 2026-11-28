@@ -8,12 +8,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { installAuthPublicRegistrationHardening } = require('../auth-public-registration-hardening');
 const { createAccountLifecycleRuntime } = require('../account-lifecycle');
+const { createGuardContext } = require('../account-route-guards');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatgaler-reg-fail-closed-'));
 const tmpFile = path.join(dir, 'accounts-data.json.tmp');
 let previousUsers = [{ id: 'usr_prev', username: 'prev' }];
 
-installAuthPublicRegistrationHardening({ application: { post() {}, get() {} } }, {
+installAuthPublicRegistrationHardening(createGuardContext(), {
   env: process.env,
   getAccountLifecycle: () => ({ api: { state: { accountsSnapshot: () => ({ users: previousUsers, sessions: {} }), deletedUserIds: new Set() } } }),
 });

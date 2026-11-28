@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { mountAccountRouteGuards } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards } = require('../account-route-guards');
 const {
   normalizeEmail,
   validEmail,
@@ -260,14 +260,15 @@ const passwordChecks = (async () => {
   };
   const calls = [];
   const info = { userId: 'usr_stable', user: { providers: { google: { id: 'g1' }, x: { id: 'x1' } } } };
-  installAuthPublicRegistrationHardening({ application: app }, {
+  const ctx = createGuardContext();
+  installAuthPublicRegistrationHardening(ctx, {
     env: { NODE_ENV: 'production', BEATGALER_PUBLIC_REGISTRATION: '0' },
     getAccountLifecycle: () => ({ api: { session: { sessionInfoFromRequest: () => info } } }),
     getProviderIdentityAuthority: () => ({
       async prepareDisconnect(input) { calls.push(input); return { ok: true }; },
     }),
   });
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/oauth/disconnect', () => {});
   const middleware = routes.get('/auth/oauth/disconnect')[1];
   await new Promise((resolve, reject) => {
@@ -280,12 +281,13 @@ const passwordChecks = (async () => {
   const loginRoutes = new Map();
   const loginApp = { post(path, ...handlers) { loginRoutes.set(path, handlers); }, get() {} };
   let queries = 0;
-  installAuthPublicRegistrationHardening({ application: loginApp }, {
+  const loginCtx = createGuardContext();
+  installAuthPublicRegistrationHardening(loginCtx, {
     env: process.env,
     getAccountLifecycle: () => ({ api: { state: { accountsSnapshot: () => ({ users: [{ id: 'usr_stable', email: 'old@example.com' }] }) } } }),
     getAuthPool: () => ({ async query() { queries += 1; return { rows: [] }; } }),
   });
-  mountAccountRouteGuards(loginApp);
+  mountAccountRouteGuards(loginApp, undefined, loginCtx);
   loginApp.post('/auth/login', () => {});
   const loginGuard = loginRoutes.get('/auth/login')[1];
   const loginResult = await new Promise(resolve => {
@@ -294,5 +296,20 @@ const passwordChecks = (async () => {
   });
   assert.equal(loginResult.status, 401);
   assert.equal(queries, 1);
+
+  // Sin getter explícito, el ciclo de vida se lee del contexto en cada uso (se instala después del hardening).
+  const lazyRoutes = new Map();
+  const lazyApp = { post(path, ...handlers) { lazyRoutes.set(path, handlers); }, get() {} };
+  const lazyCtx = createGuardContext();
+  installAuthPublicRegistrationHardening(lazyCtx, { env: { NODE_ENV: 'production', BEATGALER_PUBLIC_REGISTRATION: '0' } });
+  mountAccountRouteGuards(lazyApp, undefined, lazyCtx);
+  lazyApp.post('/auth/oauth/disconnect', () => {});
+  lazyCtx.entries.accountLifecycle = { runtime: { api: { session: { sessionInfoFromRequest: () => info } } } };
+  const lazyDisconnect = lazyRoutes.get('/auth/oauth/disconnect')[1];
+  const lazyResult = await new Promise(resolve => {
+    const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(payload) { resolve({ status: this.statusCode, code: payload.code }); } };
+    lazyDisconnect({ body: { provider: 'x' } }, res, () => resolve({ status: 'next' }));
+  });
+  assert.deepEqual(lazyResult, { status: 503, code: 'AUTH_SERVICE_UNAVAILABLE' }, 'la sesión del ciclo de vida instalado después se reconoce');
   console.log('auth-public-registration-hardening tests: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });

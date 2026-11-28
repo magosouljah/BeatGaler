@@ -884,18 +884,21 @@ function createAccountLifecycleRuntime({
   return runtimeApi;
 }
 
-function installAccountLifecycle(express, options = {}) {
-  const application = express?.application;
-  if (!application || application.__beatgalerAccountLifecycleInstalled) return application?.__beatgalerAccountLifecycleRuntime || null;
-  application.__beatgalerAccountLifecycleInstalled = true;
+function installAccountLifecycle(ctx, { express, ...options } = {}) {
+  if (!ctx?.entries || ctx.entries.accountLifecycle) return ctx?.entries?.accountLifecycle?.runtime || null;
+  const entry = ctx.entries.accountLifecycle = {};
   const runtime = createAccountLifecycleRuntime(options);
-  application.__beatgalerAccountLifecycleRuntime = runtime;
+  entry.runtime = runtime;
   runtime.installPersistenceFilter();
   passwordKdf.setPasswordAuthorityResolver?.(userId => runtime.passwordOverrideForUser(userId));
 
+  // Per-instance first-call state; re-read on every write because nested app.post() calls update other guards' state.
+  const appState = app => ctx.state.get(app) || {};
+  const setAppState = (app, patch) => ctx.state.set(app, { ...appState(app), ...patch });
+
   function ensureManagementRoutes(app) {
-    if (app.__beatgalerAccountLifecycleRoutesInstalled || app.__beatgalerAccountLifecycleRoutesInstalling) return;
-    app.__beatgalerAccountLifecycleRoutesInstalling = true;
+    if (appState(app).accountLifecycleRoutesInstalled || appState(app).accountLifecycleRoutesInstalling) return;
+    setAppState(app, { accountLifecycleRoutesInstalling: true });
     try {
       // Estas rutas se registran con el primer app.post(), que puede ocurrir antes del express.json() global:
       // sin su propio parser reciben el cuerpo vacío (reauth, reset de contraseña, export, borrado...).
@@ -920,15 +923,15 @@ function installAccountLifecycle(express, options = {}) {
       });
       app.post('/auth/account/export', bodyJson, (req, res, next) => { void runtime.api.data.exportAccount(req, res).catch(next); });
       app.post('/auth/account/delete', bodyJson, (req, res, next) => { void runtime.api.data.deleteAccount(req, res).catch(next); });
-      app.__beatgalerAccountLifecycleRoutesInstalled = true;
+      setAppState(app, { accountLifecycleRoutesInstalled: true });
     } finally {
-      app.__beatgalerAccountLifecycleRoutesInstalling = false;
+      setAppState(app, { accountLifecycleRoutesInstalling: false });
     }
   }
 
-  application.__beatgalerAccountLifecyclePost = function patchedAccountLifecyclePost(routePath, handlers) {
+  entry.post = function patchedAccountLifecyclePost(routePath, handlers) {
     const { app, next } = this;
-    if (!app.__beatgalerAccountLifecycleRoutesInstalling) ensureManagementRoutes(app);
+    if (!appState(app).accountLifecycleRoutesInstalling) ensureManagementRoutes(app);
     const pathName = String(routePath || '');
     const extras = [];
     if (pathName.startsWith('/auth/')) {
@@ -951,7 +954,7 @@ function installAccountLifecycle(express, options = {}) {
 }
 
 function wrapAccountLifecyclePost(routePath, handlers) {
-  const register = this.app.__beatgalerAccountLifecyclePost;
+  const register = this.ctx?.entries.accountLifecycle?.post;
   return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
 }
 

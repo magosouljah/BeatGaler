@@ -158,9 +158,9 @@ async function start() {
   let directCapabilities = null;
   // Install these boundaries before lifecycle/containment wrappers so a public
   // register request can never fall through to the legacy create+provision path.
-  installAuthPublicRegistrationHardening(express, {
+  installAuthPublicRegistrationHardening(guardContext, {
     env: getRuntimeEnv(),
-    getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
+    getAccountLifecycle: () => guardContext.entries.accountLifecycle?.runtime || null,
     getProviderIdentityAuthority: () => providerIdentityAuthority,
     getAuthPool: () => cutover.authority === 'postgres' ? pool : null,
   });
@@ -176,7 +176,8 @@ async function start() {
       return pendingSignupActivation.activate(input);
     },
   });
-  const accountLifecycle = installAccountLifecycle(express, {
+  const accountLifecycle = installAccountLifecycle(guardContext, {
+    express,
     dataDir: STATE_DIR,
     env: d8LifecycleEnv(getRuntimeEnv()),
     emailNotifier: accountEmailNotifier,
