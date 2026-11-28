@@ -5,6 +5,8 @@ import path from 'node:path';
 import { createServer } from 'vite';
 
 test('real Vite watcher policy excludes packaged runtime trees and permits Web sources', { timeout: 30000 }, async () => {
+  // CI arranca con el repo limpio: tmp/ (ignorado por git) puede no existir.
+  await fs.mkdir(path.resolve('tmp'), { recursive: true });
   const root = await fs.mkdtemp(path.resolve('tmp/stage1-watch-'));
   await fs.mkdir(path.join(root, 'runtime', 'nested'), { recursive: true });
   await fs.mkdir(path.join(root, 'src'));
