@@ -21,7 +21,7 @@ const account = {
   beatgalerUserId: 'composition-installation',
 };
 
-async function withCloud(exercise, { inMemory = false, prepare, restoreState, requestTimeoutMs = 2500 } = {}) {
+async function withCloud(exercise, { inMemory = false, prepare, restoreState, requestTimeoutMs = 2500, warmup = true } = {}) {
   assert.equal(findLocalSecretFiles(path.dirname(cloudDir)).length, 0, 'El Cloud de prueba requiere un worktree limpio.');
   const timeoutMs = Number(process.env.BEATGALER_COMPOSITION_STARTUP_TIMEOUT_MS ?? 60_000);
   assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 2 ** 31 - 1,
@@ -132,6 +132,14 @@ async function withCloud(exercise, { inMemory = false, prepare, restoreState, re
       return;
     }
     const port = server.address().port;
+    // Calentamiento (opt-out: warmup:false): la primera verificación scrypt y la primera POST con cuerpo pagan carga perezosa y JIT en frío
+    // (~0,8 s solos, más que el plazo por defecto bajo carga). Ambos pasos son neutros: la verificación es una función pura sobre un usuario
+    // ficticio (sin estado, sin red) y /auth/session con un token inexistente da 401 fuera de las tablas del antiabuso (no consume intentos).
+    if (warmup) {
+      await require('../../password-kdf').verifyPassword('warmup', { id: 'warmup', passwordSalt: '0123456789abcdef0123456789abcdef', passwordHash: '00' });
+      const cold = await send(port, 'POST', '/auth/session', { headers: { authorization: 'Bearer warmup-unknown-token' }, body: {}, timeoutMs: 60_000 }, requestTimeoutMs);
+      assert.equal(cold.status, 401, 'El calentamiento debe ser una petición neutra rechazada.');
+    }
     await exercise(app, (method, url, options) => send(port, method, url, options, requestTimeoutMs));
     assert.ok(attempts.length > 0, 'El guard debe observar las peticiones del humo.');
     const unexpected = attempts.filter(({ api, host, port: targetPort, allowed }) => {
