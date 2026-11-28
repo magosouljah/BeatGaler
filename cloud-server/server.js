@@ -88,9 +88,9 @@ async function start() {
   prepareCloudCatalog(catalogServices, input => assertVaultRebindAllowedIfConfigured(catalogServices.authority, input));
   // T25: INDEX retirado del runtime. PostgreSQL es la única autoridad del catálogo; el arranque ya no fija, recupera ni publica INDEX
   // (los mensajes INDEX históricos permanecen intactos en Telegram, solo como archivo).
-  accessGrants.configure({ pool: cutover.authority === 'postgres' ? pool : null, authRuntime: cutover.runtime });
-  accessRuntime.configure({ pool: cutover.authority === 'postgres' ? pool : null });
-  if (cutover.authority === 'postgres') {
+  accessGrants.configure({ pool, authRuntime: cutover.runtime });
+  accessRuntime.configure({ pool });
+  if (pool) {
     const billing = await webBillingRuntime.configure({ env: getRuntimeEnv() });
     console.log(`[billing] ${serverEnv.billingProviderEnvironment()} sale=${billing.ready ? 'ready' : 'unavailable'} code=${billing.failureCode || 'OK'}`);
     const checkout = webCheckoutRuntime.configure({
@@ -133,7 +133,7 @@ async function start() {
   if (serverEnv.isProduction() && !installationClaimCoordinator) {
     throw new Error("Production authorization requires PostgreSQL cross-process installation claim coordination.");
   }
-  const providerIdentityAuthority = pool && cutover.authority === 'postgres'
+  const providerIdentityAuthority = pool
     ? createProviderIdentityAuthority({ pool, getBridge: getServerCoreAuthBridge, flushAuthority: () => cutover.runtime.flush() })
     : null;
 
@@ -142,7 +142,7 @@ async function start() {
   let pendingSignupActivation = null;
   const pendingSignupEnabled = serverEnv.pendingSignupEnabled();
   if (pendingSignupEnabled) {
-    if (!pool || cutover.authority !== 'postgres' || typeof cutover.runtime?.flush !== 'function') {
+    if (!pool || typeof cutover.runtime?.flush !== 'function') {
       throw new Error('BEATGALER_PENDING_SIGNUP_ENABLED=1 requires PostgreSQL control-plane authority.');
     }
     const keyring = await resolveSecretEnvelopeKeyring(getRuntimeEnv());
@@ -162,7 +162,7 @@ async function start() {
     env: getRuntimeEnv(),
     getAccountLifecycle: () => guardContext.entries.accountLifecycle?.runtime || null,
     getProviderIdentityAuthority: () => providerIdentityAuthority,
-    getAuthPool: () => cutover.authority === 'postgres' ? pool : null,
+    getAuthPool: () => pool,
   });
   installPendingSignupBoundary(guardContext, {
     express,
@@ -182,12 +182,12 @@ async function start() {
     dataDir: STATE_DIR,
     env: d8LifecycleEnv(getRuntimeEnv()),
     emailNotifier: accountEmailNotifier,
-    pool: cutover.authority === 'postgres' ? pool : null,
+    pool,
     getCapabilityStore: () => directCapabilities?.store || null,
   });
   installLifecyclePasswordAuthority(accountLifecycle);
 
-  if (pool && cutover.authority === 'postgres') {
+  if (pool) {
     const stagedEmailChange = createStagedEmailChange({
       pool,
       runtime: accountLifecycle,
@@ -217,13 +217,13 @@ async function start() {
 
   // Sensitive legacy mutations are contained before provider reauth wraps the
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
-  installSensitiveAuthContainment(guardContext, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
+  installSensitiveAuthContainment(guardContext, accountLifecycle, { pool });
   applyD8RoResolutions(guardContext, accountLifecycle, { env: getRuntimeEnv() });
   // Configure the remaining entries before server-core mounts the guard table.
   installSessionSecurity(guardContext, {
     express,
     dataDir: STATE_DIR,
-    pool: cutover.authority === 'postgres' ? pool : null,
+    pool,
     getCapabilityStore: () => directCapabilities?.store || null,
   });
   installLifecycleRequestGuard(guardContext, accountLifecycle);
