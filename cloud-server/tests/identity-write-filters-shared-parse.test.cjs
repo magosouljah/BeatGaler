@@ -16,6 +16,7 @@ const {
   temporaryUsername,
 } = require('../auth-public-registration-hardening');
 const { installAccountLifecycle } = require('../account-lifecycle');
+const { createGuardContext } = require('../account-route-guards');
 const { installLifecyclePasswordAuthority } = require('../account-lifecycle-password-authority');
 
 const NOW = 1_800_000_000_000;
@@ -115,11 +116,13 @@ installLegacyJsonCompatibility({
   initialPersistent: {},
 });
 const express = { application: {}, json: () => (_req, _res, next) => next() };
-installAuthPublicRegistrationHardening(express, {
+const ctx = createGuardContext();
+installAuthPublicRegistrationHardening(ctx, {
   env: {},
-  getAccountLifecycle: () => express.application.__beatgalerAccountLifecycleRuntime || null,
+  getAccountLifecycle: () => ctx.entries.accountLifecycle?.runtime || null,
 });
-const life = installAccountLifecycle(express, {
+const life = installAccountLifecycle(ctx, {
+  express,
   dataDir: dir, env: {}, now: () => NOW,
   getCapabilityStore: () => ({ async revokeAuthSession() {} }),
 });
