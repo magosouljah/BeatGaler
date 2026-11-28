@@ -12,7 +12,7 @@ function installLegacyMediaUploadDisable(ctx) {
 
 function wrapLegacyMediaUploadPost(routePath, handlers) {
   const { next, ctx } = this;
-  if (ctx?.entries.legacyMediaUploadDisable &&LEGACY_MEDIA_UPLOAD_ROUTES.has(routePath)) {
+  if (ctx?.entries.legacyMediaUploadDisable && LEGACY_MEDIA_UPLOAD_ROUTES.has(routePath)) {
     return next(routePath, (_req, res) => res.status(410).json({
       error: "Legacy HTTP media upload is disabled. Use the active Galer Cloud Direct transport.",
     }));

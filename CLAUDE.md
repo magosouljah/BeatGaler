@@ -7,7 +7,7 @@
 Aplicación Web para organizar beats (metadatos, tags, carátulas, reproducción, descargas) con cuentas y planes de pago. **En producción (`beatgaler.com`) desde el 20-nov-2026 sobre catálogo PostgreSQL nativo.** El INDEX de Telegram fue **retirado del runtime** (T25/E89, merge `1a4b48c`).
 
 - **Web** (`src/`, Vite/React): `main.tsx → WebExperience → AuthExperienceGate → Gallery PostgreSQL` (`src/features/library/catalog/`, build con `VITE_CATALOG_API_ENABLED=true`).
-- **Cloud** (`cloud-server/`, Node/Express): `server.js` + `server-core.js`; auth/sesiones/CSRF, control-plane, pagos (Polar), `/catalog/v1/*` (`cloud-server/catalog/`).
+- **Cloud** (`cloud-server/`, Node/Express): `server.js` + `server-core.js` unidos por `cloud-boot.js` (contexto por instancia: `createGuardContext`, `install*(ctx)`; catálogo por cloud-boot, sin `configure*/current*` ni parche de `listen`); auth/sesiones/CSRF, control-plane, pagos (Polar), `/catalog/v1/*` (`cloud-server/catalog/`).
 - **Worker** separado (`catalog-worker.js` → `catalog/worker.js`): verificación/commit de transferencias, purga. Sin él las subidas no terminan.
 - **Autoridad por dato:** PostgreSQL = identidad, catálogo, versiones, permisos, operaciones, referencias, derechos. **Telegram = solo bytes** (audio, PROJECT, portada, MAIN). Polar = hechos comerciales. Navegador = UI y cachés (IndexedDB).
 - **Ningún byte de archivo pasa por el Cloud:** viajan navegador ↔ Telegram por **Direct B** (Worker `@mtcute/web`); el Cloud emite capacidades y confirma metadatos.
@@ -64,7 +64,7 @@ Ante contradicción material: registrarla, no elegir por intuición, no asumir P
 - Mutaciones: auth server-side, aislamiento por usuario, transacciones SQL breves, era/época/versión, idempotencia, control de concurrencia; ninguna espera de Telegram dentro de una transacción.
 - Proteger catálogo, generaciones activas y referencias de archivos contra cascadas; `reset` no vacía bibliotecas; no borrar medios, mensajes ni INDEX históricos por autorización genérica.
 - Un backup SQL **no** sustituye la copia de bytes de Telegram.
-- Las guardas de cuentas se componen solo en `cloud-server/account-route-guards.js` (tabla única montada sobre la instancia en `server-core.js`); no se reasigna `express.application.*`.
+- Las guardas de cuentas se componen solo en `cloud-server/account-route-guards.js` (tabla única montada sobre la instancia en `server-core.js`); no se reasigna `express.application.*`. El almacén de identidad (`identity-store.js`, M7.4c/e/f) conserva bytes idénticos al modo archivo; la idempotencia de instalación usa WeakSet (B8).
 - No tocar por simplificar sin pruebas y permiso: refs/purge, Direct/mtcute compartido, sesión y CSRF (incluido el `fetch` global único de `webFetchBoundary`), `server-core-auth-bridge-loader`, idempotencia, derechos pagados, guards SQL.
 - **Preservar sin cambios visuales** Landing, Gallery virtualizada, BeatCards, Tag Bar y Playbar; Gallery consulta globalmente en PostgreSQL sin cargar la biblioteca en memoria.
 
