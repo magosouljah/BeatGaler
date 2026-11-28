@@ -127,15 +127,15 @@ async function invokeCapturedHandler(handler, body, { headers = {} } = {}) {
   return { statusCode: Number(res.statusCode || 200), body: res.body, headers: res.headers };
 }
 
-function installPendingSignupBoundary(express, {
+function installPendingSignupBoundary(ctx, {
+  express,
   service = null,
   env = requiredEnv(),
   activation = null,
 } = {}) {
-  const application = express?.application;
-  if (!application) return null;
-  if (application.__beatgalerPendingSignupBoundaryInstalled) return application.__beatgalerPendingSignupBoundaryRuntime || null;
-  application.__beatgalerPendingSignupBoundaryInstalled = true;
+  if (!ctx?.entries) return null;
+  if (ctx.entries.pendingSignupBoundary) return ctx.entries.pendingSignupBoundary.runtime || null;
+  const entry = ctx.entries.pendingSignupBoundary = {};
   let routesInstalled = false;
   let routesInstalling = false;
   let legacyRegisterHandler = null;
@@ -307,9 +307,9 @@ function installPendingSignupBoundary(express, {
     captured() { return { register: Boolean(legacyRegisterHandler), login: Boolean(legacyLoginHandler) }; },
     _test: { createHandlerResponse, invokeCapturedHandler },
   };
-  application.__beatgalerPendingSignupBoundaryRuntime = runtimeApi;
+  entry.runtime = runtimeApi;
 
-  application.__beatgalerPendingSignupPost = function pendingSignupPost(routePath, handlers) {
+  entry.post = function pendingSignupPost(routePath, handlers) {
     const { app, next } = this;
     if (!routesInstalling) ensureRoutes(app);
     const pathName = String(routePath || '');
@@ -334,7 +334,7 @@ function installPendingSignupBoundary(express, {
 }
 
 function wrapPendingSignupPost(routePath, handlers) {
-  const register = this.app.__beatgalerPendingSignupPost;
+  const register = this.ctx?.entries.pendingSignupBoundary?.post;
   return register ? register.call(this, routePath, handlers) : this.next(routePath, ...handlers);
 }
 

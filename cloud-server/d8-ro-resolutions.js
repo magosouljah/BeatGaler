@@ -286,16 +286,14 @@ function createProviderReauthCoordinator(runtime, {
   return { start, callback, poll, _test: { pending, completed, cleanup } };
 }
 
-function installProviderReauthRoutes(express, coordinator) {
-  const application = express?.application;
-  if (!application || application.__beatgalerD8ProviderReauthRoutesInstalled) return;
-  application.__beatgalerD8ProviderReauthRoutesInstalled = true;
-  application.__beatgalerD8ProviderReauthCoordinator = coordinator;
+function installProviderReauthRoutes(ctx, coordinator) {
+  if (!ctx?.entries || ctx.entries.d8ProviderReauth) return;
+  ctx.entries.d8ProviderReauth = { coordinator };
 }
 
 function wrapD8ProviderReauthPost(routePath, handlers) {
-  const { app, next } = this;
-  const coordinator = app.__beatgalerD8ProviderReauthCoordinator;
+  const { next, ctx } = this;
+  const coordinator = ctx?.entries.d8ProviderReauth?.coordinator;
   const pathName = String(routePath || '');
   if (coordinator && pathName === '/auth/oauth/start') return next(routePath, coordinator.start, ...handlers);
   if (coordinator && pathName === '/auth/oauth/poll') return next(routePath, coordinator.poll, ...handlers);
@@ -303,19 +301,19 @@ function wrapD8ProviderReauthPost(routePath, handlers) {
 }
 
 function wrapD8ProviderReauthGet(routePath, handlers) {
-  const { app, next } = this;
-  const coordinator = app.__beatgalerD8ProviderReauthCoordinator;
+  const { next, ctx } = this;
+  const coordinator = ctx?.entries.d8ProviderReauth?.coordinator;
   if (coordinator && String(routePath || '') === '/auth/oauth/:provider/callback') {
     return next(routePath, coordinator.callback, ...handlers);
   }
   return next(routePath, ...handlers);
 }
 
-function applyD8RoResolutions(express, runtime, options = {}) {
+function applyD8RoResolutions(ctx, runtime, options = {}) {
   if (!runtime) return null;
   installImmediateAccountDeletion(runtime, options);
   const coordinator = createProviderReauthCoordinator(runtime, options);
-  installProviderReauthRoutes(express, coordinator);
+  installProviderReauthRoutes(ctx, coordinator);
   return { runtime, coordinator };
 }
 

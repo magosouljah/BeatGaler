@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { mountAccountRouteGuards } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards } = require('../account-route-guards');
 const {
   hasVerifiedUniqueEmail,
   hasUsablePassword,
@@ -92,9 +92,10 @@ async function runFirst(express, route, req = {}) {
     runtime.pool.verifications.set('usr_1', { email_hash: emailHash('one@example.com'), verified_at: new Date() });
     assert.equal(await hasVerifiedEmailShared(runtime, runtime.api.session.sessionInfoFromRequest({}), runtime.pool), true);
     const express = fakeExpress();
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/password/change', () => {});
     const { nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'reauth_good' },
@@ -112,9 +113,10 @@ async function runFirst(express, route, req = {}) {
   {
     const express = fakeExpress();
     const runtime = runtimeFor({ verified: true, reauthOk: false });
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/password/change', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'bad' },
@@ -127,9 +129,10 @@ async function runFirst(express, route, req = {}) {
   {
     const express = fakeExpress();
     const runtime = runtimeFor({ verified: true, reauthOk: true });
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/password/change', () => {});
     const { nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'reauth_good' },
@@ -140,9 +143,10 @@ async function runFirst(express, route, req = {}) {
   {
     const express = fakeExpress();
     const runtime = runtimeFor({ verified: false, reauthOk: true });
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/password/change', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/password/change', {
       body: { reauthToken: 'reauth_good' },
@@ -160,9 +164,10 @@ async function runFirst(express, route, req = {}) {
       providers: { x: { id: 'x-1' } },
       reauthOk: true,
     });
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/oauth/disconnect', () => {});
     const { nextCalled } = await runFirst(express, '/auth/oauth/disconnect', {
       body: { provider: 'x', reauthToken: 'reauth_good' },
@@ -177,9 +182,10 @@ async function runFirst(express, route, req = {}) {
       providers: { x: { id: 'x-1' } },
       reauthOk: true,
     });
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/oauth/disconnect', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/oauth/disconnect', {
       body: { provider: 'x', reauthToken: 'reauth_good' },
@@ -196,9 +202,10 @@ async function runFirst(express, route, req = {}) {
       providers: { google: { id: 'g-1' } },
       reauthOk: false,
     });
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/oauth/disconnect', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/oauth/disconnect', { body: { provider: 'x' } });
     assert.equal(nextCalled, false, 'a stale local snapshot cannot bypass provider unlink reauthentication');
@@ -208,9 +215,10 @@ async function runFirst(express, route, req = {}) {
   {
     const express = fakeExpress();
     const runtime = runtimeFor({ verified: true, reauthOk: false });
-    installSensitiveAuthContainment(express, runtime, { pool: runtime.pool });
+    const ctx = createGuardContext();
+    installSensitiveAuthContainment(ctx, runtime, { pool: runtime.pool });
     const app = Object.create(express.application);
-    mountAccountRouteGuards(app);
+    mountAccountRouteGuards(app, undefined, ctx);
     app.post('/auth/oauth/start', () => {});
     const { res, nextCalled } = await runFirst(express, '/auth/oauth/start', {
       body: { provider: 'google' },

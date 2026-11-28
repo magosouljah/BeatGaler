@@ -164,7 +164,8 @@ async function start() {
     getProviderIdentityAuthority: () => providerIdentityAuthority,
     getAuthPool: () => cutover.authority === 'postgres' ? pool : null,
   });
-  installPendingSignupBoundary(express, {
+  installPendingSignupBoundary(guardContext, {
+    express,
     service: pendingSignupService,
     env: getRuntimeEnv(),
     activation: input => {
@@ -208,7 +209,7 @@ async function start() {
       flushAuthority: () => cutover.runtime.flush(),
       env: getRuntimeEnv(),
     });
-    installStagedEmailChangeRoutes(express, stagedEmailChange);
+    installStagedEmailChangeRoutes(guardContext, stagedEmailChange, { express });
     emailChangeNoticeWorker = createStagedEmailChangeNoticeWorker(stagedEmailChange, {
       onError: error => console.error('[auth] email-change notice retry failed:', error?.message || String(error)),
     });
@@ -216,8 +217,8 @@ async function start() {
 
   // Sensitive legacy mutations are contained before provider reauth wraps the
   // OAuth routes, so purpose=reauth can still reach the D8 coordinator.
-  installSensitiveAuthContainment(express, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
-  applyD8RoResolutions(express, accountLifecycle, { env: getRuntimeEnv() });
+  installSensitiveAuthContainment(guardContext, accountLifecycle, { pool: cutover.authority === 'postgres' ? pool : null });
+  applyD8RoResolutions(guardContext, accountLifecycle, { env: getRuntimeEnv() });
   // Configure the remaining entries before server-core mounts the guard table.
   installSessionSecurity(guardContext, {
     express,

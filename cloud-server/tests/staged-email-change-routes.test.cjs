@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { mountAccountRouteGuards } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards } = require('../account-route-guards');
 const { installStagedEmailChangeRoutes, statusForEmailChangeError, publicEmailChangeError } = require('../staged-email-change-routes');
 
 assert.equal(statusForEmailChangeError({ code: 'EMAIL_CHANGE_RESEND_COOLDOWN' }), 429);
@@ -27,9 +27,10 @@ function fakeExpress() {
     async resend() { return { ok: true }; },
     async confirm() { return { ok: true }; },
   };
-  installStagedEmailChangeRoutes(express, service);
+  const ctx = createGuardContext();
+  installStagedEmailChangeRoutes(ctx, service, { express });
   const app = Object.create(express.application);
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/login', () => {});
 
   assert.equal(express.routes.has('/auth/email/change/start'), true);

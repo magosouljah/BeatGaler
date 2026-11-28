@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { mountAccountRouteGuards } = require('../account-route-guards');
+const { createGuardContext, mountAccountRouteGuards } = require('../account-route-guards');
 const { createPendingSignupService } = require('../pending-signup-service');
 const { hashPassword } = require('../password-kdf');
 const {
@@ -382,12 +382,14 @@ assert.equal(retryDelay(100), 3_600_000);
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
   let activations = 0;
-  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
+  const ctx = createGuardContext();
+  installPendingSignupBoundary(ctx, {
+    express: { json: () => (_req, _res, next) => next() },
     service: { async status() { return { status: 'VERIFIED' }; } },
     activation: async () => { activations += 1; return { status: 'ACTIVE', account: { token: 'session', user: { id: 'usr_1' } } }; },
     env: { BEATGALER_PUBLIC_REGISTRATION: '0' },
   });
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/register', () => {});
   const result = await new Promise(resolve => {
     const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { resolve(body); } };
@@ -404,14 +406,16 @@ assert.equal(retryDelay(100), 3_600_000);
   const app = { post(route, ...handlers) { routes.set(route, handlers); return this; } };
   let current = 'PROVISIONING';
   const calls = [];
-  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
+  const ctx = createGuardContext();
+  installPendingSignupBoundary(ctx, {
+    express: { json: () => (_req, _res, next) => next() },
     service: { async status() { return { status: current }; } },
     activation: async () => { calls.push(current); return current === 'PROVISIONING'
       ? { status: 'PROVISIONING', signup_pending: true }
       : { status: 'ACTIVE', session_required: true }; },
     env: { BEATGALER_PUBLIC_REGISTRATION: '0' },
   });
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/register', () => {});
   async function poll() {
     return new Promise(resolve => {
@@ -429,14 +433,16 @@ assert.equal(retryDelay(100), 3_600_000);
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
   let statusInput = null;
-  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
+  const ctx = createGuardContext();
+  installPendingSignupBoundary(ctx, {
+    express: { json: () => (_req, _res, next) => next() },
     service: {
       async begin() { return { created: true, signup_id: 'psu_web', continuation_secret: 'private-secret', status: 'CODE_SENT', expires_at: new Date(Date.now() + 60_000).toISOString() }; },
       async status(input) { statusInput = input; return { status: 'CODE_SENT' }; },
     },
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/register', () => {});
   const headers = new Map();
   const response = () => ({ statusCode: 200, status(code) { this.statusCode = code; return this; },
@@ -458,13 +464,15 @@ assert.equal(retryDelay(100), 3_600_000);
 {
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
-  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
+  const ctx = createGuardContext();
+  installPendingSignupBoundary(ctx, {
+    express: { json: () => (_req, _res, next) => next() },
     service: { async begin() { return { created: true, recovered: true, signup_id: 'psu_existing',
       continuation_secret: 'replacement-secret', status: 'CODE_SENT',
       expires_at: new Date(Date.now() + 60_000).toISOString() }; } },
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/register', () => {});
   const headers = new Map();
   const res = { statusCode: 200, status(code) { this.statusCode = code; return this; },
@@ -483,7 +491,9 @@ assert.equal(retryDelay(100), 3_600_000);
   const routes = new Map();
   const app = { post(path, ...handlers) { routes.set(path, handlers); return this; } };
   let verifiedInput;
-  installPendingSignupBoundary({ application: app, json: () => (_req, _res, next) => next() }, {
+  const ctx = createGuardContext();
+  installPendingSignupBoundary(ctx, {
+    express: { json: () => (_req, _res, next) => next() },
     service: {
       async begin() { return { created: true, signup_id: 'psu_web', continuation_secret: 'private-secret',
         status: 'CODE_SENT', expires_at: new Date(Date.now() + 60_000).toISOString() }; },
@@ -492,7 +502,7 @@ assert.equal(retryDelay(100), 3_600_000);
     activation: async () => ({ status: 'ACTIVE', account: { token: 'session', user: { id: 'usr_1' } } }),
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/auth/register', () => {});
   const response = () => {
     const headers = new Map();
@@ -519,12 +529,14 @@ assert.equal(retryDelay(100), 3_600_000);
   // signup routes before the app-wide JSON parser is added.
   const express = require('../node_modules/express');
   let received = null;
-  installPendingSignupBoundary(express, {
+  const ctx = createGuardContext();
+  installPendingSignupBoundary(ctx, {
+    express,
     service: { async verify(input) { received = input; return { status: 'VERIFIED', verified: false }; } },
     env: { BEATGALER_PUBLIC_REGISTRATION: '1' },
   });
   const app = express();
-  mountAccountRouteGuards(app);
+  mountAccountRouteGuards(app, undefined, ctx);
   app.post('/webhooks/polar', (_req, res) => res.sendStatus(204));
   app.use(express.json({ limit: '256kb' }));
   const server = app.listen(0, '127.0.0.1');
